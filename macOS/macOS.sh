@@ -1,5 +1,7 @@
 # macOS settings
 
+export PATH=/usr/local/bin:$PATH
+
 # Navigation
 alias f="open -a Finder ./"
 
