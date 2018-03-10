@@ -4,8 +4,11 @@ source ~/.shell/aliases.sh
 # Secrets file
 source ~/.shell/secrets.sh
 
-# Settings
-source ~/.shell/settings.sh
+# External settings
+source ~/.shell/external.sh
+
+# macOS settings
+source ~/.shell/macos.sh
 
 # Theme custom settings
 source ~/.zsh/spaceship.zsh
@@ -17,6 +20,6 @@ plugins=(git colored-man colorize github jira vagrant virtualenv pip python brew
 # Finally...
 source $ZSH/oh-my-zsh.sh
 
-# Set Spaceship ZSH as a prompt
+# Load spaceship-prompt
 autoload -U promptinit; promptinit
 prompt spaceship
