@@ -4,6 +4,7 @@
     username = smithbr
 [core]
     editor = code
+    ignorecase = false
 [alias]
     br = branch
     co = checkout
