@@ -16,8 +16,3 @@
     ~/.shell:
     ~/.zsh:
     ~/.zshrc: zsh/zshrc
-
-- shell:
-  - git update-submodules
-  - >
-    git cleanall -f
