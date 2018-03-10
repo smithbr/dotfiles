@@ -10,6 +10,15 @@ DOTBOT_DIR=".dotbot"
 DOTBOT_BIN="bin/dotbot"
 BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+if [[ "$(uname -s)" == "Darwin" ]]
+then
+    echo "Starting macOS custom install scripts..."
+    chmod +x macOS/brew.sh && sh ./macOS/brew.sh
+    chmod +x macOS/install.sh && sh ./macOS/install.sh
+else
+    echo "There are no custom install scripts for this OS. Skipping..."
+fi
+
 cd "${BASEDIR}"
 git submodule update --init --recursive "${DOTBOT_DIR}"
 
