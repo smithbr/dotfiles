@@ -1,0 +1,57 @@
+library: F:\Google Drive\Music2.0\musiclibrary.db
+directory: F:\Google Drive\Music2.0
+plugins: bpm embedart ftintitle lastgenre lastimport mbsync scrub badfiles duplicates fuzzy missing
+pluginpath: ~/beets/myplugins
+asciify_paths: yes
+art_filename: cover
+threaded: yes
+original_date: yes
+ui:
+    color: yes
+    colors:
+        text_success: green
+        text_warning: yellow
+        text_error: red
+        text_highlight: red
+        text_highlight_minor: lightgray
+        action_default: turquoise
+        action: blue
+import:
+    move: yes      # move cleaned music instead of copying
+    timid: no      # ask for confirmation on each match
+    log: F:\Google Drive\Music2.0\beetslog.txt
+    default_action: skip
+    quiet_fallback: skip
+    none_rec_action: skip
+musicbrainz:
+    host: localhost:5000
+    ratelimit: 100
+match:
+    preferred:
+        countries: ['US']
+        media: ['CD', 'Digital Media|File']
+        original_year: yes
+    required: year catalognum country
+    strong_rec_thresh: 0.10
+    medium_rec_thresh: 0.20
+paths:
+    default: $albumartist/$album%aunique{}/$track - $title
+    singleton: Non-Album/$artist/$title
+    comp: Compilations/$album%aunique{}/$track - $title
+    albumtype:soundtrack: Soundtracks/$album/$track - $title
+per_disc_numbering: yes
+embedart:
+    auto: yes
+    remove_art_file: yes
+scrub:
+    auto: yes
+acoustid:
+    apikey: UX94hfIlHE
+lastfm:
+    user: bsmit
+ftintitle:
+    auto: yes
+    drop: no
+missing:
+    count: yes
+    total: yes
