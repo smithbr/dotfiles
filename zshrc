@@ -1,6 +1,6 @@
-source ~/.zsh/aliases.zsh
-source ~/.zsh/secrets.zsh
-source ~/.zsh/settings.zsh
+source ~/.shell/aliases.sh
+source ~/.shell/secrets.sh
+source ~/.shell/settings.sh
 source ~/.zsh/spaceship.zsh
 
 export ZSH=$HOME/.oh-my-zsh
