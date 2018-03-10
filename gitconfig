@@ -1,0 +1,24 @@
+[user]
+	name = Brandon Smith
+	email = smithbr@users.noreply.github.com
+[core]
+    editor = code
+	autocrlf = false
+[alias]
+    br = branch
+    co = checkout
+    ci = commit
+    cm = commit -m
+    df = difftool
+    hist = log --pretty=format:\"%h %ad | %s%d [%an]\" --graph --date=short
+    pu = push -u
+    st = status
+[diff]
+    tool = default-difftool
+[difftool "default-difftool"]
+    cmd = code --wait --diff $LOCAL $REMOTE
+[filter "lfs"]
+	process = git-lfs filter-process
+	required = true
+	clean = git-lfs clean -- %f
+	smudge = git-lfs smudge -- %f
