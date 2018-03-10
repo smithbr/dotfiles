@@ -12,8 +12,7 @@ fi
 echo -e "\\n\\nUpdating homebrew..."
 echo "=============================="
 
-brew update
-brew upgrade
+brew update && brew upgrade
 
 
 echo -e "\\n\\nAdding taps..."
@@ -36,7 +35,8 @@ formulas=(
     maven
     nginx
     node
-    python
+    python@2
+    tldr
     tree
     wget
     yarn
