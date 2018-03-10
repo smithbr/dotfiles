@@ -1,33 +1,64 @@
 #!/usr/bin/env bash
 
-# Update homebrew
+echo -e "\\n\\nInstalling homebrew..."
+echo "=============================="
+
+if test ! "$( which brew )"; then
+    echo "Installing homebrew"
+    ruby -e "$( curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install )"
+fi
+
+
+echo -e "\\n\\nUpdating homebrew..."
+echo "=============================="
+
 brew update
 brew upgrade
 
-# Add taps
+
+echo -e "\\n\\nAdding taps..."
+echo "=============================="
+
 brew tap caskroom/cask
 brew tap loadimpact/k6
 
-# Install binaries
-brew install zsh
-brew install groovy
-brew install yarn
-brew install maven
-brew install htop
-brew install node
-brew install python
-brew install tree
-brew install cowsay
-brew install fortune
-brew install git
 
-# Install extras
-# brew install k6
-# brew install selenium-server-standalone
-# brew install jenkins
-# brew install influxdb
-# brew install grafana
+echo -e "\\n\\nInstalling binaries..."
+echo "=============================="
 
-# Clean up
+formulas=(
+    ack
+    cowsay
+    fortune
+    git
+    groovy
+    htop
+    maven
+    nginx
+    node
+    python
+    tree
+    wget
+    yarn
+    zsh
+    # k6
+    # selenium-server-standalone
+    # jenkins
+    # influxdb
+    # grafana
+)
+
+for formula in "${formulas[@]}"; do
+    if brew list "$formula" > /dev/null 2>&1; then
+        echo "$formula already installed... skipping."
+    else
+        brew install "$formula"
+    fi
+done
+
+
+echo -e "\\n\\nCleaning up..."
+echo "=============================="
+
 brew prune
 brew cleanup
