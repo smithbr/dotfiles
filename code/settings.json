@@ -1,0 +1,33 @@
+{
+    "terminal.external.osxExec": "iTerm.app",
+    "terminal.integrated.shell.osx": "/bin/zsh",
+    "terminal.integrated.cursorStyle": "line",
+    "terminal.integrated.cursorBlinking": true,
+    "window.zoomLevel": 0,
+    "editor.fontSize": 12,
+    "editor.lineHeight": 25,
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true,
+    "editor.tabCompletion": true,
+    "editor.trimAutoWhitespace": true,
+    "editor.roundedSelection": true,
+    "editor.autoClosingBrackets": true,
+    "editor.formatOnType": true,
+    "editor.quickSuggestions": {
+        "other": true,
+        "comments": false,
+        "strings": false
+    },
+    "editor.mouseWheelZoom": true,
+    "editor.minimap.enabled": true,
+    "editor.minimap.side": "right",
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
+    "window.restoreWindows": "one",
+    "workbench.iconTheme": "material-icon-theme",
+    "workbench.editor.tabSizing": "shrink",
+    "workbench.colorTheme": "Dracula",
+    "vsicons.projectDetection.autoReload": true,
+    "diffEditor.ignoreTrimWhitespace": true,
+    "workbench.activityBar.visible": true
+}
