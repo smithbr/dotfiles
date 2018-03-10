@@ -6,13 +6,15 @@
 - clean: ['~', '~/.config']
 
 - link:
-    ~/.bash_profile:
-    ~/.bashrc:
+    ~/.bash:
+    ~/.bash_profile: bash/bash_profile
+    ~/.bashrc: bash/bashrc
     ~/.dotfiles: ''
-    ~/.gitconfig:
-    ~/.gitignore_global:
+    ~/.gitconfig: git/gitconfig
+    ~/.gitignore_global: git/gitignore_global
+    ~/.shell:
     ~/.zsh:
-    ~/.zshrc:
+    ~/.zshrc: zsh/zshrc
 
 - shell:
   - git update-submodules
