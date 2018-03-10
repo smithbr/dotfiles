@@ -1,6 +1,13 @@
+# Aliases
 source ~/.shell/aliases.sh
+
+# Secrets file
 source ~/.shell/secrets.sh
+
+# Settings
 source ~/.shell/settings.sh
+
+# Theme custom settings
 source ~/.zsh/spaceship.zsh
 
 export ZSH=$HOME/.oh-my-zsh
