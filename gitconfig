@@ -1,6 +1,7 @@
 [user]
 	name = Brandon Smith
 	email = smithbr@users.noreply.github.com
+    username = smithbr
 [core]
     editor = code
 	autocrlf = false
