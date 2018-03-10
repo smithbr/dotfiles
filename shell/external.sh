@@ -1,6 +1,3 @@
-# macOS
-export PATH=/usr/local/bin:$PATH
-
 # JMeter
 export JMETER_HOME=/usr/local/opt/jmeter
 export PATH=$JMETER_HOME/bin/jmeter:$PATH
