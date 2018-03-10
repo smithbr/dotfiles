@@ -11,6 +11,7 @@ source ~/.shell/external.sh
 source ~/.shell/macos.sh
 
 # Theme custom settings
+ZSH_THEME="spaceship"
 source ~/.zsh/spaceship.zsh
 
 export ZSH=$HOME/.oh-my-zsh
