@@ -7,8 +7,12 @@ source ~/.shell/secrets.sh
 # External settings
 source ~/.shell/external.sh
 
-# macOS settings
-source ~/.shell/macos.sh
+if [[ "$(uname -s)" == "Darwin" ]]
+then
+    source ~/.shell/macOS.sh
+else
+    echo "There are no custom shell scripts for this OS. Skipping..."
+fi
 
 # Theme custom settings
 ZSH_THEME="spaceship"
