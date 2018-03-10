@@ -35,6 +35,7 @@ formulas=(
     maven
     nginx
     node
+    nyancat
     python@2
     tldr
     tree
