@@ -18,6 +18,7 @@ export INFLUXDB_CONFIG_PATH=/usr/local/etc/influxdb.conf
 # python
 # virtualenvwrapper
 export WORKON_HOME=~/.virtualenvs
+export PROJECT_HOME=$HOME/projects
 source /usr/local/bin/virtualenvwrapper.sh
 # pip should only run if there is a virtualenv activated
 export PIP_REQUIRE_VIRTUALENV=true
