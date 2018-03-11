@@ -32,6 +32,7 @@ echo "========================================"
 if [[ "$(uname)" == "Linux" ]];
 then
     sudo apt-get install git python python-pip
+    pip install --upgrade pip
 fi
 pip_path="$( which pip )"
 $pip_path install --user -r pip/requirements.txt
