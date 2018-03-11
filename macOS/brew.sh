@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-if test ! "$( which brew )"; then
+if test ! "$( which brew )";
+then
     echo -e "\\n\\nInstalling homebrew..."
     echo "========================================"
     /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
@@ -50,7 +51,8 @@ formulas=(
 )
 
 for formula in "${formulas[@]}"; do
-    if brew list "$formula" > /dev/null 2>&1; then
+    if brew list "$formula" > /dev/null 2>&1;
+    then
         echo "$formula already installed... skipping."
     else
         brew install "$formula"
