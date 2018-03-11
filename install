@@ -40,18 +40,18 @@ $pip_path install --user -r pip/requirements.txt
 
 if [[ "$(uname -s)" == "Darwin" ]];
 then
-    echo -e "\\n\\nStarting macOS custom install scripts..."
+    echo -e "\\n\\nStarting macOS..."
     echo "========================================"
     chmod +x macOS/brew.sh && ./macOS/brew.sh
     chmod +x macOS/fonts.sh && ./macOS/fonts.sh
 elif [[ "$(uname)" == "Linux" ]];
 then
-    echo -e "\\n\\nStarting Linux custom install scripts..."
+    echo -e "\\n\\nStarting Linux..."
     echo "========================================"
     # chmod +x apt/apt.sh && ./apt/apt.sh
     chmod +x linux/brew.sh && ./linux/brew.sh
 else
-    echo "No custom install scripts..."
+    echo "Can't detect OS."
 fi
 
 
