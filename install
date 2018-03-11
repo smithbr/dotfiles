@@ -6,7 +6,6 @@ then
     exit 1;
 fi
 
-
 echo -e "\\n\\nLinking dotfiles..."
 echo "========================================"
 set -e
@@ -25,7 +24,6 @@ git submodule update --init --force --recursive "${DOTBOT_DIR}"
 --plugin-dir dotbot/plugins/dotbot-brew \
 -c "${CONFIG}" "${@}"
 
-
 if [[ "$(uname -s)" == "Darwin" ]];
 then
     echo -e "\\n\\nStarting macOS..."
@@ -40,22 +38,17 @@ else
     echo "Can't detect OS."
 fi
 
-
 echo -e "\\n\\nStarting Homebrew..."
 echo "========================================"
 chmod +x homebrew/brew.sh && ./homebrew/brew.sh
 
-
 echo -e "\\n\\nInstalling python packages..."
 echo "========================================"
-
 pip_path="$( which pip )"
 $pip_path install --user -r pip/requirements.txt
 
-
 echo -e "\\n\\nInstalling antigen.zsh..."
 echo "========================================"
-
 if [[ "$(uname -s)" == "Darwin" ]];
 then
     antigenpath="/usr/local/opt/antigen/share/antigen/antigen.zsh"
@@ -66,18 +59,14 @@ fi
 echo $antigenpath
 curl -L git.io/antigen > $antigenpath
 
-
 echo -e "\\n\\nChanging default shell to zsh..."
 echo "========================================"
-
 zsh_path="$( which zsh )"
-
 if ! grep "$zsh_path" /etc/shells;
 then
     echo "adding $zsh_path to /etc/shells"
     echo "$zsh_path" | sudo tee -a /etc/shells
 fi
-
 if [[ "$SHELL" != "$zsh_path" ]];
 then
     chsh -s "$zsh_path"
