@@ -1,3 +1,6 @@
+# Homebrew or Linuxbrew
+export PATH='$(brew --prefix)/bin:$(brew --prefix)/sbin':$PATH
+
 # JMeter
 export JMETER_HOME=/usr/local/opt/jmeter
 export PATH=$JMETER_HOME/bin/jmeter:$PATH
