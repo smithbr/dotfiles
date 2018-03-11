@@ -1,6 +1,3 @@
-# Antigen
-antigen bundle osx
-
 # Open Finder.app at the current directory
 alias f="open -a Finder ./"
 

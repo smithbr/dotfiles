@@ -31,10 +31,12 @@ antigen bundle zsh-users/zsh-autosuggestions
 
 if [[ "$( uname )" == "Darwin" ]];
 then
+    antigen bundle osx
     antigen theme https://github.com/denysdovhan/spaceship-prompt spaceship
     source ~/.shell/spaceship.zsh
 elif [[ "$( uname )" == "Linux" ]];
 then
+    antigen bundle ubuntu
     antigen theme awesomepanda
 fi
 
