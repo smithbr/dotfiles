@@ -7,7 +7,7 @@ then
     sudo apt-get install -y ruby-full
     sudo apt-get install -y gcc
     sudo apt-get install -y build-essential
-    export PATH=$HOME/.linuxbrew/bin:$PATH
+    export PATH=/home/linuxbrew/.linuxbrew/bin:$PATH
     /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Linuxbrew/install/master/install)"
 fi
 

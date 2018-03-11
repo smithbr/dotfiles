@@ -5,10 +5,10 @@ then
 elif [[ "$( uname )" == "Linux" ]];
 then
     export PATH=$HOME/.local/bin:$PATH
-    export PATH=$HOME/.linuxbrew/bin:$PATH
-    export MANPATH=$HOME/.linuxbrew/share/man:$MANPATH
-    export INFOPATH=$HOME/.linuxbrew/share/info:$INFOPATH
-    source $HOME/.linuxbrew/share/antigen/antigen.zsh
+    export PATH=/home/linuxbrew/.linuxbrewbin:$PATH
+    export MANPATH=/home/linuxbrew/.linuxbrewshare/man:$MANPATH
+    export INFOPATH=/home/linuxbrew/.linuxbrewshare/info:$INFOPATH
+    source /home/linuxbrew/.linuxbrewshare/antigen/antigen.zsh
 fi
 
 antigen use oh-my-zsh
