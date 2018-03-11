@@ -1,12 +1,13 @@
-export PATH=/usr/local/bin:$PATH
-export PATH=$HOME/.local/bin:$PATH
-export PATH=$HOME/.linuxbrew/bin:$PATH
-
-if [[ "$(uname)" == "Darwin" ]];
+if [[ "$( uname )" == "Darwin" ]];
 then
+    export PATH=/usr/local/bin:$PATH
     source /usr/local/share/antigen/antigen.zsh
-elif [[ "$(uname)" == "Linux" ]];
+elif [[ "$( uname )" == "Linux" ]];
 then
+    export PATH=$HOME/.local/bin:$PATH
+    export PATH=$HOME/.linuxbrew/bin:$PATH
+    export MANPATH=$HOME/.linuxbrew/share/man:$MANPATH
+    export INFOPATH=$HOME/.linuxbrew/share/info:$INFOPATH
     source $HOME/.linuxbrew/share/antigen/antigen.zsh
 fi
 
