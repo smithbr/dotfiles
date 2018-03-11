@@ -19,6 +19,7 @@ then
 fi
 
 echo -e "\\n\\nUpdating $brewpath...\\n"
+mkdir -p $brewbinpath
 source PATH=$brewbinpath:$PATH
 brew update && brew upgrade
 
