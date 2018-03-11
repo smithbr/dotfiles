@@ -19,7 +19,12 @@ export INFLUXDB_CONFIG_PATH=/usr/local/etc/influxdb.conf
 # virtualenvwrapper
 export WORKON_HOME=~/.virtualenvs
 export PROJECT_HOME=$HOME/projects
-source /usr/local/bin/virtualenvwrapper.sh
+if [[ "$(uname)" == "Darwin" ]]; then
+    source /usr/local/bin/virtualenvwrapper.sh
+elif [[ "$(uname)" == "Linux" ]]; then
+    source $HOME/.local/bin/virtualenvwrapper.sh
+fi
+
 
 # pip
 # pip should only run if there is a virtualenv activated
