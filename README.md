@@ -5,5 +5,5 @@ My dotfiles 🗃
 $ git clone https://github.com/smithbr/dotfiles.git dotfiles
 $ cd dotfiles/
 $ ./install
-$ source ~/.zshrc # or ~/.bashrc
+$ zsh # or bash
 ```
