@@ -13,7 +13,4 @@ source ~/.shell/external.sh
 if [[ "$(uname)" == "Darwin" ]];
 then
     source ~/.shell/macOS.sh
-elif [[ "$(uname)" == "Linux" ]];
-then
-    # None so far...
 fi
