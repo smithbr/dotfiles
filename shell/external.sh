@@ -20,7 +20,11 @@ export INFLUXDB_CONFIG_PATH=/usr/local/etc/influxdb.conf
 export WORKON_HOME=~/.virtualenvs
 export PROJECT_HOME=$HOME/projects
 source /usr/local/bin/virtualenvwrapper.sh
+
+# pip
 # pip should only run if there is a virtualenv activated
-export PIP_REQUIRE_VIRTUALENV=true
+# export PIP_REQUIRE_VIRTUALENV=true
+
 # Cache pip-installed packages to avoid re-downloading
-export PIP_DOWNLOAD_CACHE=$HOME/.pip/cache
+# mkdir -p $HOME/.pip/cache
+# export PIP_DOWNLOAD_CACHE=$HOME/.pip/cache
