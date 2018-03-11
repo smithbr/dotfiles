@@ -28,7 +28,9 @@ git submodule update --init --force --recursive "${DOTBOT_DIR}"
 
 echo -e "\\n\\nInstalling python packages..."
 echo "========================================"
-pip install --user -r pip/requirements.txt
+
+pip_path="$( which pip )"
+$pip_path install --user -r pip/requirements.txt
 
 
 if [[ "$(uname -s)" == "Darwin" ]];
