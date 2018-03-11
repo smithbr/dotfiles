@@ -70,3 +70,6 @@ then
     chsh -s "$zsh_path"
     echo "default shell changed to $zsh_path"
 fi
+
+source $HOME/.zshrc
+source $HOME/.bashrc
