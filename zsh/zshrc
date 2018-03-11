@@ -8,9 +8,7 @@ then
     test -d /home/linuxbrew/.linuxbrew && PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH"
     test -r ~/.bash_profile && echo "export PATH='$(brew --prefix)/bin:$(brew --prefix)/sbin'":'"$PATH"'
     echo "export PATH='$(brew --prefix)/bin:$(brew --prefix)/sbin'":'"$PATH"'
-    export PATH=$HOME/.local/bin:$PATH
-    export PATH=$HOME/.linuxbrew/bin:$PATH
-    export PATH=/home/linuxbrew/.linuxbrewbin:$PATH
+    export PATH=/home/linuxbrew/.linuxbrew/bin:$PATH
     export MANPATH=/home/linuxbrew/.linuxbrewshare/man:$MANPATH
     export INFOPATH=/home/linuxbrew/.linuxbrewshare/info:$INFOPATH
     source /home/linuxbrew/.linuxbrewshare/antigen/antigen.zsh
