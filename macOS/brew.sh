@@ -27,7 +27,6 @@ echo "========================================"
 
 formulas=(
     ack
-    antigen
     cowsay
     fortune
     git
