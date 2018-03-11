@@ -20,7 +20,6 @@ fi
 
 echo -e "\\n\\nUpdating $brewpath...\\n"
 brew update && brew upgrade
-export PATH=$brewbinpath:$PATH
 
 echo -e "\\n\\nAdding taps...\\n"
 brew tap caskroom/cask
