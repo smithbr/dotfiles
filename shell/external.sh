@@ -15,7 +15,7 @@ export PATH=$GATLING_HOME/bin/gatling.sh:$PATH
 # InfluxDB
 export INFLUXDB_CONFIG_PATH=/usr/local/etc/influxdb.conf
 
-# python
+# Python
 # virtualenvwrapper
 export WORKON_HOME=~/.virtualenvs
 export PROJECT_HOME=$HOME/projects
