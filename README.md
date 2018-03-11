@@ -1,9 +1,9 @@
 # dotfiles
 My dotfiles 🗃
 
-To install, run
-
 ```bash
+$ git clone https://github.com/smithbr/dotfiles.git dotfiles
+$ cd dotfiles/
 $ ./install
 $ source ~/.zshrc # or ~/.bashrc
 ```
