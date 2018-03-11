@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
-echo -e "\\n\\nInstalling fonts..."
-echo "========================================"
+echo -e "\\n\\nInstalling fonts...\\n"
 git clone https://github.com/powerline/fonts.git --depth=1
 cd fonts
 ./install.sh
