@@ -63,7 +63,7 @@ for formula in "${formulas[@]}"; do
 done
 
 
-echo -e "\\n\\nCleaning up..."
+echo -e "\\n\\nCleaning up homebrew..."
 echo "========================================"
 
 brew prune
