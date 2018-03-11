@@ -37,8 +37,6 @@ then
     echo -e "\\n\\nStarting Linux..."
     echo "========================================"
     chmod +x linux/apt.sh && ./linux/apt.sh
-else
-    echo "Can't detect OS."
 fi
 
 echo -e "\\n\\nStarting Homebrew..."
