@@ -16,3 +16,8 @@
     ~/.shell:
     ~/.zsh:
     ~/.zshrc: zsh/zshrc
+
+- shell:
+  -
+    command: git submodule update --recursive --remote # after linking ~/.gitconfig
+    stdout: true
