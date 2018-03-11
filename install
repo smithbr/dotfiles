@@ -36,7 +36,7 @@ elif [[ "$( uname )" == "Linux" ]];
 then
     echo -e "\\n\\nStarting Linux..."
     echo "========================================"
-    chmod +x apt/apt.sh && ./apt/apt.sh
+    chmod +x linux/apt.sh && ./linux/apt.sh
     chmod +x linux/brew.sh && ./linux/brew.sh
 else
     echo "Can't detect OS."
