@@ -55,11 +55,13 @@ echo "========================================"
 
 if [[ "$(uname -s)" == "Darwin" ]];
 then
-    curl -L git.io/antigen > /usr/local/opt/antigen/share/antigen/antigen.zsh
+    antigenpath="/usr/local/opt/antigen/share/antigen/antigen.zsh"
 elif [[ "$( uname )" == "Linux" ]];
 then
-    curl -L git.io/antigen > /home/linuxbrew/.linuxbrew/bin/antigen.zsh
+    antigenpath="/home/linuxbrew/.linuxbrew/bin/antigen.zsh"
 fi
+echo $antigenpath
+curl -L git.io/antigen > $antigenpath
 
 
 echo -e "\\n\\nChanging default shell to zsh..."
