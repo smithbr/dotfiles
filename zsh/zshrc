@@ -29,8 +29,13 @@ antigen bundle pip
 antigen bundle zsh-users/zsh-syntax-highlighting
 antigen bundle zsh-users/zsh-autosuggestions
 
-antigen theme awesomepanda
-# antigen theme https://github.com/denysdovhan/spaceship-prompt spaceship
-# source ~/.shell/spaceship.zsh
+if [[ "$( uname )" == "Darwin" ]];
+then
+    antigen theme https://github.com/denysdovhan/spaceship-prompt spaceship
+    source ~/.shell/spaceship.zsh
+elif [[ "$( uname )" == "Linux" ]];
+then
+    antigen theme awesomepanda
+fi
 
 antigen apply
