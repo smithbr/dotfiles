@@ -30,8 +30,7 @@ if [[ "$(uname -s)" == "Darwin" ]];
 then
     echo -e "\\n\\nStarting macOS..."
     echo "========================================"
-    chmod +x macOS/brew.sh && ./macOS/brew.sh
-    chmod +x macOS/fonts.sh && ./macOS/fonts.sh
+    echo "No macOS install scripts in the macOS/ folder."
 elif [[ "$( uname )" == "Linux" ]];
 then
     echo -e "\\n\\nStarting Linux..."
