@@ -6,6 +6,10 @@ then
     exit 1;
 fi
 
+echo -e "\\n\\nUpdating submodules..."
+echo "========================================"
+git submodule update --init --force --recursive
+
 echo -e "\\n\\nLinking dotfiles..."
 echo "========================================"
 set -e
@@ -17,7 +21,6 @@ DOTBOT_BIN="bin/dotbot"
 BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 cd "${BASEDIR}"
-git submodule update --init --force --recursive "${DOTBOT_DIR}"
 
 "${BASEDIR}/${DOTBOT_DIR}/${DOTBOT_BIN}" -d "${BASEDIR}" \
 --plugin-dir dotbot/plugins/dotbot-pip \
