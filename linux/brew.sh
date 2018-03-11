@@ -63,6 +63,11 @@ for formula in "${formulas[@]}"; do
 done
 
 
+echo -e "\\n\\nInstalling antigen.zsh..."
+echo "========================================"
+curl -L git.io/antigen > /home/linuxbrew/.linuxbrew/bin/antigen.zsh
+
+
 echo -e "\\n\\nCleaning up..."
 echo "========================================"
 
