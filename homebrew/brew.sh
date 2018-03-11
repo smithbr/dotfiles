@@ -4,12 +4,10 @@ if [[ "$(uname -s)" == "Darwin" ]];
 then
     brewplatform=Homebrew
     brewpath=homebrew
-    brewbinpath=/home/homebrew/.homebrew/bin
 elif [[ "$( uname )" == "Linux" ]];
 then
     brewplatform=Linuxbrew
     brewpath=linuxbrew
-    brewbinpath=/home/linuxbrew/.linuxbrew/bin
 fi
 
 if test ! "$( which brew )";
@@ -19,6 +17,7 @@ then
 fi
 
 echo -e "\\n\\nUpdating $brewpath...\\n"
+
 brew update && brew upgrade
 
 echo -e "\\n\\nAdding taps...\\n"

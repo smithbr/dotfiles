@@ -1,5 +1,11 @@
 # Homebrew or Linuxbrew
-export PATH='$(brew --prefix)/bin:$(brew --prefix)/sbin':$PATH
+if [[ "$( uname )" == "Darwin" ]];
+then
+    export PATH=/usr/local/bin:$PATH
+elif [[ "$( uname )" == "Linux" ]];
+then
+    export PATH=/home/linuxbrew/.linuxbrew/bin:$PATH
+fi
 
 # JMeter
 export JMETER_HOME=/usr/local/opt/jmeter
@@ -22,14 +28,7 @@ export INFLUXDB_CONFIG_PATH=/usr/local/etc/influxdb.conf
 # virtualenvwrapper
 export WORKON_HOME=~/.virtualenvs
 export PROJECT_HOME=$HOME/projects
-if [[ "$( uname )" == "Darwin" ]];
-then
-    source /usr/local/bin/virtualenvwrapper.sh
-elif [[ "$( uname )" == "Linux" ]];
-then
-    source $HOME/.local/bin/virtualenvwrapper.sh
-fi
-
+source /usr/local/bin/virtualenvwrapper.sh
 
 # pip
 # pip should only run if there is a virtualenv activated
