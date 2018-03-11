@@ -9,7 +9,7 @@ elif [[ "$( uname )" == "Linux" ]];
 then
     brewplatform=Linuxbrew
     brewpath=linuxbrew
-    brewbinpath=/usr/local/bin
+    brewbinpath=/home/linuxbrew/.linuxbrew/bin
 fi
 
 if test ! "$( which brew )";
