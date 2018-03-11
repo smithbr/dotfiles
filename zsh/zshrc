@@ -1,5 +1,5 @@
 export PATH=$HOME/.dotfiles/zsh/antigen:$PATH
-source $HOME/.dotfiles/zsh/antigen/antigen.zsh
+source $HOME/.dotfiles/zsh/antigen/bin/antigen.zsh
 
 # Aliases
 source ~/.shell/aliases.sh
