@@ -7,7 +7,7 @@ then
     source /usr/local/share/antigen/antigen.zsh
 elif [[ "$(uname)" == "Linux" ]];
 then
-    source $HOME/.local/share/antigen/antigen.zsh
+    source $HOME/.linuxbrew/share/antigen/antigen.zsh
 fi
 
 antigen use oh-my-zsh
