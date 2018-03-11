@@ -1,4 +1,9 @@
 # dotfiles
 My dotfiles 🗃
 
-To install, run `./install`
+To install, run
+
+```bash
+$ ./install
+$ source ~/.zshrc # or ~/.bashrc
+```
