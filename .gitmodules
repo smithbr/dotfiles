@@ -7,3 +7,6 @@
 [submodule "dotbot/plugins/dotbot-pip"]
     path = dotbot/plugins/dotbot-pip
     url = https://github.com/sobolevn/dotbot-pip.git
+[submodule "zsh/antigen"]
+    path = zsh/antigen
+    url = https://github.com/zsh-users/antigen.git
