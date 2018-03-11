@@ -29,6 +29,10 @@ git submodule update --init --force --recursive "${DOTBOT_DIR}"
 echo -e "\\n\\nInstalling python packages..."
 echo "========================================"
 
+if [[ "$(uname)" == "Linux" ]];
+then
+    sudo apt-get install git python python-pip
+fi
 pip_path="$( which pip )"
 $pip_path install --user -r pip/requirements.txt
 
@@ -39,11 +43,14 @@ then
     echo "========================================"
     chmod +x macOS/brew.sh && ./macOS/brew.sh
     chmod +x macOS/fonts.sh && ./macOS/fonts.sh
-else
+elif [[ "$(uname)" == "Linux" ]];
+then
     echo -e "\\n\\nStarting Linux custom install scripts..."
     echo "========================================"
     # chmod +x apt/apt.sh && ./apt/apt.sh
     chmod +x linux/brew.sh && ./linux/brew.sh
+else
+    echo "No custom install scripts..."
 fi
 
 
