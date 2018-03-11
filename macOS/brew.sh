@@ -1,52 +1,52 @@
 #!/usr/bin/env bash
 
-echo -e "\\n\\nInstalling homebrew..."
-echo "=============================="
-
 if test ! "$( which brew )"; then
-    echo "Installing homebrew"
-    ruby -e "$( curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install )"
+    echo -e "\\n\\nInstalling homebrew..."
+    echo "========================================"
+    /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
 fi
 
 
 echo -e "\\n\\nUpdating homebrew..."
-echo "=============================="
+echo "========================================"
 
 brew update && brew upgrade
 
 
 echo -e "\\n\\nAdding taps..."
-echo "=============================="
+echo "========================================"
 
 brew tap caskroom/cask
+brew tap caskroom/fonts
 brew tap loadimpact/k6
 
 
 echo -e "\\n\\nInstalling binaries..."
-echo "=============================="
+echo "========================================"
 
 formulas=(
     ack
+    antigen
     cowsay
     fortune
     git
+    grafana
     groovy
     htop
+    influxdb
+    jenkins
+    loadimpact/k6/k6
     maven
     nginx
     node
     nyancat
-    python@2
+    screenfetch
+    selenium-server-standalone
     tldr
     tree
     wget
     yarn
     zsh
-    # k6
-    # selenium-server-standalone
-    # jenkins
-    # influxdb
-    # grafana
 )
 
 for formula in "${formulas[@]}"; do
@@ -59,7 +59,7 @@ done
 
 
 echo -e "\\n\\nCleaning up..."
-echo "=============================="
+echo "========================================"
 
 brew prune
 brew cleanup
