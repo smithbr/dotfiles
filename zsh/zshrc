@@ -1,12 +1,13 @@
 if [[ "$( uname )" == "Darwin" ]];
 then
     export PATH='$(brew --prefix)/bin:$(brew --prefix)/sbin':$PATH
-    source /usr/local/share/antigen/antigen.zsh
 elif [[ "$( uname )" == "Linux" ]];
 then
     export PATH='$(brew --prefix)/bin:$(brew --prefix)/sbin':$PATH
-    source /home/linuxbrew/.linuxbrew/bin/antigen.zsh
 fi
+
+export PATH=$HOME/.dotfiles/antigen:$PATH
+source $HOME/.dotfiles/antigen/antigen.zsh
 
 antigen use oh-my-zsh
 
