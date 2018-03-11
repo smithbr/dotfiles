@@ -34,6 +34,7 @@ formulas=(
     antigen
     cowsay
     fortune
+    gcc
     git
     grafana
     groovy
