@@ -34,6 +34,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     echo -e "\\n\\nStarting macOS custom install scripts..."
     echo "========================================"
     chmod +x macOS/brew.sh && ./macOS/brew.sh
+    chmod +x macOS/fonts.sh && ./macOS/fonts.sh
 else
     echo "There are no custom install scripts for this OS. Skipping..."
 fi
