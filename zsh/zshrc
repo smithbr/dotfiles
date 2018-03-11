@@ -1,17 +1,11 @@
 if [[ "$( uname )" == "Darwin" ]];
 then
-    export PATH=/usr/local/bin:$PATH
+    export PATH='$(brew --prefix)/bin:$(brew --prefix)/sbin':$PATH
     source /usr/local/share/antigen/antigen.zsh
 elif [[ "$( uname )" == "Linux" ]];
 then
-    test -d ~/.linuxbrew && PATH="$HOME/.linuxbrew/bin:$HOME/.linuxbrew/sbin:$PATH"
-    test -d /home/linuxbrew/.linuxbrew && PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH"
-    test -r ~/.bash_profile && echo "export PATH='$(brew --prefix)/bin:$(brew --prefix)/sbin'":'"$PATH"'
-    echo "export PATH='$(brew --prefix)/bin:$(brew --prefix)/sbin'":'"$PATH"'
-    export PATH=/home/linuxbrew/.linuxbrew/bin:$PATH
-    export MANPATH=/home/linuxbrew/.linuxbrewshare/man:$MANPATH
-    export INFOPATH=/home/linuxbrew/.linuxbrewshare/info:$INFOPATH
-    source /home/linuxbrew/.linuxbrewshare/antigen/antigen.zsh
+    export PATH='$(brew --prefix)/bin:$(brew --prefix)/sbin':$PATH
+    source /home/linuxbrew/.linuxbrew/bin/antigen.zsh
 fi
 
 antigen use oh-my-zsh
