@@ -4,9 +4,7 @@ if test ! "$( which brew )";
 then
     echo -e "\\n\\nInstalling linuxbrew..."
     echo "========================================"
-    sudo apt-get install -y ruby-full
-    sudo apt-get install -y gcc
-    sudo apt-get install -y build-essential
+    sudo apt-get install -y ruby-full build-essential
     export PATH=/home/linuxbrew/.linuxbrew/bin:$PATH
     /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Linuxbrew/install/master/install)"
 fi
