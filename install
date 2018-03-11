@@ -42,7 +42,8 @@ then
 else
     echo -e "\\n\\nStarting Linux custom install scripts..."
     echo "========================================"
-    chmod +x apt/apt.sh && ./apt/apt.sh
+    # chmod +x apt/apt.sh && ./apt/apt.sh
+    chmod +x linux/brew.sh && ./linux/brew.sh
 fi
 
 
