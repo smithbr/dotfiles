@@ -1,4 +1,7 @@
 sudo -v
 
-apt-get install python-pip
-apt-get install zsh
+sudo apt-get update
+sudo apt-get upgrade
+
+sudo apt-get install python-pip
+sudo apt-get install zsh
