@@ -5,6 +5,7 @@ then
 elif [[ "$( uname )" == "Linux" ]];
 then
     export PATH=$HOME/.local/bin:$PATH
+    export PATH=$HOME/.linuxbrew/bin:$PATH
     export PATH=/home/linuxbrew/.linuxbrewbin:$PATH
     export MANPATH=/home/linuxbrew/.linuxbrewshare/man:$MANPATH
     export INFOPATH=/home/linuxbrew/.linuxbrewshare/info:$INFOPATH
