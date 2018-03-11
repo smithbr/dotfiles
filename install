@@ -40,7 +40,9 @@ then
     chmod +x macOS/brew.sh && ./macOS/brew.sh
     chmod +x macOS/fonts.sh && ./macOS/fonts.sh
 else
-    echo "There are no custom install scripts for this OS. Skipping..."
+    echo -e "\\n\\nStarting Linux custom install scripts..."
+    echo "========================================"
+    chmod +x apt/apt.sh && ./apt/apt.sh
 fi
 
 
