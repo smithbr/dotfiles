@@ -5,17 +5,15 @@ then
     echo -e "\\n\\nInstalling linuxbrew..."
     echo "========================================"
     sudo apt-get install ruby-full
+    sudo apt-get install gcc
+    sudo apt-get install build-essential
     /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Linuxbrew/install/master/install)"
+    export PATH=$HOME/.linuxbrew/bin:$PATH
 fi
 
 
 echo -e "\\n\\nUpdating linuxbrew..."
 echo "========================================"
-
-test -d ~/.linuxbrew && PATH="$HOME/.linuxbrew/bin:$HOME/.linuxbrew/sbin:$PATH"
-test -d /home/linuxbrew/.linuxbrew && PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH"
-test -r ~/.bash_profile && echo "export PATH='$(brew --prefix)/bin:$(brew --prefix)/sbin'":'"$PATH"' >>~/.bash_profile
-echo "export PATH='$(brew --prefix)/bin:$(brew --prefix)/sbin'":'"$PATH"' >>~/.profile
 
 brew update && brew upgrade
 
