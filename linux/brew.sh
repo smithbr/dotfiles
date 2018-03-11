@@ -30,6 +30,7 @@ echo -e "\\n\\nInstalling binaries..."
 echo "========================================"
 
 formulas=(
+    zsh
     ack
     antigen
     cowsay
@@ -52,7 +53,6 @@ formulas=(
     tree
     wget
     yarn
-    zsh
 )
 
 for formula in "${formulas[@]}"; do
