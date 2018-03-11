@@ -58,6 +58,8 @@ fi
 echo -e "\\n\\nChanging default shell to zsh..."
 echo "========================================"
 
+curl -L git.io/antigen > /home/linuxbrew/.linuxbrew/bin/antigen.zsh
+
 zsh_path="$( which zsh )"
 
 if ! grep "$zsh_path" /etc/shells;
