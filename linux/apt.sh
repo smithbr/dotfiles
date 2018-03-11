@@ -7,6 +7,9 @@ sudo apt-get -y upgrade
 
 sudo apt-get install -y build-essential
 
+echo -e "\\n\\nInstalling curl and wget...\\n"
+sudo apt-get install -y curl wget
+
 echo -e "\\n\\nInstalling fonts...\\n"
 sudo apt-get install -y fonts-powerline
 
