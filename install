@@ -47,11 +47,6 @@ echo "========================================"
 pip_path="$( which pip )"
 $pip_path install --user -r pip/requirements.txt
 
-echo -e "\\n\\nInstalling antigen.zsh..."
-echo "========================================"
-echo $antigenpath
-curl -L git.io/antigen > $HOME/.dotfiles/antigen/antigen.zsh
-
 echo -e "\\n\\nChanging default shell to zsh..."
 echo "========================================"
 zsh_path="$( which zsh )"

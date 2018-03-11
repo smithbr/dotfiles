@@ -6,8 +6,8 @@ then
     export PATH='$(brew --prefix)/bin:$(brew --prefix)/sbin':$PATH
 fi
 
-export PATH=$HOME/.dotfiles/antigen:$PATH
-source $HOME/.dotfiles/antigen/antigen.zsh
+export PATH=$HOME/.dotfiles/zsh/antigen:$PATH
+source $HOME/.dotfiles/zsh/antigen/antigen.zsh
 
 antigen use oh-my-zsh
 
