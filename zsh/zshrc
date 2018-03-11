@@ -1,5 +1,4 @@
 export PATH=/usr/local/bin:$PATH
-export PATH=$HOME/.local/bin:$PATH
 source /usr/local/share/antigen/antigen.zsh
 
 antigen use oh-my-zsh
