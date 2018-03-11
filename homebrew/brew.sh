@@ -18,8 +18,10 @@ then
     /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/$brewplatform/install/master/install)"
 fi
 
-echo -e "\\n\\nUpdating $brewpath...\\n"
+echo -e "\\n\\nAdding $brewpath to PATH...\\n"
 export PATH=$brewbinpath:$PATH
+
+echo -e "\\n\\nUpdating $brewpath...\\n"
 brew update && brew upgrade
 
 echo -e "\\n\\nAdding taps...\\n"
