@@ -31,6 +31,6 @@ antigen bundle zsh-users/zsh-autosuggestions
 
 antigen theme awesomepanda
 # antigen theme https://github.com/denysdovhan/spaceship-prompt spaceship
-# source ~/.zsh/spaceship.zsh
+# source ~/.shell/spaceship.zsh
 
 antigen apply
