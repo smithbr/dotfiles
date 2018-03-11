@@ -1,5 +1,6 @@
 # Aliases
 source ~/.shell/aliases.sh
+export PATH=/usr/local/bin:$PATH
 
 # Secrets file
 source ~/.shell/secrets.sh
