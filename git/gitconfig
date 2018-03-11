@@ -14,7 +14,7 @@
     pu = push -u
     st = status
 [filter "lfs"]
-	required = true
-	clean = git-lfs clean -- %f
+    required = true
+    clean = git-lfs clean -- %f
 	smudge = git-lfs smudge -- %f
 	process = git-lfs filter-process
