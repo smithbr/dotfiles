@@ -1,4 +1,4 @@
-# Navigation
+# Open Finder.app at the current directory
 alias f="open -a Finder ./"
 
 # Show/hide hidden files in Finder
