@@ -19,7 +19,7 @@ source ~/.shell/secrets.sh
 source ~/.shell/external.sh
 
 # OS-specific
-if [[ "$(uname)" == "Darwin" ]];
+if [[ "$( uname )" == "Darwin" ]];
 then
     source ~/.shell/macOS.sh
 fi

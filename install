@@ -29,7 +29,7 @@ git submodule update --init --force --recursive "${DOTBOT_DIR}"
 echo -e "\\n\\nInstalling python packages..."
 echo "========================================"
 
-if [[ "$(uname)" == "Linux" ]];
+if [[ "$( uname )" == "Linux" ]];
 then
     sudo apt-get install git python python-pip
     pip install --upgrade pip
@@ -44,7 +44,7 @@ then
     echo "========================================"
     chmod +x macOS/brew.sh && ./macOS/brew.sh
     chmod +x macOS/fonts.sh && ./macOS/fonts.sh
-elif [[ "$(uname)" == "Linux" ]];
+elif [[ "$( uname )" == "Linux" ]];
 then
     echo -e "\\n\\nStarting Linux..."
     echo "========================================"
