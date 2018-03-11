@@ -6,7 +6,7 @@ if [ -z "$HOME" ]; then
 fi
 
 
-echo -e "\\n\\nDoing @dotbot stuff..."
+echo -e "\\n\\nLinking dotfiles..."
 echo "========================================"
 set -e
 
