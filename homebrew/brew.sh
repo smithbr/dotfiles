@@ -19,8 +19,7 @@ then
 fi
 
 echo -e "\\n\\nUpdating $brewpath...\\n"
-mkdir -p $brewbinpath
-source PATH=$brewbinpath:$PATH
+export PATH=$brewbinpath:$PATH
 brew update && brew upgrade
 
 echo -e "\\n\\nAdding taps...\\n"
