@@ -1,13 +1,23 @@
-if [[ "$( uname )" == "Darwin" ]];
-then
-    export PATH='$(brew --prefix)/bin:$(brew --prefix)/sbin':$PATH
-elif [[ "$( uname )" == "Linux" ]];
-then
-    export PATH='$(brew --prefix)/bin:$(brew --prefix)/sbin':$PATH
-fi
-
 export PATH=$HOME/.dotfiles/zsh/antigen:$PATH
 source $HOME/.dotfiles/zsh/antigen/antigen.zsh
+
+# Aliases
+source ~/.shell/aliases.sh
+
+# Secrets
+source ~/.shell/secrets.sh
+
+# External
+source ~/.shell/external.sh
+
+# OS-specific
+if [[ "$( uname )" == "Darwin" ]];
+then
+    source ~/.shell/macOS.sh
+elif [[ "$( uname )" == "Linux" ]];
+then
+    # None so far...
+fi
 
 antigen use oh-my-zsh
 
@@ -24,22 +34,3 @@ antigen theme https://github.com/denysdovhan/spaceship-prompt spaceship
 source ~/.zsh/spaceship.zsh
 
 antigen apply
-
-# Aliases
-source ~/.shell/aliases.sh
-
-# Secrets
-source ~/.shell/secrets.sh
-
-# External
-source ~/.shell/external.sh
-
-# OS-specific
-if [[ "$( uname )" == "Darwin" ]];
-then
-    antigen bundle osx
-    source ~/.shell/macOS.sh
-elif [[ "$( uname )" == "Linux" ]];
-then
-    # None so far...
-fi

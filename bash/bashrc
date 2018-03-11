@@ -1,10 +1,4 @@
-if [[ "$( uname )" == "Darwin" ]];
-then
-    export PATH='$(brew --prefix)/bin:$(brew --prefix)/sbin':$PATH
-elif [[ "$( uname )" == "Linux" ]];
-then
-    export PATH='$(brew --prefix)/bin:$(brew --prefix)/sbin':$PATH
-fi
+export PATH='$(brew --prefix)/bin:$(brew --prefix)/sbin':$PATH
 
 # Aliases
 source ~/.shell/aliases.sh
