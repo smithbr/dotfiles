@@ -55,6 +55,16 @@ else
 fi
 
 
+echo -e "\\n\\nInstalling antigen.zsh..."
+echo "========================================"
+if [[ "$(uname -s)" == "Darwin" ]];
+then
+    curl -L git.io/antigen > /usr/local/opt/antigen/share/antigen/antigen.zsh
+elif [[ "$( uname )" == "Linux" ]];
+    curl -L git.io/antigen > /home/linuxbrew/.linuxbrew/bin/antigen.zsh
+
+
+
 echo -e "\\n\\nChanging default shell to zsh..."
 echo "========================================"
 
