@@ -19,5 +19,5 @@
 
 - shell:
   -
-    command: git submodule update --recursive --remote # after linking ~/.gitconfig
+    command: git submodule update --force --recursive # after linking ~/.gitconfig
     stdout: true
