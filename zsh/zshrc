@@ -1,31 +1,35 @@
-# Aliases
-source ~/.shell/aliases.sh
 export PATH=/usr/local/bin:$PATH
+source /usr/local/share/antigen/antigen.zsh
 
-# Secrets file
-source ~/.shell/secrets.sh
+antigen use oh-my-zsh
 
-# External settings
-source ~/.shell/external.sh
+# Bundles from the default repo (robbyrussell's oh-my-zsh)
+antigen bundle colored-man-pages
+antigen bundle colorize
+antigen bundle command-not-found
+antigen bundle emoji-clock
+antigen bundle pip
 
-if [[ "$(uname -s)" == "Darwin" ]]
-then
-    source ~/.shell/macOS.sh
-else
-    echo "There are no custom shell scripts for this OS. Skipping..."
-fi
+antigen bundle zsh-users/zsh-syntax-highlighting
 
-# Theme custom settings
-ZSH_THEME="spaceship"
+antigen theme https://github.com/denysdovhan/spaceship-prompt spaceship
 source ~/.zsh/spaceship.zsh
 
-export ZSH=$HOME/.oh-my-zsh
+antigen apply
 
-plugins=(git colored-man colorize github jira vagrant virtualenv pip python brew osx zsh-syntax-highlighting zsh-autosuggestions)
+# Aliases
+source ~/.shell/aliases.sh
 
-# Finally...
-source $ZSH/oh-my-zsh.sh
+# Secrets
+source ~/.shell/secrets.sh
 
-# Load spaceship-prompt
-autoload -U promptinit; promptinit
-prompt spaceship
+# External
+source ~/.shell/external.sh
+
+# OS-specific
+if [[ "$(uname)" == "Darwin" ]]; then
+    antigen bundle osx
+    source ~/.shell/macOS.sh
+elif [[ "$(uname)" == "Linux" ]]; then
+    # None so far...
+fi

@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 
-set -e
+if [ -z "$HOME" ]; then
+    echo "Seems you're \$HOMEless :(";
+    exit 1;
+fi
 
-if [ -z "$HOME" ]; then echo "Seems you're \$HOMEless :("; exit 1; fi
+
+echo -e "\\n\\nDoing @dotbot stuff..."
+echo "========================================"
+set -e
 
 CONFIG=".install.conf.yaml"
 DOTBOT_DIR=".dotbot"
@@ -10,17 +16,40 @@ DOTBOT_DIR=".dotbot"
 DOTBOT_BIN="bin/dotbot"
 BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if [[ "$(uname -s)" == "Darwin" ]]
-then
-    echo "Starting macOS custom install scripts..."
-    chmod +x macOS/brew.sh && sh ./macOS/brew.sh
-    chmod +x macOS/install.sh && sh ./macOS/install.sh
+cd "${BASEDIR}"
+git submodule update --init --recursive "${DOTBOT_DIR}"
+
+"${BASEDIR}/${DOTBOT_DIR}/${DOTBOT_BIN}" -d "${BASEDIR}" \
+--plugin-dir dotbot/plugins/dotbot-pip \
+--plugin-dir dotbot/plugins/dotbot-brew \
+-c "${CONFIG}" "${@}"
+
+
+echo -e "\\n\\nInstalling python packages..."
+echo "========================================"
+/usr/local/bin/pip install --user -r pip/requirements.txt
+
+
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    echo -e "\\n\\nStarting macOS custom install scripts..."
+    echo "========================================"
+    chmod +x macOS/brew.sh && ./macOS/brew.sh
 else
     echo "There are no custom install scripts for this OS. Skipping..."
 fi
 
-cd "${BASEDIR}"
-git submodule update --init --recursive "${DOTBOT_DIR}"
 
-"${BASEDIR}/${DOTBOT_DIR}/${DOTBOT_BIN}" -d "${BASEDIR}" -c "${CONFIG}" "${@}"
+echo -e "\\n\\nChanging default shell to zsh..."
+echo "========================================"
 
+zsh_path="$( which zsh )"
+
+if ! grep "$zsh_path" /etc/shells; then
+    echo "adding $zsh_path to /etc/shells"
+    echo "$zsh_path" | sudo tee -a /etc/shells
+fi
+
+if [[ "$SHELL" != "$zsh_path" ]]; then
+    chsh -s "$zsh_path"
+    echo "default shell changed to $zsh_path"
+fi
