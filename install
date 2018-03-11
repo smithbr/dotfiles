@@ -37,10 +37,14 @@ then
     echo -e "\\n\\nStarting Linux..."
     echo "========================================"
     chmod +x linux/apt.sh && ./linux/apt.sh
-    chmod +x linux/brew.sh && ./linux/brew.sh
 else
     echo "Can't detect OS."
 fi
+
+
+echo -e "\\n\\nStarting Homebrew..."
+echo "========================================"
+chmod +x homebrew/brew.sh && ./homebrew/brew.sh
 
 
 echo -e "\\n\\nInstalling python packages..."
