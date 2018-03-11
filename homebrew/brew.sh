@@ -14,12 +14,12 @@ fi
 
 if test ! "$( which brew )";
 then
-    echo -e "\\n\\nInstalling homebrew...\\n"
+    echo -e "\\n\\nInstalling $brewpath...\\n"
     /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/$brewplatform/install/master/install)"
 fi
 
 
-echo -e "\\n\\nUpdating homebrew...\\n"
+echo -e "\\n\\nUpdating $brewpath...\\n"
 brew update && brew upgrade
 export PATH=$brewbinpath:$PATH
 
@@ -50,6 +50,6 @@ for formula in "${formulas[@]}"; do
 done
 
 
-echo -e "\\n\\nCleaning up homebrew...\\n"
+echo -e "\\n\\nCleaning up $brewpath...\\n"
 brew prune
 brew cleanup
