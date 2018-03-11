@@ -26,18 +26,6 @@ git submodule update --init --force --recursive "${DOTBOT_DIR}"
 -c "${CONFIG}" "${@}"
 
 
-echo -e "\\n\\nInstalling python packages..."
-echo "========================================"
-
-if [[ "$( uname )" == "Linux" ]];
-then
-    sudo apt-get update
-    sudo apt-get install -y python python-pip
-fi
-pip_path="$( which pip )"
-$pip_path install --user -r pip/requirements.txt
-
-
 if [[ "$(uname -s)" == "Darwin" ]];
 then
     echo -e "\\n\\nStarting macOS..."
@@ -53,6 +41,13 @@ then
 else
     echo "Can't detect OS."
 fi
+
+
+echo -e "\\n\\nInstalling python packages..."
+echo "========================================"
+
+pip_path="$( which pip )"
+$pip_path install --user -r pip/requirements.txt
 
 
 echo -e "\\n\\nInstalling antigen.zsh..."
