@@ -1,3 +1,5 @@
+export PATH=/usr/local/bin:$PATH
+
 # Aliases
 source ~/.shell/aliases.sh
 
@@ -6,3 +8,10 @@ source ~/.shell/secrets.sh
 
 # External settings
 source ~/.shell/external.sh
+
+# OS-specific
+if [[ "$(uname)" == "Darwin" ]]; then
+    source ~/.shell/macOS.sh
+elif [[ "$(uname)" == "Linux" ]]; then
+    # None so far...
+fi
