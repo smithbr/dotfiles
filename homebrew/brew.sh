@@ -34,6 +34,7 @@ formulas=(
     cowsay
     fortune
     htop
+    lolcat
     nyancat
     screenfetch
     tldr
