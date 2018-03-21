@@ -62,7 +62,6 @@ then
     echo "default shell changed to $zsh_path"
 fi
 
-echo -e "\\n\\nDone."
-echo "========================================\\n\\n"
-
 screenfetch | lolcat
+
+echo -e "\\n\\nDone."
