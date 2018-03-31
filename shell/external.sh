@@ -8,9 +8,12 @@ then
     export PATH=$HOME/.local/bin:$PATH
 fi
 
+# Java
+export JAVA_HOME=/usr/local/opt/java
+
 # JMeter
 export JMETER_HOME=/usr/local/opt/jmeter
-export PATH=$JMETER_HOME/bin/jmeter:$PATH
+export PATH=$JMETER_HOME/bin:$PATH
 
 # Maven
 export M2_HOME=/usr/local/opt/maven
