@@ -8,6 +8,10 @@ then
     export PATH=$HOME/.local/bin:$PATH
 fi
 
+# Go
+export GOPATH=$HOME/.go
+export PATH=$PATH:/usr/local/opt/go/libexec/bin
+
 # Java
 export JAVA_HOME=/usr/local/opt/java
 
