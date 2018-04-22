@@ -36,6 +36,7 @@ formulas=(
     htop
     lolcat
     nyancat
+    python@2
     screenfetch
     tldr
     tree
