@@ -2,6 +2,9 @@
 alias lsa="ls -FGlAhp"
 alias h="history"
 
+# Reload shell
+alias reload="exec $SHELL -l"
+
 # Network
 alias ip_public="curl ipinfo.io/ip"
 alias ip_local="ipconfig getifaddr en0"
