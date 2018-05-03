@@ -1,5 +1,6 @@
 # Navigation
 alias lsa="ls -FGlAhp"
+alias h="history"
 
 # Network
 alias ip_public="curl ipinfo.io/ip"
