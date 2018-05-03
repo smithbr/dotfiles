@@ -11,6 +11,7 @@ fi
 # Go
 export GOPATH=$HOME/.go
 export PATH=$PATH:/usr/local/opt/go/libexec/bin
+PATH="$GOPATH/bin:$PATH"
 
 # Java
 export JAVA_HOME=/usr/local/opt/java
