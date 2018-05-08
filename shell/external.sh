@@ -26,6 +26,9 @@ export M2=$M2_HOME/bin
 export MAVEN_OPTS="-Xmx1048m -Xms256m -XX:MaxPermSize=312M"
 export PATH=$M2:$PATH
 
+# node
+export PATH=/usr/local/opt/node@6/bin:$PATH
+
 # Gatling
 export GATLING_HOME=/usr/local/opt/gatling
 export PATH=$GATLING_HOME/bin/gatling.sh:$PATH
