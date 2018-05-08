@@ -8,6 +8,7 @@ alias reload="exec $SHELL -l"
 # Network
 alias ip_public="curl ipinfo.io/ip"
 alias ip_local="ipconfig getifaddr en0"
+alias dns="cat /etc/resolv.conf"
 
 # Remove junk files
 alias cleanup="find ~ -type f \( -name 'jmeter.log' -o -name 'results.xml' -o -name '.zcompdump*' \) -ls -delete"
