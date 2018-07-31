@@ -31,15 +31,16 @@ brew tap caskroom/fonts
 echo -e "\\n\\nInstalling binaries...\\n"
 formulas=(
     zsh
-    cowsay
-    fortune
     htop
-    lolcat
-    nyancat
     python
-    screenfetch
     tldr
     tree
+    cowthink
+    fortune
+    asciiquarium
+    screenfetch
+    lolcat
+    nyancat
 )
 for formula in "${formulas[@]}"; do
     if brew list "$formula" > /dev/null 2>&1;
