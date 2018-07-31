@@ -42,4 +42,4 @@ fi
 
 antigen apply
 
-fortune | cowsay -f `ls -1 /usr/local/Cellar/cowsay/3.04/share/cows/ | sort -R | head -1` -n
+fortune | cowthink -f `ls -1 /usr/local/Cellar/cowsay/3.04/share/cows/ | sort -R | head -1` -n
