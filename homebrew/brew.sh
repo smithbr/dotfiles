@@ -35,6 +35,7 @@ formulas=(
     python
     tldr
     tree
+    neofetch
     cowthink
     fortune
     asciiquarium
