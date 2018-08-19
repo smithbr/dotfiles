@@ -42,4 +42,11 @@ fi
 
 antigen apply
 
-fortune | cowthink -f `ls -1 /usr/local/Cellar/cowsay/3.04/share/cows/ | sort -R | head -1` -n
+if [[ "$( uname )" == "Darwin" ]];
+then
+    fortune | cowthink -f `ls -1 /usr/local/Cellar/cowsay/3.04/share/cows/ | sort -R | head -1` -n
+elif [[ "$( uname )" == "Linux" ]];
+then
+    fortune | cowthink -f `ls -1 /home/linuxbrew/.linuxbrew/Cellar/cowsay/3.04/share/cows/ | sort -R | head -1` -n
+fi
+
