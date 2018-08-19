@@ -32,7 +32,6 @@ echo -e "\\n\\nInstalling binaries...\\n"
 formulas=(
     zsh
     htop
-    python
     tldr
     tree
     neofetch
