@@ -30,6 +30,9 @@ export PATH=$M2:$PATH
 # node
 export PATH="/usr/local/opt/node@8/bin:$PATH"
 
+# yarn
+export PATH="$PATH:/usr/local/Cellar/yarn/1.9.4/bin"
+
 # Gatling
 export GATLING_HOME=/usr/local/opt/gatling
 export PATH=$GATLING_HOME/bin/gatling.sh:$PATH
