@@ -40,6 +40,20 @@ export PATH=$GATLING_HOME/bin/gatling.sh:$PATH
 # InfluxDB
 export INFLUXDB_CONFIG_PATH=/usr/local/etc/influxdb.conf
 
+# Python
+# export PYTHONPATH=/custom/path:$PYTHONPATH
+
+# virtualenvwrapper
+export WORKON_HOME=~/.virtualenvs
+export PROJECT_HOME=$HOME/projects
+if [[ "$( uname )" == "Darwin" ]];
+then
+    source /usr/local/bin/virtualenvwrapper.sh
+elif [[ "$( uname )" == "Linux" ]];
+then
+    source $HOME/.local/bin/virtualenvwrapper.sh
+fi
+
 # pip
 # Cache pip-installed packages to avoid re-downloading
 mkdir -p $HOME/.pip/cache
