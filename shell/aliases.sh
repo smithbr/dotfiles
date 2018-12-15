@@ -20,3 +20,6 @@ alias urldecode='python -c "import sys, urllib as ul; print ul.unquote_plus(sys.
 
 # aws instances
 alias awsi="workon aws; aws ec2 describe-instances --query 'Reservations[].Instances[].[InstanceId, Tags[?Key==\"Name\"] | [0].Value, State.Name, PublicDnsName]' --output table"
+
+# start vnc server
+alias startvnc="sudo systemctl start x11vnc.service"
