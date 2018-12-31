@@ -33,5 +33,4 @@ alias awsi="workon aws; aws ec2 describe-instances --query 'Reservations[].Insta
 alias startvnc="sudo systemctl start x11vnc.service"
 
 # start portainer
-# portainer
 alias portainer="docker run -dit --restart unless-stopped -d -p 9000:9000 -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer"
