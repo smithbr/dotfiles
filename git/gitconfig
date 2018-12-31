@@ -10,7 +10,7 @@
     co = checkout
     cm = commit -m
     df = difftool
-    h = log --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit
+    l = log --graph --pretty=format:'%Cred%h%Creset %C(yellow)%an%d%Creset %s %Cgreen(%cr)%Creset' --date=relative
     pu = push -u
     st = status
 [filter "lfs"]
@@ -18,3 +18,9 @@
     clean = git-lfs clean -- %f
 	smudge = git-lfs smudge -- %f
 	process = git-lfs filter-process
+[diff]
+	tool = code
+[merge]
+	tool = code
+[difftool]
+	prompt = false
