@@ -6,9 +6,16 @@ alias h="history"
 alias reload="exec $SHELL -l"
 alias fish='asciiquarium'
 
+if [[ "$( uname )" == "Darwin" ]];
+then
+    alias ip_local="ipconfig getifaddr en0"
+elif [[ "$( uname )" == "Linux" ]];
+then
+    alias ip_local="hostname -I"
+fi
+
 # network
 alias ip_public="curl ipinfo.io/ip"
-alias ip_local="ipconfig getifaddr en0"
 alias dns="cat /etc/resolv.conf"
 
 # remove junk files
