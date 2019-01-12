@@ -31,6 +31,7 @@ brew tap caskroom/fonts
 echo -e "\\n\\nInstalling binaries...\\n"
 formulas=(
     zsh
+    pipenv
     htop
     tldr
     tree
