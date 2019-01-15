@@ -53,6 +53,5 @@ for formula in "${formulas[@]}"; do
 done
 
 echo -e "\\n\\nCleaning up $brewpath...\\n"
-brew prune
 brew cleanup
 brew doctor
