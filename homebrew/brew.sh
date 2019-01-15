@@ -33,6 +33,8 @@ formulas=(
     zsh
     pipenv
     htop
+    curl
+    wget
     tldr
     tree
     neofetch
