@@ -9,6 +9,9 @@ alias fish='asciiquarium'
 if [[ "$( uname )" == "Darwin" ]];
 then
     alias ip_local="ipconfig getifaddr en0"
+    alias flushdns="dscacheutil -flushcache"
+    # open firefox profile switcher
+    alias ff='/Applications/Firefox.app/Contents/MacOS/firefox -P --no-remote'
 elif [[ "$( uname )" == "Linux" ]];
 then
     alias ip_local="hostname -I"
