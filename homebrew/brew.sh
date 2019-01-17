@@ -35,6 +35,7 @@ formulas=(
     htop
     curl
     wget
+    bat
     tldr
     tree
     neofetch
