@@ -1,2 +1,2 @@
-artii "bsmith"
+artii "$(whoami)"
 fortune | cowsay | lolcat
