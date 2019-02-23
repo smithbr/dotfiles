@@ -21,3 +21,8 @@ sudo apt-get install -y ruby-full
 
 echo -e "\\n\\nInstalling zsh...\\n"
 sudo apt-get install -y zsh
+
+echo -e "\\n\\nInstalling cryptomator...\\n"
+sudo add-apt-repository ppa:sebastian-stenzel/cryptomator
+sudo apt-get update
+sudo apt-get install cryptomator
