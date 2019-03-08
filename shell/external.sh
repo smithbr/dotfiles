@@ -30,6 +30,10 @@ export PATH=$M2:$PATH
 # node
 export PATH="/usr/local/opt/node@8/bin:$PATH"
 
+# nvm
+export NVM_DIR=~/.nvm
+source $(brew --prefix nvm)/nvm.sh
+
 # gatling
 export GATLING_HOME=/usr/local/opt/gatling
 export PATH=$GATLING_HOME/bin/gatling.sh:$PATH
