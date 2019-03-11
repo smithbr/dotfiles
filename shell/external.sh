@@ -27,9 +27,6 @@ export M2=$M2_HOME/bin
 export MAVEN_OPTS="-Xmx1048m -Xms256m -XX:MaxPermSize=312M"
 export PATH=$M2:$PATH
 
-# node
-export PATH="/usr/local/opt/node@8/bin:$PATH"
-
 # nvm
 export NVM_DIR=~/.nvm
 source $(brew --prefix nvm)/nvm.sh
