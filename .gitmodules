@@ -10,3 +10,6 @@
 [submodule "zsh/antigen"]
     path = zsh/antigen
     url = https://github.com/zsh-users/antigen.git
+[submodule "firefox/profile/userjs"]
+	path = firefox/profile/userjs
+	url = https://github.com/pyllyukko/user.js
