@@ -20,6 +20,7 @@ fi
 # network
 alias ip_public="curl ipinfo.io/ip"
 alias dns="cat /etc/resolv.conf"
+alias ip_locale="curl https://freegeoip.app/xml/"
 
 # remove junk files
 alias cleanup="find ~ -type f \( -name 'jmeter.log' -o -name 'results.xml' -o -name '.zcompdump*' \) -ls -delete"
