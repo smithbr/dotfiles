@@ -20,10 +20,12 @@ fi
 # network
 alias ip_public="curl ipinfo.io/ip"
 alias dns="cat /etc/resolv.conf"
+alias ip_locale="curl https://freegeoip.app/xml/"
 
 # remove junk files
 alias cleanup="find ~ -type f \( -name 'jmeter.log' -o -name 'results.xml' -o -name '.zcompdump*' \) -ls -delete"
 alias cleanupds="find . -type f -name '*.DS_Store' -ls -delete"
+alias emptyfolders="du -a --max-depth=1 | sort -n"
 
 # encode/decode strings
 alias urlencode='python -c "import sys, urllib as ul; print ul.quote_plus(sys.argv[1])"'
