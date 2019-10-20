@@ -39,3 +39,6 @@ alias startvnc="sudo systemctl start x11vnc.service"
 
 # start portainer
 alias portainer="docker run -dit --restart unless-stopped -d -p 9000:9000 -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer"
+
+# reset usb iphone
+alias iphone="sudo killall -STOP -c usbd"
