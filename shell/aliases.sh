@@ -18,7 +18,7 @@ then
 fi
 
 # network
-alias ip_public="curl ipinfo.io/ip"
+alias ip_public="dig +short myip.opendns.com @resolver1.opendns.com"
 alias dns="cat /etc/resolv.conf"
 alias ip_locale="curl https://freegeoip.app/xml/"
 
