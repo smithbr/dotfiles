@@ -30,11 +30,7 @@ brew tap caskroom/fonts
 
 echo -e "\\n\\nInstalling binaries...\\n"
 formulas=(
-    zsh
-    pipenv
     htop
-    curl
-    wget
     bat
     tldr
     tree
@@ -45,7 +41,6 @@ formulas=(
     screenfetch
     lolcat
     nyancat
-    telegraf
 )
 for formula in "${formulas[@]}"; do
     if brew list "$formula" > /dev/null 2>&1;

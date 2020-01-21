@@ -43,13 +43,6 @@ echo -e "\\n\\nStarting Homebrew..."
 echo "========================================"
 chmod +x homebrew/brew.sh && ./homebrew/brew.sh
 
-echo -e "\\n\\nInstalling python packages..."
-echo "========================================"
-pip_path="$( which pip )"
-$pip_path install --user -r pip/requirements.txt
-pip3_path="$( which pip3 )"
-$pip3_path install --user -r pip/requirements.txt
-
 echo -e "\\n\\nChanging default shell to zsh..."
 echo "========================================"
 zsh_path="$( which zsh )"
