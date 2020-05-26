@@ -24,10 +24,6 @@ export PATH=$brewbinpath:$PATH
 echo -e "\\n\\nUpdating $brewpath...\\n"
 brew update && brew upgrade
 
-echo -e "\\n\\nAdding taps...\\n"
-brew tap caskroom/cask
-brew tap caskroom/fonts
-
 echo -e "\\n\\nInstalling binaries...\\n"
 formulas=(
     htop
