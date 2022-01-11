@@ -12,7 +12,7 @@ then
     # None so far...
 fi
 
-antigen use oh-my-zsh
+antigen use ohmyzsh/ohmyzsh
 antigen bundle colored-man-pages
 antigen bundle colorize
 antigen bundle command-not-found
