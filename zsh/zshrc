@@ -12,24 +12,4 @@ then
     # None so far...
 fi
 
-antigen use oh-my-zsh
-antigen bundle git
-antigen bundle colored-man-pages
-antigen bundle colorize
-antigen bundle command-not-found
-antigen bundle docker
-antigen bundle zsh-users/zsh-completions
-antigen bundle zsh-users/zsh-autosuggestions
-antigen bundle zsh-users/zsh-syntax-highlighting
-if [[ "$( uname )" == "Darwin" ]];
-then
-    antigen bundle macos
-    antigen theme denysdovhan/spaceship-prompt
-    antigen apply
-    source ~/.shell/spaceship.zsh
-elif [[ "$( uname )" == "Linux" ]];
-then
-    antigen bundle ubuntu
-    antigen theme awesomepanda
-    antigen apply
-fi
+source ~/.antigenrc
