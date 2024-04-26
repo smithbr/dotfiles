@@ -36,7 +36,6 @@ formulas=(
     asciiquarium
     screenfetch
     lolcat
-    nyancat
 )
 for formula in "${formulas[@]}"; do
     if brew list "$formula" > /dev/null 2>&1;
