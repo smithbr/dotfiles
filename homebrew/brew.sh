@@ -30,13 +30,8 @@ formulas=(
     bat
     tldr
     tree
-    cowthink
-    fortune
     asciiquarium
     screenfetch
-    lolcat
-    ruby
-    python
 )
 for formula in "${formulas[@]}"; do
     if brew list "$formula" > /dev/null 2>&1;
