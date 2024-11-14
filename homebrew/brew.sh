@@ -15,7 +15,7 @@ fi
 if test ! "$( which brew )";
 then
     echo -e "\\n\\nInstalling $brewpath...\\n"
-    /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/$brewplatform/install/master/install)"
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/$brewplatform/install/HEAD/install.sh)"
 fi
 
 echo -e "\\n\\nAdding $brewpath to PATH...\\n"
@@ -31,7 +31,7 @@ formulas=(
     tldr
     tree
     asciiquarium
-    screenfetch
+    neofetch
 )
 for formula in "${formulas[@]}"; do
     if brew list "$formula" > /dev/null 2>&1;
