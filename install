@@ -57,6 +57,6 @@ then
     echo "default shell changed to $zsh_path"
 fi
 
-screenfetch | lolcat
+neofetch
 
 echo -e "\\n\\nDone."
