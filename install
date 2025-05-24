@@ -57,6 +57,4 @@ then
     echo "default shell changed to $zsh_path"
 fi
 
-neofetch
-
 echo -e "\\n\\nDone."
