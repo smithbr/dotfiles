@@ -12,4 +12,5 @@ then
     # None so far...
 fi
 
+source ~/.omzshrc
 source ~/.antigenrc
