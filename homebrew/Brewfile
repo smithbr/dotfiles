@@ -8,7 +8,6 @@ brew "wget"
 brew "git"
 brew "node"
 brew "nvm"
-cask "ghostty"
 
 # ============================================
 # Shell Enhancements
@@ -21,3 +20,10 @@ brew "nerdfetch"
 brew "onefetch"
 brew "antidote"
 brew "starship"
+
+# ============================================
+# Productivity Tools
+# ============================================
+cask "ghostty"
+cask "claude-code"
+cask "cursor"
