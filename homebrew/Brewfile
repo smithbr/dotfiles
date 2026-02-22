@@ -25,5 +25,6 @@ brew "starship"
 # Productivity Tools
 # ============================================
 cask "ghostty"
+cask "visual-studio-code"
 cask "claude-code"
 cask "cursor"
