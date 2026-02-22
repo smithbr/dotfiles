@@ -17,4 +17,4 @@
     ~/.shell:
     ~/.zsh:
     ~/.zshrc: zsh/zshrc
-    ~/.antigenrc: zsh/antigenrc
+    ~/.zsh_plugins.txt: zsh/zsh_plugins.txt
