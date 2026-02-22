@@ -6,6 +6,7 @@
 # ============================================
 brew 'wget'
 brew 'git'
+brew 'yadm'
 brew 'node'
 brew 'nvm'
 cask 'ghostty'

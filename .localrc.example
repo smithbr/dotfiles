@@ -1,0 +1,4 @@
+# .localrc - Put settings/aliases here that you don't want committed to the repository
+#
+# To use, you first need to rename this file:
+#   cp ~/.localrc.example ~/.localrc
