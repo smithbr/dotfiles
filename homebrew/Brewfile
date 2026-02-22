@@ -4,20 +4,20 @@
 # ============================================
 # Core Tools
 # ============================================
-brew 'wget'
-brew 'git'
-brew 'node'
-brew 'nvm'
-cask 'ghostty'
+brew "wget"
+brew "git"
+brew "node"
+brew "nvm"
+cask "ghostty"
 
 # ============================================
 # Shell Enhancements
 # ============================================
-brew 'htop'
-brew 'bat'
-brew 'tree'
-brew 'asciiquarium'
-brew 'nerdfetch'
-brew 'onefetch'
-brew 'antidote'
-brew 'starship'
+brew "htop"
+brew "bat"
+brew "tree"
+brew "asciiquarium"
+brew "nerdfetch"
+brew "onefetch"
+brew "antidote"
+brew "starship"
