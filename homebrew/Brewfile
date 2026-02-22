@@ -1,7 +1,23 @@
-brew "htop"
-brew "bat"
-brew "tree"
-brew "asciiquarium"
-brew "nerdfetch"
-brew "onefetch"
-brew "antidote"
+# Install all dependencies with: brew bundle
+# Usage: brew bundle [--file=Brewfile]
+
+# ============================================
+# Core Tools
+# ============================================
+brew 'wget'
+brew 'git'
+brew 'node'
+brew 'nvm'
+cask 'ghostty'
+
+# ============================================
+# Shell Enhancements
+# ============================================
+brew 'htop'
+brew 'bat'
+brew 'tree'
+brew 'asciiquarium'
+brew 'nerdfetch'
+brew 'onefetch'
+brew 'antidote'
+brew 'starship'
