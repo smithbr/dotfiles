@@ -26,5 +26,16 @@ brew "starship"
 # ============================================
 cask "ghostty"
 cask "visual-studio-code"
+cask "1password"
+cask "tailscale-app"
+cash "protonvpn"
+
+# ============================================
+# AI Tools
+# ============================================
+# cask "cursor"
+cask "chatgpt"
+cask "codex"
+cask "codex-app"
+cask "claude"
 cask "claude-code"
-cask "cursor"
