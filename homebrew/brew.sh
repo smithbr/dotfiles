@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -euo pipefail
+
 if [[ "$(uname -s)" == "Darwin" ]];
 then
     brewplatform=Homebrew
@@ -18,18 +20,16 @@ then
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/$brewplatform/install/HEAD/install.sh)"
 fi
 
-echo -e "\\n\\nAdding $brewpath to PATH...\\n"
 export PATH=$brewbinpath:$PATH
-
-echo -e "\\n\\nUpdating $brewpath...\\n"
 brew update && brew upgrade
 
-echo -e "\\n\\nInstalling binaries...\\n"
 formulas=(
     htop
     bat
     tree
     asciiquarium
+    nerdfetch
+    onefetch
 )
 for formula in "${formulas[@]}"; do
     if brew list "$formula" > /dev/null 2>&1;
@@ -40,6 +40,5 @@ for formula in "${formulas[@]}"; do
     fi
 done
 
-echo -e "\\n\\nCleaning up $brewpath...\\n"
 brew cleanup
 brew doctor
