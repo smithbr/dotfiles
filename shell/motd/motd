@@ -1,2 +1,0 @@
-artii "$(whoami)"
-fortune | cowsay | lolcat

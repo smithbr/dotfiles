@@ -2,34 +2,33 @@
 
 set -euo pipefail
 
-if [[ "$(uname -s)" == "Darwin" ]];
-then
+if [[ "$(uname -s)" == "Darwin" ]]; then
     brewplatform=Homebrew
     brewpath=homebrew
-    if [[ "$(uname -m)" == "arm64" ]];
-    then
+    if [[ "$(uname -m)" == "arm64" ]]; then
         brewbinpath=/opt/homebrew/bin
     else
         brewbinpath=/usr/local/bin
     fi
-elif [[ "$( uname )" == "Linux" ]];
-then
+elif [[ "$(uname -s)" == "Linux" ]]; then
     brewplatform=Linuxbrew
     brewpath=linuxbrew
     brewbinpath=/home/linuxbrew/.linuxbrew/bin
+else
+    echo "Unsupported OS: $(uname -s)" >&2
+    exit 1
 fi
 
-if ! command -v brew >/dev/null 2>&1;
-then
-    echo -e "\\n\\nInstalling $brewpath...\\n"
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/$brewplatform/install/HEAD/install.sh)"
+if ! command -v brew >/dev/null 2>&1; then
+    printf "\n\nInstalling %s...\n\n" "${brewpath}"
+    /bin/bash -c "$(curl -fsSL "https://raw.githubusercontent.com/${brewplatform}/install/HEAD/install.sh")"
 fi
 
-export PATH=$brewbinpath:$PATH
+export PATH="${brewbinpath}:${PATH}"
 brew update && brew upgrade
 
 BREWFILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/Brewfile"
-brew bundle install --file="$BREWFILE"
+brew bundle install --file="${BREWFILE}"
 
 brew cleanup
 brew doctor

@@ -2,44 +2,47 @@
 
 set -euo pipefail
 
-if [ -z "$HOME" ];
-then
-    echo "Seems you're \$HOMEless :(";
-    exit 1;
+if [[ -z "${HOME:-}" ]]; then
+    echo "Seems you're \$HOMEless :("
+    exit 1
 fi
 
-git submodule update --init --force --recursive --remote
-
-CONFIG=".install.conf.yaml"
-DOTBOT_DIR="dotbot/dotbot"
-DOTBOT_BIN="bin/dotbot"
 BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CHEZMOI_SOURCE="${BASEDIR}/chezmoi"
 
 cd "${BASEDIR}"
 
-"${BASEDIR}/${DOTBOT_DIR}/${DOTBOT_BIN}" -d "${BASEDIR}" \
--c "${CONFIG}" ${@+"$@"}
+if ! command -v chezmoi >/dev/null 2>&1; then
+    if command -v brew >/dev/null 2>&1; then
+        brew install chezmoi
+    else
+        bin_dir="${HOME}/.local/bin"
+        mkdir -p "${bin_dir}"
+        sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "${bin_dir}"
+        export PATH="${bin_dir}:${PATH}"
+    fi
+fi
+
+chezmoi --source "${CHEZMOI_SOURCE}" apply "$@"
+
+ln -sfn "${BASEDIR}" "${HOME}/.dotfiles"
 
 chmod +x homebrew/brew.sh && ./homebrew/brew.sh
 
-if [[ "$(uname -s)" == "Darwin" ]];
-then
+if [[ "$(uname -s)" == "Darwin" ]]; then
     chmod +x macos/install.sh && ./macos/install.sh
-elif [[ "$( uname )" == "Linux" ]];
-then
+elif [[ "$(uname -s)" == "Linux" ]]; then
     chmod +x linux/install.sh && ./linux/install.sh
 fi
 
 zsh_path="$(command -v zsh)"
-if ! grep -qxF "$zsh_path" /etc/shells;
-then
+if ! grep -qxF "${zsh_path}" /etc/shells; then
     echo "adding $zsh_path to /etc/shells"
     echo "$zsh_path" | sudo tee -a /etc/shells
 fi
-if [[ "$SHELL" != "$zsh_path" ]];
-then
+if [[ "${SHELL}" != "${zsh_path}" ]]; then
     chsh -s "$zsh_path"
     echo "default shell changed to $zsh_path"
 fi
 
-echo -e "\\nDone."
+printf "\nDone.\n"
