@@ -8,14 +8,6 @@ then
     exit 1;
 fi
 
-if command -v stow >/dev/null ; then
-    # noop
-    echo >/dev/null
-else
-    echo "please install stow, probably with brew"
-    exit 1
-fi
-
 git submodule update --init --force --recursive --remote
 
 CONFIG=".install.conf.yaml"
@@ -26,8 +18,6 @@ BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${BASEDIR}"
 
 "${BASEDIR}/${DOTBOT_DIR}/${DOTBOT_BIN}" -d "${BASEDIR}" \
---plugin-dir dotbot/plugins/dotbot-pip \
---plugin-dir dotbot/plugins/dotbot-brew \
 -c "${CONFIG}" ${@+"$@"}
 
 chmod +x homebrew/brew.sh && ./homebrew/brew.sh
@@ -40,8 +30,8 @@ then
     chmod +x linux/install.sh && ./linux/install.sh
 fi
 
-zsh_path="$( which zsh )"
-if ! grep "$zsh_path" /etc/shells;
+zsh_path="$(command -v zsh)"
+if ! grep -qxF "$zsh_path" /etc/shells;
 then
     echo "adding $zsh_path to /etc/shells"
     echo "$zsh_path" | sudo tee -a /etc/shells

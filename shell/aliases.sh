@@ -24,8 +24,8 @@ alias cleanupds="find . -type f -name '*.DS_Store' -ls -delete"
 alias emptyfolders="du -a --max-depth=1 | sort -n"
 
 # encode/decode strings
-alias urlencode='python -c "import sys, urllib as ul; print ul.quote_plus(sys.argv[1])"'
-alias urldecode='python -c "import sys, urllib as ul; print ul.unquote_plus(sys.argv[1])"'
+alias urlencode='python3 -c "import sys, urllib.parse; print(urllib.parse.quote_plus(sys.argv[1]))"'
+alias urldecode='python3 -c "import sys, urllib.parse; print(urllib.parse.unquote_plus(sys.argv[1]))"'
 
 # fix macOS time
 alias time="sudo sntp -sS time.apple.com"
