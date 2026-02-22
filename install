@@ -1,22 +1,25 @@
 #!/usr/bin/env bash
 
+set -euo pipefail
+
 if [ -z "$HOME" ];
 then
     echo "Seems you're \$HOMEless :(";
     exit 1;
 fi
 
-echo -e "\\nUpdating submodules..."
-echo "========================================"
-git submodule update --init --force --recursive --remote
+if command -v stow >/dev/null ; then
+    # noop
+    echo >/dev/null
+else
+    echo "please install stow, probably with brew"
+    exit 1
+fi
 
-echo -e "\\nLinking dotfiles..."
-echo "========================================"
-set -e
+git submodule update --init --force --recursive --remote
 
 CONFIG=".install.conf.yaml"
 DOTBOT_DIR="dotbot/dotbot"
-
 DOTBOT_BIN="bin/dotbot"
 BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -25,26 +28,18 @@ cd "${BASEDIR}"
 "${BASEDIR}/${DOTBOT_DIR}/${DOTBOT_BIN}" -d "${BASEDIR}" \
 --plugin-dir dotbot/plugins/dotbot-pip \
 --plugin-dir dotbot/plugins/dotbot-brew \
--c "${CONFIG}" "${@}"
+-c "${CONFIG}" ${@+"$@"}
+
+chmod +x homebrew/brew.sh && ./homebrew/brew.sh
 
 if [[ "$(uname -s)" == "Darwin" ]];
 then
-    echo -e "\\nStarting macOS..."
-    echo "========================================"
-    echo "No macOS install scripts in the macOS/ folder."
+    chmod +x macos/install.sh && ./macos/install.sh
 elif [[ "$( uname )" == "Linux" ]];
 then
-    echo -e "\\nStarting Linux..."
-    echo "========================================"
-    chmod +x linux/apt.sh && ./linux/apt.sh
+    chmod +x linux/install.sh && ./linux/install.sh
 fi
 
-echo -e "\\nStarting Homebrew..."
-echo "========================================"
-chmod +x homebrew/brew.sh && ./homebrew/brew.sh
-
-echo -e "\\nChanging default shell to zsh..."
-echo "========================================"
 zsh_path="$( which zsh )"
 if ! grep "$zsh_path" /etc/shells;
 then
