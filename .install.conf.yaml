@@ -10,6 +10,7 @@
     ~/.bash:
     ~/.bash_profile: bash/bash_profile
     ~/.bashrc: bash/bashrc
+    ~/.config/ghostty/config: ghostty/config
     ~/.dotfiles: ''
     ~/.gitconfig: git/gitconfig
     ~/.gitignore_global: git/gitignore_global
