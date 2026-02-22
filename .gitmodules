@@ -1,12 +1,6 @@
 [submodule ".dotbot"]
 	path = dotbot/dotbot
     url = https://github.com/anishathalye/dotbot
-[submodule "dotbot/plugins/dotbot-brew"]
-    path = dotbot/plugins/dotbot-brew
-    url = https://github.com/d12frosted/dotbot-brew.git
-[submodule "dotbot/plugins/dotbot-pip"]
-    path = dotbot/plugins/dotbot-pip
-    url = https://github.com/sobolevn/dotbot-pip.git
 [submodule "zsh/antigen"]
     path = zsh/antigen
     url = https://github.com/zsh-users/antigen.git
