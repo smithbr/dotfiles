@@ -18,8 +18,3 @@
     ~/.zsh:
     ~/.zshrc: zsh/zshrc
     ~/.antigenrc: zsh/antigenrc
-
-- shell:
-  -
-    command: git submodule update --force --recursive # after linking ~/.gitconfig
-    stdout: true

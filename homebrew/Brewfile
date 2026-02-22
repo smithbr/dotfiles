@@ -1,0 +1,6 @@
+brew "htop"
+brew "bat"
+brew "tree"
+brew "asciiquarium"
+brew "nerdfetch"
+brew "onefetch"
