@@ -28,7 +28,7 @@ cask "ghostty"
 cask "visual-studio-code"
 cask "1password"
 cask "tailscale-app"
-cash "protonvpn"
+cask "protonvpn"
 
 # ============================================
 # AI Tools
