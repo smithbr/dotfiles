@@ -2,48 +2,44 @@
 
 set -euo pipefail
 
-basedir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-bootstrap="$basedir/.yadm/bootstrap"
-brew_script="$basedir/homebrew/brew.sh"
-
-if [[ ! -f "$bootstrap" ]];
+if [ -z "$HOME" ];
 then
-    echo "missing bootstrap script: $bootstrap" >&2
-    exit 1
+    echo "Seems you're \$HOMEless :(";
+    exit 1;
 fi
 
-if ! command -v yadm >/dev/null 2>&1;
+git submodule update --init --force --recursive --remote
+
+CONFIG=".install.conf.yaml"
+DOTBOT_DIR="dotbot/dotbot"
+DOTBOT_BIN="bin/dotbot"
+BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+cd "${BASEDIR}"
+
+"${BASEDIR}/${DOTBOT_DIR}/${DOTBOT_BIN}" -d "${BASEDIR}" \
+-c "${CONFIG}" ${@+"$@"}
+
+chmod +x homebrew/brew.sh && ./homebrew/brew.sh
+
+if [[ "$(uname -s)" == "Darwin" ]];
 then
-    [[ -x "$brew_script" ]] || chmod +x "$brew_script"
-    "$brew_script"
+    chmod +x macos/install.sh && ./macos/install.sh
+elif [[ "$( uname )" == "Linux" ]];
+then
+    chmod +x linux/install.sh && ./linux/install.sh
 fi
 
-if ! command -v yadm >/dev/null 2>&1;
+zsh_path="$(command -v zsh)"
+if ! grep -qxF "$zsh_path" /etc/shells;
 then
-    echo "yadm is not installed; ensure homebrew/Brewfile includes yadm" >&2
-    exit 1
+    echo "adding $zsh_path to /etc/shells"
+    echo "$zsh_path" | sudo tee -a /etc/shells
+fi
+if [[ "$SHELL" != "$zsh_path" ]];
+then
+    chsh -s "$zsh_path"
+    echo "default shell changed to $zsh_path"
 fi
 
-if ! yadm rev-parse --git-dir >/dev/null 2>&1;
-then
-    yadm clone --no-bootstrap "$basedir"
-fi
-
-if [[ -d "$basedir/.git" ]];
-then
-    if ! git -C "$basedir" diff --quiet || ! git -C "$basedir" diff --cached --quiet || [[ -n "$(git -C "$basedir" ls-files --others --exclude-standard)" ]];
-    then
-        echo "source repo has uncommitted changes; yadm can only checkout committed files." >&2
-        echo "commit or stash changes in $basedir, then rerun ./install." >&2
-        exit 1
-    fi
-fi
-
-if ! yadm checkout;
-then
-    echo "yadm checkout reported conflicts in \$HOME; resolve conflicts and rerun." >&2
-    exit 1
-fi
-
-[[ -x "$bootstrap" ]] || chmod +x "$bootstrap"
-exec "$bootstrap" ${@+"$@"}
+echo -e "\\nDone."
