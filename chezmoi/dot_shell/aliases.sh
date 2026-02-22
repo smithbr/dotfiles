@@ -9,12 +9,10 @@ alias fish='asciiquarium'
 # network
 alias ip_public="dig +short myip.opendns.com @resolver1.opendns.com"
 alias dns="cat /etc/resolv.conf"
-if [[ "$( uname )" == "Darwin" ]];
-then
+if [[ "$(uname -s)" == "Darwin" ]]; then
     alias ip_local="ipconfig getifaddr en0"
     alias flushdns="dscacheutil -flushcache"
-elif [[ "$( uname )" == "Linux" ]];
-then
+elif [[ "$(uname -s)" == "Linux" ]]; then
     alias ip_local="hostname -I"
     alias flushdns="sudo systemd-resolve --flush-caches"
 fi
