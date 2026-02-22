@@ -28,4 +28,4 @@ else
     echo "brew is not available; cannot load antidote" >&2
 fi
 
-source ~/.shell/spaceship.zsh
+eval "$(starship init zsh)"
