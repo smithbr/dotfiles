@@ -66,6 +66,9 @@ window-theme = system
 window-height = 55
 window-width = 200
 
+working-directory = home
+window-inherit-working-directory = false
+
 # macos-titlebar-style = tabs
 # unfocused-split-opacity = 0.6
 
