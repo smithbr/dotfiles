@@ -5,6 +5,7 @@ alias h="history"
 # shell
 alias reload="exec $SHELL -l"
 alias fish="asciiquarium"
+alias cz="chezmoi"
 
 # network
 alias ip_public="dig +short myip.opendns.com @resolver1.opendns.com"

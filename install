@@ -9,6 +9,9 @@ fi
 
 BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHEZMOI_SOURCE="${BASEDIR}/chezmoi"
+CHEZMOI_DEFAULT_SOURCE="${HOME}/.dotfiles/chezmoi"
+CHEZMOI_CONFIG_DIR="${HOME}/.config/chezmoi"
+CHEZMOI_CONFIG_FILE="${CHEZMOI_CONFIG_DIR}/chezmoi.toml"
 
 cd "${BASEDIR}"
 
@@ -23,9 +26,31 @@ if ! command -v chezmoi >/dev/null 2>&1; then
     fi
 fi
 
+ln -sfn "${BASEDIR}" "${HOME}/.dotfiles"
+
 chezmoi --source "${CHEZMOI_SOURCE}" apply "$@"
 
-ln -sfn "${BASEDIR}" "${HOME}/.dotfiles"
+# Ensure plain `chezmoi` commands use this repo on new machines.
+current_source="$(chezmoi source-path 2>/dev/null || true)"
+if [[ "${current_source}" != "${CHEZMOI_DEFAULT_SOURCE}" ]]; then
+    mkdir -p "${CHEZMOI_CONFIG_DIR}"
+    if [[ -f "${CHEZMOI_CONFIG_FILE}" ]]; then
+        if grep -qE '^[[:space:]]*sourceDir[[:space:]]*=' "${CHEZMOI_CONFIG_FILE}"; then
+            tmp_config="$(mktemp)"
+            sed -E "s|^[[:space:]]*sourceDir[[:space:]]*=.*$|sourceDir = \"${CHEZMOI_DEFAULT_SOURCE}\"|" \
+                "${CHEZMOI_CONFIG_FILE}" > "${tmp_config}"
+            mv "${tmp_config}" "${CHEZMOI_CONFIG_FILE}"
+        else
+            printf "\nsourceDir = \"%s\"\n" "${CHEZMOI_DEFAULT_SOURCE}" >> "${CHEZMOI_CONFIG_FILE}"
+        fi
+    else
+        printf "sourceDir = \"%s\"\n" "${CHEZMOI_DEFAULT_SOURCE}" > "${CHEZMOI_CONFIG_FILE}"
+    fi
+fi
+
+if [[ "$(chezmoi source-path 2>/dev/null || true)" != "${CHEZMOI_DEFAULT_SOURCE}" ]]; then
+    echo "warning: chezmoi sourceDir is not set to ${CHEZMOI_DEFAULT_SOURCE}" >&2
+fi
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
     chmod +x macos/install.sh && ./macos/install.sh
@@ -35,14 +60,16 @@ fi
 
 chmod +x homebrew/brew.sh && ./homebrew/brew.sh
 
-zsh_path="$(command -v zsh)"
-if ! grep -qxF "${zsh_path}" /etc/shells; then
-    echo "adding $zsh_path to /etc/shells"
-    echo "$zsh_path" | sudo tee -a /etc/shells
-fi
-if [[ "${SHELL}" != "${zsh_path}" ]]; then
-    chsh -s "$zsh_path"
-    echo "default shell changed to $zsh_path"
+zsh_path="$(command -v zsh || true)"
+if [[ -n "${zsh_path}" ]]; then
+    if ! grep -qxF "${zsh_path}" /etc/shells; then
+        echo "adding $zsh_path to /etc/shells"
+        echo "$zsh_path" | sudo tee -a /etc/shells
+    fi
+    if [[ "${SHELL}" != "${zsh_path}" ]]; then
+        chsh -s "$zsh_path"
+        echo "default shell changed to $zsh_path"
+    fi
 fi
 
 printf "\nDone.\n"
