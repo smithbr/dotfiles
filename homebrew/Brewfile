@@ -8,6 +8,7 @@ brew "wget"
 brew "git"
 brew "node"
 brew "nvm"
+brew "pnpm"
 
 # ============================================
 # Shell Enhancements
