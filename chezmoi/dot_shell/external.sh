@@ -12,5 +12,3 @@ elif [[ "$(uname -s)" == "Linux" ]]; then
     export PATH=/home/linuxbrew/.linuxbrew/sbin:$PATH
     export PATH=$HOME/.local/bin:$PATH
 fi
-
-export PATH="$PATH:/usr/local/bin/code"
