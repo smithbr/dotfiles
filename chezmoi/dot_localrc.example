@@ -1,0 +1,5 @@
+# .localrc
+#
+# Put extra aliases/secrets here that you do not want committed to the repository.
+# Make a copy:
+#     cp ~/localrc.example ~/.localrc
