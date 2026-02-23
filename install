@@ -72,4 +72,6 @@ if [[ -n "${zsh_path}" ]]; then
     fi
 fi
 
+source "${HOME}/.zshrc"
+
 printf "\nDone.\n"
