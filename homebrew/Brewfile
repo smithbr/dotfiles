@@ -11,7 +11,7 @@ brew "nethogs"
 brew "node"
 brew "nvm"
 brew "pnpm"
-brew "tailscale"
+# brew "tailscale"
 brew "wget"
 brew "zsh"
 
@@ -48,7 +48,7 @@ end
 # AI Tools
 # ============================================
 if OS.mac?
-    cask "cursor"
+    # cask "cursor"
     # cask "chatgpt"
     # cask "codex-app"
     # cask "claude"
