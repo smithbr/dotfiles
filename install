@@ -70,8 +70,7 @@ if [[ -n "${zsh_path}" ]]; then
         chsh -s "$zsh_path"
         echo "default shell changed to $zsh_path"
     fi
+    echo 'run "exec zsh -l" (or open a new terminal) to load latest shell config'
 fi
-
-source "${HOME}/.zshrc"
 
 printf "\nDone.\n"
