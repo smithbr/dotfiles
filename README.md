@@ -4,10 +4,8 @@
 ## Quick start
 
 ```bash
-$ git clone https://github.com/smithbr/dotfiles.git dotfiles
-$ cd dotfiles/
+$ git clone https://github.com/smithbr/dotfiles.git dotfiles && cd dotfiles
 $ ./install
-$ zsh # or bash
 ```
 
 `install` now bootstraps `chezmoi` and applies files from `./chezmoi`.
