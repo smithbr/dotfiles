@@ -1,17 +1,3 @@
-if command -v brew >/dev/null 2>&1; then
-    export PATH="$(brew --prefix)/bin:$(brew --prefix)/sbin:$PATH"
-fi
-
-# Aliases
-source "${HOME}/.shell/aliases.sh"
-
-# Secrets file
-source "${HOME}/.shell/secrets.sh"
-
-# External settings
-source "${HOME}/.shell/external.sh"
-
-# OS-specific
-if [[ "$(uname -s)" == "Darwin" ]]; then
-    source "${HOME}/.shell/macOS.sh"
+if [[ $- == *i* ]] && command -v zsh >/dev/null 2>&1; then
+    exec zsh -l
 fi
