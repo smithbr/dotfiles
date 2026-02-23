@@ -25,6 +25,7 @@ brew "starship"
 # Productivity Tools
 # ============================================
 cask "ghostty"
+#cask "github"
 #cask "visual-studio-code"
 #cask "1password"
 #cask "tailscale-app"
