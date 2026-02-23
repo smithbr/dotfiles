@@ -8,7 +8,11 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         export PATH=/usr/local/sbin:$PATH
     fi
 elif [[ "$(uname -s)" == "Linux" ]]; then
-    export PATH=/home/linuxbrew/.linuxbrew/bin:$PATH
-    export PATH=/home/linuxbrew/.linuxbrew/sbin:$PATH
+    if [[ -d "/home/linuxbrew/.linuxbrew/bin" ]]; then
+        export PATH=/home/linuxbrew/.linuxbrew/bin:$PATH
+    fi
+    if [[ -d "/home/linuxbrew/.linuxbrew/sbin" ]]; then
+        export PATH=/home/linuxbrew/.linuxbrew/sbin:$PATH
+    fi
     export PATH=$HOME/.local/bin:$PATH
 fi
