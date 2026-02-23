@@ -4,23 +4,28 @@
 # ============================================
 # Core Tools
 # ============================================
-brew "wget"
 brew "git"
+brew "glances"
+brew "htop"
+brew "mactop"
+brew "nethogs"
 brew "node"
 brew "nvm"
 brew "pnpm"
+brew "wget"
+brew "zsh"
 
 # ============================================
 # Shell Enhancements
 # ============================================
-brew "htop"
-brew "bat"
-brew "tree"
+brew "antidote"
 brew "asciiquarium"
+brew "bat"
+brew "htop"
 brew "nerdfetch"
 brew "onefetch"
-brew "antidote"
 brew "starship"
+brew "tree"
 
 # ============================================
 # Productivity Tools
