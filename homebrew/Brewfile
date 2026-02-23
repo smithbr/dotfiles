@@ -26,19 +26,19 @@ brew "starship"
 # Productivity Tools
 # ============================================
 cask "ghostty"
-#cask "github"
-#cask "visual-studio-code"
-#cask "1password"
-#cask "tailscale-app"
-#cask "protonvpn"
-#cask "utm"
+# cask "github"
+# cask "visual-studio-code"
+# cask "1password"
+# cask "tailscale-app"
+# cask "protonvpn"
+# cask "utm"
 
 # ============================================
 # AI Tools
 # ============================================
-#cask "cursor"
-#cask "chatgpt"
-#cask "codex"
-#cask "codex-app"
-#cask "claude"
-#cask "claude-code"
+# cask "cursor"
+# cask "chatgpt"
+# cask "codex"
+# cask "codex-app"
+# cask "claude"
+# cask "claude-code"
