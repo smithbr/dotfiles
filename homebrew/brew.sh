@@ -19,12 +19,13 @@ else
     exit 1
 fi
 
-if ! command -v brew >/dev/null 2>&1; then
+export PATH="${brewbinpath}:${PATH}"
+
+if [[ ! -x "${brewbinpath}/brew" ]] && ! command -v brew >/dev/null 2>&1; then
     printf "\n\nInstalling %s...\n\n" "${brewpath}"
     /bin/bash -c "$(curl -fsSL "https://raw.githubusercontent.com/${brewplatform}/install/HEAD/install.sh")"
 fi
 
-export PATH="${brewbinpath}:${PATH}"
 brew update && brew upgrade
 
 BREWFILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/Brewfile"
