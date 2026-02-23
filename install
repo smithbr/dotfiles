@@ -27,13 +27,13 @@ chezmoi --source "${CHEZMOI_SOURCE}" apply "$@"
 
 ln -sfn "${BASEDIR}" "${HOME}/.dotfiles"
 
-chmod +x homebrew/brew.sh && ./homebrew/brew.sh
-
 if [[ "$(uname -s)" == "Darwin" ]]; then
     chmod +x macos/install.sh && ./macos/install.sh
 elif [[ "$(uname -s)" == "Linux" ]]; then
     chmod +x linux/install.sh && ./linux/install.sh
 fi
+
+chmod +x homebrew/brew.sh && ./homebrew/brew.sh
 
 zsh_path="$(command -v zsh)"
 if ! grep -qxF "${zsh_path}" /etc/shells; then
