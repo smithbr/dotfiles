@@ -16,6 +16,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
 elif [[ "$(uname -s)" == "Linux" ]]; then
     alias ip_local="hostname -I"
     alias flushdns="sudo systemd-resolve --flush-caches"
+    alias nethogs="sudo /home/linuxbrew/.linuxbrew/sbin/nethogs"
 fi
 
 # remove junk files
