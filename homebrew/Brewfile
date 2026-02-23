@@ -7,13 +7,17 @@
 brew "git"
 brew "glances"
 brew "htop"
-brew "mactop"
 brew "nethogs"
 brew "node"
 brew "nvm"
 brew "pnpm"
+brew "tailscale"
 brew "wget"
 brew "zsh"
+
+if OS.mac?
+    # brew "mactop"
+end
 
 # ============================================
 # Shell Enhancements
@@ -30,20 +34,25 @@ brew "tree"
 # ============================================
 # Productivity Tools
 # ============================================
-cask "ghostty"
-# cask "github"
-# cask "visual-studio-code"
-# cask "1password"
-# cask "tailscale-app"
-# cask "protonvpn"
-# cask "utm"
+if OS.mac?
+    cask "ghostty"
+    # cask "utm"
+    # cask "github"
+    # cask "visual-studio-code"
+    # cask "1password"
+    # cask "tailscale-app"
+    # cask "protonvpn"
+end
 
 # ============================================
 # AI Tools
 # ============================================
-# cask "cursor"
-# cask "chatgpt"
+if OS.mac?
+    cask "cursor"
+    # cask "chatgpt"
+    # cask "codex-app"
+    # cask "claude"
+    # cask "claude-code"
+end
+
 # cask "codex"
-# cask "codex-app"
-# cask "claude"
-# cask "claude-code"
