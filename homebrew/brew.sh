@@ -11,8 +11,8 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         brewbinpath=/usr/local/bin
     fi
 elif [[ "$(uname -s)" == "Linux" ]]; then
-    brewplatform=Linuxbrew
-    brewpath=linuxbrew
+    brewplatform=Homebrew
+    brewpath=homebrew
     brewbinpath=/home/linuxbrew/.linuxbrew/bin
 else
     echo "Unsupported OS: $(uname -s)" >&2
