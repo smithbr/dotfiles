@@ -5,6 +5,7 @@
 # Core Tools
 # ============================================
 brew "git"
+brew "ripgrep"
 brew "glances"
 brew "htop"
 brew "nethogs"
