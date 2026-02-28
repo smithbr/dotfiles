@@ -17,6 +17,7 @@ brew "zsh"
 
 if OS.mac?
     # brew "mactop"
+    brew "appcleaner"
 end
 
 # ============================================
