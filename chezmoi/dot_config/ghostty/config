@@ -63,14 +63,11 @@ font-size = 14
 font-thicken = true
 
 window-theme = system
-window-height = 55
-window-width = 200
-
-working-directory = home
-window-inherit-working-directory = false
+window-height = 40
+window-width = 110
 
 # macos-titlebar-style = tabs
-# unfocused-split-opacity = 0.6
+unfocused-split-opacity = 0.55
 
 # scrollback-limit in bytes, roughly 125,000 lines
 scrollback-limit = 100000000
