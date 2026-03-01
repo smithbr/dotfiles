@@ -14,7 +14,7 @@ brew "nethogs"
 brew "node"
 brew "nvm"
 brew "pnpm"
-# brew "tailscale"
+brew "tailscale"
 brew "wget"
 brew "zsh"
 
@@ -39,7 +39,7 @@ brew "tree"
 # Productivity Tools
 # ============================================
 if OS.mac?
-    cask "ghostty"
+    # cask "ghostty"
     # cask "yaak"
     # cask "utm"
     # cask "github"
