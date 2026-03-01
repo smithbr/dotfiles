@@ -14,9 +14,9 @@ brew "nethogs"
 brew "node"
 brew "nvm"
 brew "pnpm"
-brew "tailscale"
 brew "wget"
 brew "zsh"
+# brew "tailscale"
 
 if OS.mac?
     # brew "mactop"
