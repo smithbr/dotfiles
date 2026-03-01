@@ -19,7 +19,7 @@ apt upgrade unbound
 pihole -up
 
 # Update PADD
-~/padd.sh -u
+~/.config/padd/padd.sh -u
 
 # Reboot the system
 # reboot
