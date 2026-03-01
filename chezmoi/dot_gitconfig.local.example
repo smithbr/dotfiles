@@ -1,4 +1,4 @@
-# Put machine-specific git configs here.
+# Put machine-specific git config here
 # Copy to ~/.gitconfig.local
 
 # [user]
