@@ -2,6 +2,8 @@
     name = Brandon Smith
 	email = 1495361+smithbr@users.noreply.github.com
     username = smithbr
+[init]
+    defaultBranch = main
 [core]
     editor = code
     ignorecase = false
