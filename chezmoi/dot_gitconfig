@@ -1,3 +1,6 @@
+# Machine-specific overrides (credential helper, SSH, user identity)
+[include]
+	path = ~/.gitconfig.local
 [user]
     name = Brandon Smith
 	email = 1495361+smithbr@users.noreply.github.com

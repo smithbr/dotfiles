@@ -1,0 +1,28 @@
+# Put machine-specific git configs here.
+# Copy to ~/.gitconfig.local
+
+# [user]
+	# signingkey = GPG_KEY_ID
+
+### macOS
+# [credential]
+    # helper = osxkeychain
+# [core]
+    # sshCommand = ssh -i ~/.ssh/id_ed25519 -o AddKeysToAgent=yes -o UseKeychain=yes
+
+### linux
+# [credential]
+    # helper = store
+# [core]
+    # sshCommand = ssh -i ~/.ssh/id_ed25519 -o AddKeysToAgent=yes
+
+### GPG
+# [commit]
+    # gpgsign = true
+# [gpg]
+	# format = ssh
+    # program = /opt/homebrew/bin/gpg or /usr/local/bin/gpg
+# [gpg "ssh"]
+	# program = /Applications/1Password.app/Contents/MacOS/op-ssh-sign
+# [commit]
+	# gpgsign = true
