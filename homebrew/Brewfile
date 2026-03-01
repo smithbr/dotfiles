@@ -44,6 +44,7 @@ if OS.mac?
     # cask "github"
     # cask "visual-studio-code"
     # cask "1password"
+    # cask "1password-cli"
     # cask "tailscale-app"
     # cask "protonvpn"
 end
@@ -54,10 +55,9 @@ end
 if OS.mac?
     # cask "cursor"
     # cask "chatgpt"
+    # cask "codex"
     # cask "codex-app"
     # cask "claude"
     # cask "claude-code"
     # brew "opencode"
 end
-
-# cask "codex"
