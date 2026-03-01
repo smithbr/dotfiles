@@ -1,5 +1,11 @@
 #!/bin/bash
 
+echo "🔍 Checking for existing GitHub SSH connection..."
+if ssh -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
+    echo "✅ Already authenticated with GitHub — no setup needed"
+    exit 0
+fi
+
 EMAIL="1495361+smithbr@users.noreply.github.com"
 KEY="$HOME/.ssh/id_ed25519"
 
