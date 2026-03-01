@@ -1,5 +1,10 @@
 #!/bin/bash -e
 
+# Add the following line to your sudoers file using visudo:
+#
+# sudo visudo -f /etc/sudoers.d/update-script
+# yourusername ALL=(ALL) NOPASSWD: /home/yourusername/update.sh
+
 # Update Pi-hole
 pihole -up
 
