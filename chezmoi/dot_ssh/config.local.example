@@ -1,0 +1,2 @@
+# Put machine-specific secrets here
+# Copy to ~/.ssh/config.local
