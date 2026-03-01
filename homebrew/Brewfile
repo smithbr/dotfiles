@@ -18,7 +18,7 @@ brew "zsh"
 
 if OS.mac?
     # brew "mactop"
-    brew "appcleaner"
+    # brew "appcleaner"
 end
 
 # ============================================
@@ -38,6 +38,7 @@ brew "tree"
 # ============================================
 if OS.mac?
     cask "ghostty"
+    # cask "yaak"
     # cask "utm"
     # cask "github"
     # cask "visual-studio-code"
@@ -55,6 +56,7 @@ if OS.mac?
     # cask "codex-app"
     # cask "claude"
     # cask "claude-code"
+    # brew "opencode"
 end
 
 # cask "codex"
