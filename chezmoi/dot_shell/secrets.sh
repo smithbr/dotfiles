@@ -1,4 +1,4 @@
 # Load a secret file
-if [[ -f "${HOME}/.localrc" ]]; then
-    source "${HOME}/.localrc"
+if [[ -f "${HOME}/.zshrc.local" ]]; then
+    source "${HOME}/.zshrc.local"
 fi
