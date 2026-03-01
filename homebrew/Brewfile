@@ -6,6 +6,7 @@
 # ============================================
 brew "git"
 brew "gh"
+brew "gnupg"
 brew "ripgrep"
 brew "glances"
 brew "htop"
