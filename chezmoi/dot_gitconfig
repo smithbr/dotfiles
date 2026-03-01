@@ -1,19 +1,32 @@
 # Machine-specific overrides (credential helper, SSH, user identity)
-[include]
-	path = ~/.gitconfig.local
 [user]
     name = Brandon Smith
 	email = 1495361+smithbr@users.noreply.github.com
     username = smithbr
-[init]
-    defaultBranch = main
 [core]
     editor = code
     ignorecase = false
+    excludesfile = ~/.gitignore_global
+[include]
+	path = ~/.gitconfig.local
+[init]
+    defaultBranch = main
+[pull]
+	rebase = true
+[push]
+	autoSetupRemote = true
+	default = current
+[rebase]
+	updateRefs = true
 [alias]
+    main = !git checkout main && git fetch && git pull origin main
+	cm = !git add -A && git commit -m
+    amend = commit --amend --no-edit
+    undo = !git reset --soft HEAD^1 && git reset
+    recent = branch --sort=-committerdate
+    cleanup = !git branch --no-color | fzf -m | xargs -I {} git branch -D '{}'
     br = branch
     co = checkout
-    cm = commit -m
     df = difftool
     l = log --graph --pretty=format:'%Cred%h%Creset %C(yellow)%an%d%Creset %s %Cgreen(%cr)%Creset' --date=relative
     pu = push -u
