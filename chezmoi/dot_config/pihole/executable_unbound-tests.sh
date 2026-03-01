@@ -24,15 +24,32 @@ fail() {
     SUMMARY_RESULTS+=("${RED}✗ FAIL${RESET}  $*")
 }
 info() { echo -e "  ${CYAN}→${RESET}  $*"; }
+fix()  { echo -e "  ${YELLOW}💡 Fix:${RESET} $*"; }
 header() {
     CURRENT_TEST="$*"
     echo -e "\n${BOLD}${YELLOW}▶ $*${RESET}"
 }
 
 check_deps() {
+    local missing=0
     for cmd in dig unbound-control unbound-checkconf ss; do
-        command -v "$cmd" &>/dev/null || { echo -e "${RED}Missing dependency: $cmd${RESET}"; exit 1; }
+        if ! command -v "$cmd" &>/dev/null; then
+            echo -e "${RED}Missing dependency: $cmd${RESET}"
+            case "$cmd" in
+                dig)
+                    fix "sudo apt install dnsutils   # Debian/Ubuntu"
+                    fix "sudo dnf install bind-utils  # Fedora/RHEL" ;;
+                unbound-control|unbound-checkconf)
+                    fix "sudo apt install unbound     # Debian/Ubuntu"
+                    fix "sudo dnf install unbound     # Fedora/RHEL" ;;
+                ss)
+                    fix "sudo apt install iproute2    # Debian/Ubuntu"
+                    fix "sudo dnf install iproute     # Fedora/RHEL" ;;
+            esac
+            missing=1
+        fi
     done
+    [[ "$missing" -eq 1 ]] && exit 1
 }
 
 # ── 1. Config check ──────────────────────────────────────────
@@ -43,6 +60,9 @@ test_config() {
     else
         fail "unbound-checkconf reported issues:"
         sudo unbound-checkconf
+        fix "Review the errors above in /etc/unbound/unbound.conf (or included files)"
+        fix "Check for typos, duplicate keys, or incorrect indentation"
+        fix "Validate with: sudo unbound-checkconf /etc/unbound/unbound.conf"
     fi
 }
 
@@ -53,7 +73,9 @@ test_status() {
         pass "Unbound is running"
     else
         fail "Unbound does not appear to be running"
-        info "Try: sudo systemctl start unbound"
+        fix "sudo systemctl start unbound"
+        fix "sudo systemctl enable unbound   # start on boot"
+        fix "Check logs: sudo journalctl -u unbound --no-pager -n 20"
     fi
 }
 
@@ -67,6 +89,10 @@ test_listening() {
         done
     else
         fail "Nothing detected on port 53 — Unbound may not be bound correctly"
+        fix "Ensure unbound.conf has: interface: 0.0.0.0 (or 127.0.0.1) and port: 53"
+        fix "Check if another DNS service is blocking port 53: sudo ss -tulnp | grep :53"
+        fix "If systemd-resolved is conflicting: sudo systemctl disable --now systemd-resolved"
+        fix "After config changes: sudo systemctl restart unbound"
     fi
 }
 
@@ -79,6 +105,11 @@ test_basic_resolution() {
         echo "$result" | while read -r ip; do info "$ip"; done
     else
         fail "Could not resolve $GOOD_DOMAIN"
+        fix "Verify Unbound is running: sudo unbound-control status"
+        fix "Check upstream connectivity: dig @1.1.1.1 $GOOD_DOMAIN +short"
+        fix "Ensure root hints are present: ls -la /etc/unbound/root.hints"
+        fix "Update root hints: wget -O /etc/unbound/root.hints https://www.internic.net/domain/named.root"
+        fix "Check for firewall rules blocking outbound DNS (port 53)"
     fi
 }
 
@@ -95,6 +126,8 @@ test_caching() {
         pass "Cache is working (second query: 0 ms)"
     else
         info "Cache result inconclusive (timing may vary on fast networks)"
+        fix "Check cache settings in unbound.conf: msg-cache-size, rrset-cache-size"
+        fix "Verify cache content: sudo unbound-control dump_cache | head -20"
     fi
 }
 
@@ -110,7 +143,11 @@ test_dnssec() {
         pass "DNSSEC working — $DNSSEC_FAIL_DOMAIN correctly returned SERVFAIL"
     else
         fail "Expected SERVFAIL for $DNSSEC_FAIL_DOMAIN, got: ${status:-no response}"
-        info "DNSSEC validation may not be enabled (check: val-permissive-mode: no)"
+        fix "Ensure unbound.conf has: module-config: \"validator iterator\""
+        fix "Set val-permissive-mode: no  (strict DNSSEC enforcement)"
+        fix "Verify trust anchor exists: ls -la /etc/unbound/root.key"
+        fix "Regenerate trust anchor: sudo unbound-anchor -a /etc/unbound/root.key"
+        fix "After changes: sudo systemctl restart unbound"
     fi
 
     # Good domain should carry the AD (Authenticated Data) flag
@@ -132,6 +169,10 @@ test_blocklist() {
     else
         info "$BLOCKED_DOMAIN resolved to: $result"
         info "If you expected this domain to be blocked, check your blocklist config"
+        fix "Verify RPZ zone is loaded: sudo unbound-control list_local_zones | grep rpz"
+        fix "Check blocklist file path in unbound.conf under rpz: or local-zone:"
+        fix "If using Pi-hole for blocking, ensure queries flow through Pi-hole first"
+        fix "Reload blocklist: sudo unbound-control reload"
     fi
 }
 
@@ -147,6 +188,12 @@ test_stats() {
         done
     else
         fail "Could not retrieve stats (is unbound-control configured?)"
+        fix "Enable remote control in unbound.conf:"
+        fix "  remote-control:"
+        fix "    control-enable: yes"
+        fix "    control-interface: 127.0.0.1"
+        fix "Generate control keys: sudo unbound-control-setup"
+        fix "After changes: sudo systemctl restart unbound"
     fi
 }
 
@@ -192,7 +239,13 @@ print_summary() {
     if [[ "$failures" -eq 0 ]]; then
         echo -e "  ${GREEN}${BOLD}All tests passed!${RESET}\n"
     else
-        echo -e "  ${RED}${BOLD}${failures} test(s) need attention.${RESET}\n"
+        echo -e "  ${RED}${BOLD}${failures} test(s) need attention.${RESET}"
+        echo -e "\n  ${BOLD}${YELLOW}General troubleshooting steps:${RESET}"
+        echo -e "  ${YELLOW}1.${RESET} Check config:    sudo unbound-checkconf"
+        echo -e "  ${YELLOW}2.${RESET} View logs:       sudo journalctl -u unbound --no-pager -n 30"
+        echo -e "  ${YELLOW}3.${RESET} Restart service: sudo systemctl restart unbound"
+        echo -e "  ${YELLOW}4.${RESET} Run verbosely:   sudo unbound -d -vvv"
+        echo -e "  ${YELLOW}5.${RESET} Re-run tests:    $0 $DNS_SERVER\n"
     fi
 }
 
