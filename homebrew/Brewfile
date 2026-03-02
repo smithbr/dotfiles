@@ -16,6 +16,7 @@ brew "nvm"
 brew "pnpm"
 brew "wget"
 brew "zsh"
+brew "docker"
 # brew "tailscale"
 
 if OS.mac?
@@ -49,6 +50,7 @@ if OS.mac?
     # cask "tailscale-app"
     # cask "protonvpn"
     # cask "obsidian"
+    # cask "docker-desktop"
 end
 
 # ============================================
