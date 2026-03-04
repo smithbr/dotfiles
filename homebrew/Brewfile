@@ -1,9 +1,8 @@
 # Install all dependencies with: brew bundle
 # Usage: brew bundle [--file=Brewfile]
 
-# ============================================
+
 # Core Tools
-# ============================================
 brew "git"
 brew "gh"
 brew "gnupg"
@@ -17,17 +16,14 @@ brew "pnpm"
 brew "wget"
 brew "curl"
 brew "zsh"
-brew "docker"
 # brew "tailscale"
-
+brew "docker"
 if OS.mac?
     # brew "mactop"
     # brew "appcleaner"
 end
 
-# ============================================
 # Shell Enhancements
-# ============================================
 brew "antidote"
 brew "asciiquarium"
 brew "bat"
@@ -37,9 +33,7 @@ brew "onefetch"
 brew "starship"
 brew "tree"
 
-# ============================================
 # Productivity Tools
-# ============================================
 if OS.mac?
     # cask "ghostty"
     # cask "yaak"
@@ -54,9 +48,16 @@ if OS.mac?
     # cask "docker-desktop"
 end
 
-# ============================================
+# Browsers
+if OS.mac?
+    # cask "comet"
+    # cask "google-chrome"
+    # cask "firefox"
+    # cask "brave-browser"
+    # cask "microsoft-edge"
+end
+
 # AI Tools
-# ============================================
 if OS.mac?
     # cask "cursor"
     # cask "chatgpt"
