@@ -29,3 +29,6 @@ alias urldecode='python3 -c "import sys, urllib.parse; print(urllib.parse.unquot
 
 # fix macOS time
 alias time="sudo sntp -sS time.apple.com"
+
+# generate random token
+alias newtoken="openssl rand -hex 32"
