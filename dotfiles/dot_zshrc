@@ -29,3 +29,7 @@ fi
 if command -v starship >/dev/null 2>&1; then
     eval "$(starship init zsh)"
 fi
+
+fpath+=~/.zfunc; autoload -Uz compinit; compinit
+
+zstyle ':completion:*' menu select
