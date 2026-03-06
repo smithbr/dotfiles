@@ -1,0 +1,28 @@
+# Install all dependencies with: brew bundle
+# Usage: brew bundle [--file=Brewfile.core]
+
+# Core Tools
+brew "git"
+brew "gh"
+brew "gnupg"
+brew "ripgrep"
+brew "glances"
+brew "htop"
+brew "nethogs"
+brew "node"
+brew "nvm"
+brew "pnpm"
+brew "wget"
+brew "curl"
+brew "zsh"
+brew "docker"
+
+# Shell Enhancements
+brew "antidote"
+brew "asciiquarium"
+brew "bat"
+brew "htop"
+brew "nerdfetch"
+brew "onefetch"
+brew "starship"
+brew "tree"
