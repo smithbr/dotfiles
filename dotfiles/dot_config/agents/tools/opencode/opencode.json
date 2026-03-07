@@ -1,5 +1,5 @@
 {
   "$schema": "https://opencode.ai/config.schema.json",
   "provider": {},
-  "instructions": "Read and follow all rules in ~/.config/agents/rules/ before starting any task."
+  "instructions": "Read and follow all rules in ~/.config/agents/rules/ before starting any task. If a rule feels wrong for the current context, flag it rather than silently ignoring it. Never invent rules that weren't specified. If something isn't covered, use good judgment and state your assumption. If a task would require violating a rule, say so and ask how to proceed rather than bending the rule quietly."
 }
