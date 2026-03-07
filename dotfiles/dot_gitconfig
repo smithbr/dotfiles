@@ -1,10 +1,9 @@
-# Machine-specific overrides (credential helper, SSH, user identity)
+# Shared git defaults (machine-specific overrides live in ~/.gitconfig.local)
 [user]
     name = Brandon Smith
     email = 1495361+smithbr@users.noreply.github.com
     username = smithbr
 [core]
-    editor = code
     ignorecase = false
     excludesfile = ~/.gitignore_global
 [include]
@@ -21,7 +20,6 @@
 [delta]
     true-color = always
     navigate = true
-[alias]
 [alias]
     st = status -sb
     co = checkout
@@ -41,9 +39,5 @@
     clean = git-lfs clean -- %f
     smudge = git-lfs smudge -- %f
     process = git-lfs filter-process
-[diff]
-    tool = code
-[merge]
-    tool = code
 [difftool]
     prompt = false
