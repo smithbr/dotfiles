@@ -15,6 +15,7 @@ brew "nvm"
 brew "pnpm"
 brew "wget"
 brew "curl"
+brew "domain-check"
 brew "zsh"
 brew "docker"
 

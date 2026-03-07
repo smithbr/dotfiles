@@ -33,5 +33,8 @@ alias emptyfolders="du -a --max-depth=1 | sort -n"
 alias urlencode='python3 -c "import sys, urllib.parse; print(urllib.parse.quote_plus(sys.argv[1]))"'
 alias urldecode='python3 -c "import sys, urllib.parse; print(urllib.parse.unquote_plus(sys.argv[1]))"'
 
+# domain lookup
+alias tld="domain-check --preset startup --pretty"
+
 # generate random token
 alias newtoken="openssl rand -hex 32"
