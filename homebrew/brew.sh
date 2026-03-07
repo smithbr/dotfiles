@@ -561,5 +561,3 @@ if [[ -f "${OPTIONAL_BREWFILE}" ]]; then
     prompt_optional_brewfile "${OPTIONAL_BREWFILE}" "optional Homebrew package"
 fi
 
-brew cleanup
-brew doctor
