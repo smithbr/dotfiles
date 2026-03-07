@@ -42,15 +42,22 @@ fi
 brew_prefix="$(brew --prefix)"
 export PATH="${brew_prefix}/bin:${brew_prefix}/sbin:${PATH}"
 
-brew update && brew upgrade
+BREWFILE="${BASEDIR}/homebrew/Brewfile.core"
+OPTIONAL_BREWFILE="${BASEDIR}/homebrew/Brewfile.optional"
 
-if ! brew list --formula fzf >/dev/null 2>&1; then
+# Snapshot installed packages once to avoid repeated brew calls.
+_installed_formulae=" $(brew list --formula 2>/dev/null | tr '\n' ' ') "
+_installed_casks=" $(brew list --cask 2>/dev/null | tr '\n' ' ') "
+_installed_taps=" $(brew tap 2>/dev/null | tr '\n' ' ') "
+
+_brew_has_formula() { [[ "${_installed_formulae}" == *" $1 "* ]]; }
+_brew_has_cask()    { [[ "${_installed_casks}" == *" $1 "* ]]; }
+_brew_has_tap()     { [[ "${_installed_taps}" == *" $1 "* ]]; }
+
+if ! _brew_has_formula fzf; then
     log_info "Installing required dependency: fzf"
     brew install fzf
 fi
-
-BREWFILE="${BASEDIR}/homebrew/Brewfile.core"
-OPTIONAL_BREWFILE="${BASEDIR}/homebrew/Brewfile.optional"
 
 formula_command_available() {
     local pkg_name="$1"
@@ -218,7 +225,7 @@ entry_is_already_installed() {
 
     case "${pkg_type}" in
         brew)
-            if brew list --formula "${pkg_name}" >/dev/null 2>&1; then
+            if _brew_has_formula "${pkg_name}"; then
                 return 0
             fi
             if formula_command_available "${pkg_name}"; then
@@ -229,7 +236,7 @@ entry_is_already_installed() {
             fi
             ;;
         cask)
-            if brew list --cask "${pkg_name}" >/dev/null 2>&1; then
+            if _brew_has_cask "${pkg_name}"; then
                 return 0
             fi
             if [[ "${os_name}" == "Darwin" ]] && cask_app_available "${pkg_name}"; then
@@ -237,7 +244,7 @@ entry_is_already_installed() {
             fi
             ;;
         tap)
-            if brew tap | awk -v tap_name="${pkg_name}" '$0 == tap_name { found=1 } END { exit(found ? 0 : 1) }'; then
+            if _brew_has_tap "${pkg_name}"; then
                 return 0
             fi
             ;;
@@ -286,7 +293,6 @@ install_filtered_brewfile() {
         fi
 
         if entry_is_already_installed "${pkg_type}" "${pkg_name}"; then
-            log_info "${pkg_type} \"${pkg_name}\" already present; skipping"
             continue
         fi
 
@@ -296,6 +302,8 @@ install_filtered_brewfile() {
 
     if [[ "${selected_count}" -gt 0 ]]; then
         brew bundle install --file="${tmp_brewfile}"
+    else
+        log_info "All ${prompt_label}s already installed"
     fi
 
     rm -f "${tmp_brewfile}"
