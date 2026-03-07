@@ -7,7 +7,7 @@ alias cdd="cd ~/.dotfiles"
 OS_NAME="$(uname -s)"
 
 # shell
-alias reload="exec $SHELL -l"
+alias rl="exec $SHELL -l"
 alias fish="asciiquarium"
 alias cz="chezmoi"
 
