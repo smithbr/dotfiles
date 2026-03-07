@@ -1,0 +1,21 @@
+reporting: "off"
+gui:
+  showFileTree: true
+  nerdFontsVersion: 3
+  showRandomTip: false
+  showIcons: true
+  paging:
+    colorArg: always
+    useConfig: true
+  useHunkModeInStagingView: false
+  theme:
+    selectedLineBgColor:
+      - "#303446" # Frappe
+    selectedRangeBgColor:
+      - "#ccd0da" # Latte
+os:
+  editPreset: "vscode"
+  promptToReturnFromSubprocess: false
+keybinding:
+  universal:
+    quitWithoutChangingDirectory: "q"
