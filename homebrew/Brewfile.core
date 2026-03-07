@@ -18,6 +18,8 @@ brew "curl"
 brew "domain-check"
 brew "zsh"
 brew "docker"
+tap "sinelaw/fresh"
+brew "fresh-editor"
 
 # Shell Enhancements
 brew "antidote"
