@@ -1,0 +1,1 @@
+../.config/agents/tools/codex/instructions.md

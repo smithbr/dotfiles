@@ -1,0 +1,5 @@
+{
+  "$schema": "https://opencode.ai/config.schema.json",
+  "provider": {},
+  "instructions": "Read and follow all rules in ~/.config/agents/rules/ before starting any task."
+}
