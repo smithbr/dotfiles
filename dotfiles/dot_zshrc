@@ -1,12 +1,6 @@
 source "${HOME}/.shell/aliases"
-source "${HOME}/.shell/secrets"
-source "${HOME}/.shell/external"
 
-if [[ "$(uname -s)" == "Darwin" ]]; then
-    source "${HOME}/.shell/macOS"
-elif [[ "$(uname -s)" == "Linux" ]]; then
-    :
-fi
+export XDG_CONFIG_HOME="$HOME/.config"
 
 # Initialize completion before loading plugins that call compdef.
 autoload -Uz compinit
