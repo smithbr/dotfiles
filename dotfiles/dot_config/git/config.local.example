@@ -40,7 +40,7 @@
 
 # --- Optional signing setup ---
 # [user]
-#     signingkey = ssh-ed25519 [AAAA...]
+#     signingkey = ~/.ssh/id_ed25519
 # [commit]
 #     gpgsign = true
 # [gpg]
