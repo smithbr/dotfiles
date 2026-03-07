@@ -2,6 +2,9 @@
 alias lsa="ls -FGlAhp"
 alias h="history"
 
+# os detection (set once, reused below)
+OS_NAME="$(uname -s)"
+
 # shell
 alias reload="exec $SHELL -l"
 alias fish="asciiquarium"
@@ -10,10 +13,12 @@ alias cz="chezmoi"
 # network
 alias ip_public="dig +short myip.opendns.com @resolver1.opendns.com"
 alias dns="cat /etc/resolv.conf"
-if [[ "$(uname -s)" == "Darwin" ]]; then
+
+if [[ "$OS_NAME" == "Darwin" ]]; then
     alias ip_local="ipconfig getifaddr en0"
     alias flushdns="dscacheutil -flushcache"
-elif [[ "$(uname -s)" == "Linux" ]]; then
+    alias time="sudo sntp -sS time.apple.com" # fix macOS time
+elif [[ "$OS_NAME" == "Linux" ]]; then
     alias ip_local="hostname -I"
     alias flushdns="sudo systemd-resolve --flush-caches"
     alias nethogs="sudo /home/linuxbrew/.linuxbrew/sbin/nethogs"
@@ -26,9 +31,6 @@ alias emptyfolders="du -a --max-depth=1 | sort -n"
 # encode/decode strings
 alias urlencode='python3 -c "import sys, urllib.parse; print(urllib.parse.quote_plus(sys.argv[1]))"'
 alias urldecode='python3 -c "import sys, urllib.parse; print(urllib.parse.unquote_plus(sys.argv[1]))"'
-
-# fix macOS time
-alias time="sudo sntp -sS time.apple.com"
 
 # generate random token
 alias newtoken="openssl rand -hex 32"
