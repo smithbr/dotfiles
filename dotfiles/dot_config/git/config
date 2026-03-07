@@ -1,13 +1,12 @@
-# Shared git defaults (machine-specific overrides live in ~/.gitconfig.local)
+# Shared git defaults (machine-specific overrides live in ~/.config/git/config.local)
 [user]
     name = Brandon Smith
     email = 1495361+smithbr@users.noreply.github.com
     username = smithbr
 [core]
     ignorecase = false
-    excludesfile = ~/.gitignore_global
 [include]
-    path = ~/.gitconfig.local
+    path = ~/.config/git/config.local
 [init]
     defaultBranch = main
 [pull]
