@@ -1,26 +1,29 @@
 # Machine-specific overrides (credential helper, SSH, user identity)
 [user]
     name = Brandon Smith
-	email = 1495361+smithbr@users.noreply.github.com
+    email = 1495361+smithbr@users.noreply.github.com
     username = smithbr
 [core]
     editor = code
     ignorecase = false
     excludesfile = ~/.gitignore_global
 [include]
-	path = ~/.gitconfig.local
+    path = ~/.gitconfig.local
 [init]
     defaultBranch = main
 [pull]
-	rebase = true
+    rebase = true
 [push]
-	autoSetupRemote = true
-	default = current
+    autoSetupRemote = true
+    default = current
 [rebase]
-	updateRefs = true
+    updateRefs = true
+[delta]
+    true-color = always
+    navigate = true
 [alias]
     main = !git checkout main && git fetch && git pull origin main
-	cm = !git add -A && git commit -m
+    cm = !git add -A && git commit -m
     amend = commit --amend --no-edit
     undo = !git reset --soft HEAD^1 && git reset
     recent = branch --sort=-committerdate
@@ -34,11 +37,11 @@
 [filter "lfs"]
     required = true
     clean = git-lfs clean -- %f
-	smudge = git-lfs smudge -- %f
-	process = git-lfs filter-process
+    smudge = git-lfs smudge -- %f
+    process = git-lfs filter-process
 [diff]
-	tool = code
+    tool = code
 [merge]
-	tool = code
+    tool = code
 [difftool]
-	prompt = false
+    prompt = false
