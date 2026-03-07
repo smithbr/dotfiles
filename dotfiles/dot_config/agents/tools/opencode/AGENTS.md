@@ -1,4 +1,4 @@
-# Global Claude Instructions
+# Global opencode Instructions
 
 ## Shared Rules
 Read and follow all rules in `~/.config/agents/rules/`.
