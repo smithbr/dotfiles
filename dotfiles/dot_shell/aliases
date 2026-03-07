@@ -1,6 +1,7 @@
 # navigation
 alias lsa="ls -FGlAhp"
 alias h="history"
+alias cdd="cd ~/.dotfiles"
 
 # os detection (set once, reused below)
 OS_NAME="$(uname -s)"
