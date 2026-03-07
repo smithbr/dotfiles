@@ -16,9 +16,6 @@
     default = current
 [rebase]
     updateRefs = true
-[delta]
-    true-color = always
-    navigate = true
 [alias]
     st = status -sb
     co = checkout
@@ -33,10 +30,5 @@
     cleanup = !git branch --no-color | fzf -m | xargs -I {} git branch -D '{}'
     clean-all = !git reset --hard && git clean -xfd
     recent = branch --sort=-committerdate
-[filter "lfs"]
-    required = true
-    clean = git-lfs clean -- %f
-    smudge = git-lfs smudge -- %f
-    process = git-lfs filter-process
 [difftool]
     prompt = false

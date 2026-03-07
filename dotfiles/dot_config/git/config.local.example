@@ -22,10 +22,20 @@
 #     helper = store
 # [core]
 #     editor = nano
+#     pager = delta
 #     sshCommand = ssh -i ~/.ssh/id_ed25519 -o AddKeysToAgent=yes
-# [diff]
-#     tool = vimdiff
+# [interactive]
+#     diffFilter = delta --color-only
+# [delta]
+#     navigate = true
+#     true-color = always
+#     line-numbers = true
+#     side-by-side = true
 # [merge]
+#     conflictStyle = zdiff3
+#     tool = vimdiff
+# [diff]
+#     colorMoved = default
 #     tool = vimdiff
 
 # --- Optional signing setup ---
@@ -36,5 +46,5 @@
 # [gpg]
 #     format = ssh
 # [gpg "ssh"]
-#     program = /Applications/1Password.app/Contents/MacOS/op-ssh-sign # macOS/1password
-#     # program = /usr/bin/gpg # linux/gpg
+#     required for macOS only. linux will use ssh-keygen
+#     program = /Applications/1Password.app/Contents/MacOS/op-ssh-sign 
