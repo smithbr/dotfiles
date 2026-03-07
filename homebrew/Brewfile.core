@@ -4,6 +4,7 @@
 # Core Tools
 brew "git"
 brew "gh"
+brew "lazygit"
 brew "gnupg"
 brew "ripgrep"
 brew "glances"
