@@ -22,18 +22,20 @@
     true-color = always
     navigate = true
 [alias]
-    main = !git checkout main && git fetch && git pull origin main
-    cm = !git add -A && git commit -m
-    amend = commit --amend --no-edit
-    undo = !git reset --soft HEAD^1 && git reset
-    recent = branch --sort=-committerdate
-    cleanup = !git branch --no-color | fzf -m | xargs -I {} git branch -D '{}'
-    br = branch
+[alias]
+    st = status -sb
     co = checkout
-    df = difftool
+    cob = checkout -b
+    nuke = reset --hard
+    br = branch
     l = log --graph --pretty=format:'%Cred%h%Creset %C(yellow)%an%d%Creset %s %Cgreen(%cr)%Creset' --date=relative
-    pu = push -u
-    st = status
+    lg   = log --oneline --graph --decorate --all
+    last = log -1 HEAD --stat
+    ls   = log --stat
+    undo = !git reset --soft HEAD^1 && git reset
+    cleanup = !git branch --no-color | fzf -m | xargs -I {} git branch -D '{}'
+    clean-all = !git reset --hard && git clean -xfd
+    recent = branch --sort=-committerdate
 [filter "lfs"]
     required = true
     clean = git-lfs clean -- %f
