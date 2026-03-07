@@ -36,5 +36,8 @@ alias urldecode='python3 -c "import sys, urllib.parse; print(urllib.parse.unquot
 # domain lookup
 alias tld="domain-check --preset startup --pretty"
 
+# git
+alias lg="lazygit"
+
 # generate random token
 alias newtoken="openssl rand -hex 32"
