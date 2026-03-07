@@ -1,28 +1,40 @@
-# Put machine-specific git config here
+# Machine-specific git config overrides
 # Copy to ~/.gitconfig.local
 
 # [user]
-	# signingkey = GPG_KEY_ID
+#     name = Your Name
+#     email = you@example.com
+#     username = your-github-username
 
-### macOS
+# macOS
 # [credential]
-    # helper = osxkeychain
+#     helper = osxkeychain
 # [core]
-    # sshCommand = ssh -i ~/.ssh/id_ed25519 -o AddKeysToAgent=yes -o UseKeychain=yes
+#     editor = code
+#     sshCommand = ssh -i ~/.ssh/id_ed25519 -o AddKeysToAgent=yes -o UseKeychain=yes
+# [diff]
+#     tool = code
+# [merge]
+#     tool = code
 
-### linux
+# linux
 # [credential]
-    # helper = store
+#     helper = store
 # [core]
-    # sshCommand = ssh -i ~/.ssh/id_ed25519 -o AddKeysToAgent=yes
+#     editor = nano
+#     sshCommand = ssh -i ~/.ssh/id_ed25519 -o AddKeysToAgent=yes
+# [diff]
+#     tool = vimdiff
+# [merge]
+#     tool = vimdiff
 
-### GPG
+# --- Optional signing setup ---
+# [user]
+#     signingkey = ssh-ed25519 [AAAA...]
 # [commit]
-    # gpgsign = true
+#     gpgsign = true
 # [gpg]
-	# format = ssh
-    # program = /opt/homebrew/bin/gpg or /usr/local/bin/gpg
+#     format = ssh
 # [gpg "ssh"]
-	# program = /Applications/1Password.app/Contents/MacOS/op-ssh-sign
-# [commit]
-	# gpgsign = true
+#     program = /Applications/1Password.app/Contents/MacOS/op-ssh-sign # macOS/1password
+#     # program = /usr/bin/gpg # linux/gpg
