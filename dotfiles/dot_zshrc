@@ -1,9 +1,9 @@
-source "${HOME}/.shell/aliases.sh"
-source "${HOME}/.shell/secrets.sh"
-source "${HOME}/.shell/external.sh"
+source "${HOME}/.shell/aliases"
+source "${HOME}/.shell/secrets"
+source "${HOME}/.shell/external"
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
-    source "${HOME}/.shell/macOS.sh"
+    source "${HOME}/.shell/macOS"
 elif [[ "$(uname -s)" == "Linux" ]]; then
     :
 fi
