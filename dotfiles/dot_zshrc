@@ -6,9 +6,10 @@ export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 export XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
 export PATH="$HOME/.local/bin:$PATH"
 
-# Initialize completion before loading plugins that call compdef.
-autoload -Uz compinit
-compinit
+# Local overrides
+if [[ -f "${HOME}/.zshrc.local" ]]; then
+    source "${HOME}/.zshrc.local"
+fi
 
 if command -v brew >/dev/null 2>&1; then
     antidote_zsh="$(brew --prefix)/opt/antidote/share/antidote/antidote.zsh"
