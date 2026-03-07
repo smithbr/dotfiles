@@ -5,7 +5,6 @@
 brew "git"
 brew "gh"
 brew "lazygit"
-brew "gnupg"
 brew "ripgrep"
 brew "glances"
 brew "htop"
