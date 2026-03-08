@@ -3,27 +3,38 @@ alias lsa="ls -FGlAhp"
 alias h="history"
 alias cdd="cd ~/.dotfiles"
 
-# os detection (set once, reused below)
-OS_NAME="$(uname -s)"
-
 # shell
 alias rl="exec $SHELL -l"
 alias fish="asciiquarium"
 alias cz="chezmoi"
 
+# system
+alias top="btop"
+alias df="df -HT"
+
+# docker
+alias dps="docker ps"
+alias dpsa="docker ps -a"
+alias dstop="docker stop \$(docker ps -q)"
+alias drm="docker rm \$(docker ps -a -q)"
+alias drmi="docker rmi \$(docker images -q)"
+alias dlogs="docker logs -f"
+alias dclean="docker system prune -af"
+
 # network
 alias ip_public="dig +short myip.opendns.com @resolver1.opendns.com"
 alias dns="cat /etc/resolv.conf"
-
-if [[ "$OS_NAME" == "Darwin" ]]; then
-    alias ip_local="ipconfig getifaddr en0"
-    alias flushdns="dscacheutil -flushcache"
-    alias time="sudo sntp -sS time.apple.com" # fix macOS time
-elif [[ "$OS_NAME" == "Linux" ]]; then
-    alias ip_local="hostname -I"
-    alias flushdns="sudo systemd-resolve --flush-caches"
-    alias nethogs="sudo /home/linuxbrew/.linuxbrew/sbin/nethogs"
-fi
+case "$OSTYPE" in
+    darwin*)
+        alias ip_local="ipconfig getifaddr en0"
+        alias flushdns="dscacheutil -flushcache"
+        ;;
+    linux*)
+        alias ip_local="hostname -I"
+        alias flushdns="sudo systemd-resolve --flush-caches"
+        alias nethogs="sudo /home/linuxbrew/.linuxbrew/sbin/nethogs"
+        ;;
+esac
 
 # remove junk files
 alias cleanupds="find . -type f -name '*.DS_Store' -ls -delete"
