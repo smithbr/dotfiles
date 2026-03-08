@@ -48,7 +48,6 @@ alias urldecode='python3 -c "import sys, urllib.parse; print(urllib.parse.unquot
 alias tld="domain-check --preset startup --pretty"
 
 # git
-alias lg="lazygit"
 
 # brew
 alias brewls="brew list --formula -t"

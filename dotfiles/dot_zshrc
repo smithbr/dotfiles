@@ -6,6 +6,7 @@ export PATH="$HOME/.local/bin:$PATH"
 export OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME}/agents/tools/opencode"
 
 source "${XDG_CONFIG_HOME}/shell/aliases"
+source "${XDG_CONFIG_HOME}/shell/functions"
 
 # Bootstrap Homebrew into PATH if not already available
 if ! command -v brew >/dev/null 2>&1; then
