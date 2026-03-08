@@ -5,8 +5,11 @@ Thumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 
-# Misc
+# temp/backup/caches
 *.log
 *.bak
 *.orig
 .cache/
+
+# AI
+**/.claude/settings.local.json
