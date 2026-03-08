@@ -82,11 +82,14 @@ if [[ "$(chezmoi source-path 2>/dev/null || true)" != "${CHEZMOI_DEFAULT_SOURCE}
 fi
 
 if [[ "${run_system_bootstrap}" -eq 1 ]]; then
-    if [[ "$(uname -s)" == "Darwin" ]]; then
-        chmod +x scripts/bootstrap/macos.sh && ./scripts/bootstrap/macos.sh
-    elif [[ "$(uname -s)" == "Linux" ]]; then
-        chmod +x scripts/bootstrap/linux.sh && ./scripts/bootstrap/linux.sh
-    fi
+    case "$OSTYPE" in
+        darwin*)
+            chmod +x scripts/bootstrap/macos.sh && ./scripts/bootstrap/macos.sh
+            ;;
+        linux*)
+            chmod +x scripts/bootstrap/linux.sh && ./scripts/bootstrap/linux.sh
+            ;;
+    esac
 fi
 
 if [[ "${run_brew}" -eq 1 ]]; then
