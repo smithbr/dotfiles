@@ -61,3 +61,7 @@ printf '%b%s%b\n' "${RED}" "error message" "${RESET}"
 
 - Check dependencies with `command -v` — never `which`.
 - Validate required commands before use, ideally in a dedicated function.
+
+## Stability
+
+- The script should be self-healing whenever possible.
