@@ -287,11 +287,6 @@ install_filtered_brewfile() {
             continue
         fi
 
-        if [[ "${pkg_type}" == "cask" && "${os_name}" != "Darwin" ]]; then
-            log_info "Skipping ${pkg_type} \"${pkg_name}\" (macOS only)"
-            continue
-        fi
-
         if entry_is_already_installed "${pkg_type}" "${pkg_name}"; then
             continue
         fi
@@ -420,10 +415,6 @@ prompt_optional_brewfile() {
             continue
         fi
 
-        if [[ "${pkg_type}" == "cask" && "${os_name}" != "Darwin" ]]; then
-            log_info "Skipping ${pkg_type} \"${pkg_name}\" (macOS only)"
-            continue
-        fi
         entry_category="${current_category}"
         optional_entries+=("${pkg_type} \"${pkg_name}\"")
         optional_categories+=("${entry_category}")
