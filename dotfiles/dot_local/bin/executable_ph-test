@@ -276,7 +276,7 @@ test_setup_security() {
 
     # Unbound should listen only on loopback
     local ub_iface
-    ub_iface=$(grep -E '^\s*interface:' "${UNBOUND_CONF}" 2>/dev/null | head -1 | awk '{print $2}')
+    ub_iface=$(grep -E '^\s*interface:' "${UNBOUND_CONF}" 2>/dev/null | head -1 | awk '{print $2}' || true)
     if [[ "${ub_iface}" == "127.0.0.1" || "${ub_iface}" == "::1" ]]; then
         pass "Unbound listens on loopback only (${ub_iface})"
     elif [[ -n "${ub_iface}" ]]; then
@@ -290,7 +290,7 @@ test_setup_security() {
     local key val actual
     for setting in "harden-glue: yes" "harden-dnssec-stripped: yes" "hide-identity: yes" "hide-version: yes"; do
         key="${setting%%:*}" val="${setting#*: }"
-        actual=$(grep -E "^\s*${key}:" "${UNBOUND_CONF}" 2>/dev/null | tail -1 | awk '{print $2}')
+        actual=$(grep -E "^\s*${key}:" "${UNBOUND_CONF}" 2>/dev/null | tail -1 | awk '{print $2}' || true)
         if [[ "${actual}" == "${val}" ]]; then
             pass "Unbound ${key}: ${actual}"
         elif [[ -z "${actual}" ]]; then
@@ -344,7 +344,7 @@ test_setup_security() {
 
             # Pi-hole upstream should point to Unbound
             local upstream
-            upstream=$(grep -i 'PIHOLE_DNS' "${PIHOLE_SETUPVARS}" 2>/dev/null | head -1 | cut -d= -f2)
+            upstream=$(grep -i 'PIHOLE_DNS' "${PIHOLE_SETUPVARS}" 2>/dev/null | head -1 | cut -d= -f2 || true)
             if [[ "${upstream}" == *"127.0.0.1#5335"* ]]; then
                 pass "Pi-hole upstream points to Unbound (${upstream})"
             elif [[ -n "${upstream}" ]]; then
@@ -386,7 +386,7 @@ test_stats() {
         local key val
         for key in total.num.queries total.num.cachehits total.num.cachemiss \
                    total.num.recursivereplies num.query.type.A num.query.type.AAAA; do
-            val=$(printf '%s\n' "${stats}" | grep "^${key}=" | cut -d= -f2)
+            val=$(printf '%s\n' "${stats}" | grep "^${key}=" | cut -d= -f2 || true)
             [[ -n "${val}" ]] && info "${key}: ${val}"
         done
     else

@@ -1,23 +1,35 @@
 # Machine-specific git config overrides
-# Copy to ~/.gitconfig.local
+# Copy to ~/.config/git/config.local
 
 # [user]
 #     name = Your Name
 #     email = you@example.com
 #     username = your-github-username
 
-# macOS
+############
+# --- macOS (1Password SSH agent) ---
+############
+# No sshCommand needed — 1Password agent handles key selection via SSH_AUTH_SOCK.
 # [credential]
 #     helper = osxkeychain
 # [core]
 #     editor = code
-#     sshCommand = ssh -i ~/.ssh/id_ed25519 -o AddKeysToAgent=yes -o UseKeychain=yes
 # [diff]
 #     tool = code
 # [merge]
 #     tool = code
+# [user]
+#     signingkey = ~/.ssh/id_ed25519.pub
+# [commit]
+#     gpgsign = true
+# [gpg]
+#     format = ssh
+# [gpg "ssh"]
+#     program = /Applications/1Password.app/Contents/MacOS/op-ssh-sign
 
-# linux
+############
+# --- Linux (keys on disk) ---
+############
 # [credential]
 #     helper = store
 # [core]
@@ -37,14 +49,3 @@
 # [diff]
 #     colorMoved = default
 #     tool = vimdiff
-
-# --- Optional signing setup ---
-# [user]
-#     signingkey = ~/.ssh/id_ed25519
-# [commit]
-#     gpgsign = true
-# [gpg]
-#     format = ssh
-# [gpg "ssh"]
-#     required for macOS only. linux will use ssh-keygen
-#     program = /Applications/1Password.app/Contents/MacOS/op-ssh-sign 

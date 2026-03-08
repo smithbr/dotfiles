@@ -1,0 +1,1247 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# List GitHub SSH keys as tab-separated: id \t title \t key
+# Parses the tabular output from `gh ssh-key list` (no --json needed).
+# Output format: <id>\t<title>\t<key_type key_blob>
+gh_list_keys() {
+    gh ssh-key list 2>/dev/null | while IFS=$'\t' read -r title key date id type; do
+        [[ -n "${id}" ]] || continue
+        printf '%s\t%s\t%s\n' "${id}" "${title}" "${key}"
+    done
+}
+
+# Prompt for y/n confirmation.
+# Usage: confirm "Question?"       → default no  (enter skips)
+#        confirm -y "Question?"    → default yes (enter proceeds)
+confirm() {
+    local default="n" answer
+    if [[ "${1:-}" == "-y" ]]; then
+        default="y"
+        shift
+    fi
+    if [[ "${default}" == "y" ]]; then
+        read -rp "$1 [Y/n] " answer
+        ! [[ "${answer}" =~ ^[Nn]$ ]]
+    else
+        read -rp "$1 [y/N] " answer
+        [[ "${answer}" =~ ^[Yy]$ ]]
+    fi
+}
+
+usage() {
+    cat <<'EOF'
+Usage: sshkey [command] [options] [name]
+
+Generate, manage, and maintain SSH keys.
+
+Commands:
+  [name]            Generate a new SSH key (~/.ssh/<name>)
+  delete [name]     Delete a key pair
+  list              Show all keys across local, GitHub, and 1Password
+  doctor            Check SSH setup health
+  cleanup           Remove orphaned keys and stale entries
+  purge [name]      Remove a specific key locally, and from GitHub/1Password
+  nuke              Remove ALL keys everywhere (local, GitHub, 1Password)
+
+Options:
+  -h                Show this help
+  -f                Skip confirmation prompts
+  -gh               Upload key to GitHub (default name: id_ed25519)
+  -1p               Generate key in 1Password
+  -v <name>         1Password vault (default: Private, implies -1p)
+
+Examples:
+  sshkey -gh                 Generate GitHub key (~/.ssh/id_ed25519)
+  sshkey -gh -1p             Generate GitHub key in 1Password
+  sshkey -gh -v Work         Generate GitHub key in 1Password "Work" vault
+  sshkey -gh mykey           Generate ~/.ssh/mykey and upload to GitHub
+  sshkey mykey               Generate ~/.ssh/mykey locally
+  sshkey -1p mykey           Generate ~/.ssh/mykey in 1Password
+  sshkey delete -gh          Delete default GitHub key
+  sshkey delete mykey        Delete ~/.ssh/mykey
+  sshkey list                Show local keys
+  sshkey list -gh            Show local + GitHub keys
+  sshkey list -1p            Show local + 1Password keys
+  sshkey list -gh -1p        Show keys everywhere
+  sshkey doctor              Check SSH health, fix issues
+  sshkey doctor -f           Auto-fix all issues without prompts
+  sshkey cleanup             Clean up orphans, stale keys, and remotes
+  sshkey cleanup -f          Clean up without prompts
+  sshkey purge mykey         Remove ~/.ssh/mykey locally
+  sshkey purge -gh mykey     Remove from local + GitHub
+  sshkey purge -1p mykey     Remove from local + 1Password
+  sshkey purge -gh -1p mykey Remove from local + GitHub + 1Password
+  sshkey nuke                Remove all keys everywhere
+  sshkey nuke -f             Nuke without confirmation
+EOF
+}
+
+FORCE=false
+USE_OP=false
+USE_GH=false
+OP_VAULT=""
+ACTION="generate"
+PROFILE=""
+
+# Parse first arg as subcommand if it's not a flag
+case "${1:-}" in
+    delete)  ACTION="delete";  shift ;;
+    doctor)  ACTION="doctor";  shift ;;
+    cleanup) ACTION="cleanup"; shift ;;
+    list)    ACTION="list";    shift ;;
+    purge)   ACTION="purge";   shift ;;
+    nuke)    ACTION="nuke";    shift ;;
+    -h)      usage; exit 0 ;;
+esac
+
+for arg in "$@"; do
+    case "${arg}" in
+        -h) usage; exit 0 ;;
+        -f) FORCE=true ;;
+        -gh) USE_GH=true ;;
+        -1p) USE_OP=true ;;
+        -v) OP_VAULT="__next__" ;;
+        -v=*) OP_VAULT="${arg#-v=}" ;;
+        -*) printf 'Unknown option: %s\n' "${arg}" >&2; exit 1 ;;
+        *)
+            if [[ "${OP_VAULT}" == "__next__" ]]; then
+                OP_VAULT="${arg}"
+            else
+                PROFILE="${arg}"
+            fi
+            ;;
+    esac
+done
+
+# --- List mode ---
+if [[ "${ACTION}" == "list" ]]; then
+    # Collect local public key blobs and paths for cross-referencing
+    local_blob_list=()
+    local_pub_list=()
+    for pub in "${HOME}"/.ssh/*.pub; do
+        [[ -f "${pub}" ]] || continue
+        blob="$(awk '{print $2}' "${pub}" 2>/dev/null)"
+        if [[ -n "${blob}" ]]; then
+            local_blob_list+=("${blob}")
+            local_pub_list+=("${pub}")
+        fi
+    done
+
+    # Helper: find local pub file matching a blob
+    find_local_match() {
+        local target="$1" i
+        for i in "${!local_blob_list[@]}"; do
+            if [[ "${local_blob_list[$i]}" == "${target}" ]]; then
+                basename "${local_pub_list[$i]}" .pub
+                return 0
+            fi
+        done
+        return 1
+    }
+
+    # Collect blobs from 1Password agent to identify 1Password-managed keys
+    op_agent_blobs=""
+    op_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+    if [[ -S "${op_sock}" ]]; then
+        op_agent_blobs="$(SSH_AUTH_SOCK="${op_sock}" ssh-add -L 2>/dev/null | awk '{print $2}' || true)"
+    fi
+
+    # Local keys
+    printf '📁 Local keys (~/.ssh)\n'
+    found=false
+    for pub in "${HOME}"/.ssh/*.pub; do
+        [[ -f "${pub}" ]] || continue
+        found=true
+        name="$(basename "${pub}" .pub)"
+        priv="${pub%.pub}"
+        comment="$(awk '{print $3}' "${pub}" 2>/dev/null)"
+        label="  ${name}"
+        [[ -n "${comment}" ]] && label="${label}  (${comment})"
+        if [[ ! -f "${priv}" ]]; then
+            pub_blob="$(awk '{print $2}' "${pub}" 2>/dev/null)"
+            if [[ -n "${pub_blob}" && -n "${op_agent_blobs}" ]] && printf '%s' "${op_agent_blobs}" | grep -q "${pub_blob}"; then
+                printf '%s  🔐 1Password\n' "${label}"
+            else
+                printf '%s  ⚠️  orphaned (no private key)\n' "${label}"
+            fi
+        else
+            printf '%s\n' "${label}"
+        fi
+    done
+    for priv in "${HOME}"/.ssh/id_* "${HOME}"/.ssh/*.key; do
+        [[ -f "${priv}" && "${priv}" != *.pub ]] || continue
+        if [[ ! -f "${priv}.pub" ]]; then
+            found=true
+            name="$(basename "${priv}")"
+            printf '  %s  ⚠️  orphaned (no public key)\n' "${name}"
+        fi
+    done
+    if [[ "${found}" == false ]]; then
+        printf '  (none)\n'
+    fi
+
+    # ssh-agent
+    printf '\n🔑 ssh-agent\n'
+    agent_output="$(ssh-add -l 2>/dev/null || true)"
+    if [[ -z "${agent_output}" || "${agent_output}" == *"no identities"* ]]; then
+        printf '  (no keys loaded)\n'
+    else
+        while IFS= read -r line; do
+            comment="$(printf '%s' "${line}" | awk '{print $3}')"
+            type="$(printf '%s' "${line}" | awk '{$1=$2=$3=""; print}' | tr -d '() ')"
+            printf '  %s  (%s)\n' "${comment}" "${type}"
+        done <<< "${agent_output}"
+    fi
+
+    # GitHub
+    if [[ "${USE_GH}" == true ]]; then
+    printf '\n🐈‍⬛ GitHub\n'
+    if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+        gh_keys=()
+        while IFS=$'\t' read -r gh_id gh_title gh_key; do
+            [[ -n "${gh_id}" ]] || continue
+            gh_keys+=("${gh_id}	${gh_title}	${gh_key}")
+        done < <(gh_list_keys)
+
+        if [[ ${#gh_keys[@]} -eq 0 ]]; then
+            printf '  (no keys)\n'
+        else
+            for entry in "${gh_keys[@]}"; do
+                gh_id="${entry%%	*}"
+                rest="${entry#*	}"
+                gh_title="${rest%%	*}"
+                gh_key="${rest#*	}"
+                gh_blob="$(printf '%s' "${gh_key}" | awk '{print $2}')"
+                if local_name="$(find_local_match "${gh_blob}")"; then
+                    printf '  %s  (ID: %s) ← %s\n' "${gh_title}" "${gh_id}" "${local_name}"
+                else
+                    printf '  %s  (ID: %s)  ⚠️  no local match\n' "${gh_title}" "${gh_id}"
+                fi
+            done
+        fi
+    else
+        if ! command -v gh &>/dev/null; then
+            printf '  gh CLI not installed\n'
+            printf '  Install: brew install gh\n'
+        else
+            printf '  gh CLI not authenticated\n'
+            printf '  Run: gh auth login\n'
+        fi
+    fi
+    fi
+
+    # 1Password
+    if [[ "${USE_OP}" == true ]]; then
+    printf '\n🔐 1Password\n'
+    if command -v op &>/dev/null && op account list &>/dev/null 2>&1; then
+        vault="${OP_VAULT:-Private}"
+        op_keys=()
+        while IFS=$'\t' read -r op_id op_title op_blob; do
+            [[ -n "${op_id}" ]] || continue
+            op_keys+=("${op_id}	${op_title}	${op_blob}")
+        done < <(op item list --categories "SSH Key" --vault "${vault}" --format=json 2>/dev/null \
+            | python3 -c "
+import sys, json, subprocess
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(0)
+items = json.loads(raw)
+for item in items:
+    detail = json.loads(subprocess.check_output(['op', 'item', 'get', item['id'], '--vault', '${vault}', '--format=json']))
+    for f in detail.get('fields', []):
+        if f.get('id') == 'public_key':
+            blob = f['value'].split()[1] if len(f['value'].split()) > 1 else f['value']
+            print(f\"{item['id']}\t{item['title']}\t{blob}\")
+            break
+" 2>/dev/null)
+
+        if [[ ${#op_keys[@]} -eq 0 ]]; then
+            printf '  (no keys in %s vault)\n' "${vault}"
+        else
+            for entry in "${op_keys[@]}"; do
+                op_id="${entry%%	*}"
+                rest="${entry#*	}"
+                op_title="${rest%%	*}"
+                op_blob="${rest#*	}"
+                if local_name="$(find_local_match "${op_blob}")"; then
+                    printf '  %s ← %s\n' "${op_title}" "${local_name}"
+                else
+                    printf '  %s  ⚠️  no local match\n' "${op_title}"
+                fi
+            done
+        fi
+    else
+        if ! command -v op &>/dev/null; then
+            printf '  1Password CLI not installed\n'
+            printf '  Install: brew install 1password-cli\n'
+        else
+            printf '  1Password CLI not signed in\n'
+            printf '  Run: op signin\n'
+        fi
+    fi
+    fi
+
+    exit 0
+fi
+
+# --- Purge mode (single key) ---
+if [[ "${ACTION}" == "purge" ]]; then
+    if [[ -z "${PROFILE}" ]]; then
+        if [[ "${USE_GH}" == true ]]; then
+            PROFILE="id_ed25519"
+        else
+            printf 'Usage: sshkey purge <name> [-gh] [-1p]\n' >&2
+            exit 1
+        fi
+    fi
+
+    KEY="${HOME}/.ssh/${PROFILE}"
+    printf '🗑  Purging key: %s\n' "${PROFILE}"
+
+    # Remove local files
+    if [[ -f "${KEY}" || -f "${KEY}.pub" ]]; then
+        ssh-add -d "${KEY}" 2>/dev/null || true
+        rm -f "${KEY}" "${KEY}.pub"
+        printf '  Removed local key files\n'
+    else
+        printf '  No local key files found\n'
+    fi
+
+    # Remove from GitHub
+    if [[ "${USE_GH}" == true ]]; then
+        if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+            pub_blob=""
+            [[ -f "${KEY}.pub" ]] && pub_blob="$(awk '{print $2}' "${KEY}.pub" 2>/dev/null)"
+            # Search by title if no blob (key already deleted from disk)
+            gh_deleted=false
+            while IFS=$'\t' read -r gh_id gh_title gh_key; do
+                [[ -n "${gh_id}" ]] || continue
+                gh_blob="$(printf '%s' "${gh_key}" | awk '{print $2}')"
+                if [[ -n "${pub_blob}" && "${gh_blob}" == "${pub_blob}" ]] || printf '%s' "${gh_title}" | grep -qi "${PROFILE}"; then
+                    if [[ "${FORCE}" == true ]] || confirm -y "  Remove '${gh_title}' from GitHub?"; then
+                        gh ssh-key delete "${gh_id}" --yes 2>/dev/null
+                        printf '  Removed from GitHub: %s\n' "${gh_title}"
+                        gh_deleted=true
+                    fi
+                fi
+            done < <(gh_list_keys)
+            if [[ "${gh_deleted}" == false ]]; then
+                printf '  No matching key found on GitHub\n'
+            fi
+        else
+            printf '  gh CLI not available, skipping GitHub\n'
+        fi
+    fi
+
+    # Remove from 1Password
+    if [[ "${USE_OP}" == true ]]; then
+        if command -v op &>/dev/null && op account list &>/dev/null 2>&1; then
+            vault="${OP_VAULT:-Private}"
+            op_deleted=false
+            while IFS=$'\t' read -r op_id op_title; do
+                [[ -n "${op_id}" ]] || continue
+                if printf '%s' "${op_title}" | grep -qi "${PROFILE}"; then
+                    if [[ "${FORCE}" == true ]] || confirm -y "  Remove '${op_title}' from 1Password?"; then
+                        op item delete "${op_id}" --vault "${vault}" 2>/dev/null
+                        printf '  Removed from 1Password: %s\n' "${op_title}"
+                        op_deleted=true
+                    fi
+                fi
+            done < <(op item list --categories "SSH Key" --vault "${vault}" --format=json 2>/dev/null \
+                | python3 -c "
+import sys, json
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(0)
+for item in json.loads(raw):
+    print(f\"{item['id']}\t{item['title']}\")" 2>/dev/null)
+            if [[ "${op_deleted}" == false ]]; then
+                printf '  No matching key found in 1Password\n'
+            fi
+        else
+            printf '  1Password CLI not available, skipping\n'
+        fi
+    fi
+
+    printf '✅ Done\n'
+    exit 0
+fi
+
+# --- Nuke mode (all keys everywhere) ---
+if [[ "${ACTION}" == "nuke" ]]; then
+    printf '\n'
+    printf '  ☢️  NUKE — This will permanently destroy ALL SSH keys:\n'
+    printf '     local files, ssh-agent, GitHub, and 1Password.\n'
+    printf '     You will lose access to any server that relies on these keys.\n'
+    printf '\n'
+
+    if [[ "${FORCE}" == true ]] || confirm "Type y to confirm:"; then
+        # Flush agent
+        ssh-add -D 2>/dev/null || true
+        printf '🗑  Flushed ssh-agent\n'
+
+        # Remove local keys
+        removed=0
+        for f in "${HOME}"/.ssh/*.pub "${HOME}"/.ssh/id_* "${HOME}"/.ssh/*.key; do
+            [[ -f "${f}" ]] || continue
+            rm -f "${f}"
+            printf '🗑  Removed %s\n' "${f}"
+            ((removed++))
+        done
+        if [[ "${removed}" -eq 0 ]]; then
+            printf '  No local key files found\n'
+        else
+            printf '  Removed %d local file(s)\n' "${removed}"
+        fi
+
+        # Nuke GitHub keys
+        if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+            while IFS=$'\t' read -r gh_id gh_title gh_key; do
+                [[ -n "${gh_id}" ]] || continue
+                gh ssh-key delete "${gh_id}" --yes 2>/dev/null
+                printf '🗑  Removed from GitHub: %s\n' "${gh_title}"
+            done < <(gh_list_keys)
+        fi
+
+        # Nuke 1Password SSH keys
+        if command -v op &>/dev/null && op account list &>/dev/null 2>&1; then
+            vault="${OP_VAULT:-Private}"
+            while IFS=$'\t' read -r op_id op_title; do
+                [[ -n "${op_id}" ]] || continue
+                op item delete "${op_id}" --vault "${vault}" 2>/dev/null
+                printf '🗑  Removed from 1Password: %s\n' "${op_title}"
+            done < <(op item list --categories "SSH Key" --vault "${vault}" --format=json 2>/dev/null \
+                | python3 -c "
+import sys, json
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(0)
+for item in json.loads(raw):
+    print(f\"{item['id']}\t{item['title']}\")" 2>/dev/null)
+        fi
+
+        printf '✅ Nuked\n'
+    fi
+    exit 0
+fi
+
+# --- Doctor mode ---
+if [[ "${ACTION}" == "doctor" ]]; then
+    issues=0
+
+    # Check ssh-agent
+    printf '🔍 Checking ssh-agent...\n'
+    agent_rc=0
+    ssh-add -l &>/dev/null || agent_rc=$?
+    if [[ "${agent_rc}" -eq 0 ]]; then
+        agent_keys="$(ssh-add -l | wc -l | tr -d ' ')"
+        printf '  ✅ ssh-agent running (%s key(s) loaded)\n' "${agent_keys}"
+    elif [[ "${agent_rc}" -eq 1 ]]; then
+        printf '  ✅ ssh-agent running (no keys loaded)\n'
+    else
+        printf '  ❌ ssh-agent not running\n'
+        ((issues++))
+    fi
+
+    # Check ~/.ssh directory permissions
+    printf '🔍 Checking ~/.ssh permissions...\n'
+    if [[ -d "${HOME}/.ssh" ]]; then
+        dir_perms="$(stat -f '%Lp' "${HOME}/.ssh" 2>/dev/null || stat -c '%a' "${HOME}/.ssh" 2>/dev/null)"
+        if [[ "${dir_perms}" == "700" ]]; then
+            printf '  ✅ ~/.ssh directory permissions OK (%s)\n' "${dir_perms}"
+        else
+            printf '  ❌ ~/.ssh directory permissions should be 700, got %s\n' "${dir_perms}"
+            if [[ "${FORCE}" == true ]]; then
+                chmod 700 "${HOME}/.ssh"
+                printf '  🔧 Fixed\n'
+            else
+                if confirm -y "  Fix permissions?"; then
+                    chmod 700 "${HOME}/.ssh"
+                    printf '  🔧 Fixed\n'
+                else
+                    ((issues++))
+                fi
+            fi
+        fi
+    else
+        printf '  ❌ ~/.ssh directory does not exist\n'
+        ((issues++))
+    fi
+
+    # Check key file permissions
+    printf '🔍 Checking key file permissions...\n'
+    found_keys=false
+    for key in "${HOME}"/.ssh/id_* "${HOME}"/.ssh/*.pub; do
+        [[ -f "${key}" ]] || continue
+        found_keys=true
+        perms="$(stat -f '%Lp' "${key}" 2>/dev/null || stat -c '%a' "${key}" 2>/dev/null)"
+        if [[ "${key}" == *.pub ]]; then
+            if [[ "${perms}" == "644" || "${perms}" == "600" ]]; then
+                printf '  ✅ %s (%s)\n' "${key}" "${perms}"
+            else
+                printf '  ⚠️  %s has unusual permissions (%s)\n' "${key}" "${perms}"
+                if [[ "${FORCE}" == true ]]; then
+                    chmod 644 "${key}"
+                    printf '  🔧 Fixed\n'
+                else
+                    if confirm -y "  Fix permissions?"; then
+                        chmod 644 "${key}"
+                        printf '  🔧 Fixed\n'
+                    else
+                        ((issues++))
+                    fi
+                fi
+            fi
+        else
+            if [[ "${perms}" == "600" ]]; then
+                printf '  ✅ %s (%s)\n' "${key}" "${perms}"
+            else
+                printf '  ❌ %s should be 600, got %s\n' "${key}" "${perms}"
+                if [[ "${FORCE}" == true ]]; then
+                    chmod 600 "${key}"
+                    printf '  🔧 Fixed\n'
+                else
+                    if confirm -y "  Fix permissions?"; then
+                        chmod 600 "${key}"
+                        printf '  🔧 Fixed\n'
+                    else
+                        ((issues++))
+                    fi
+                fi
+            fi
+        fi
+    done
+    if [[ "${found_keys}" == false ]]; then
+        printf '  ⚠️  No key files found\n'
+    fi
+
+    # Check for orphaned keys
+    printf '🔍 Checking for orphaned keys...\n'
+    # Collect blobs from 1Password agent to skip pub-only keys backed by 1Password
+    op_agent_blobs=""
+    op_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+    if [[ -S "${op_sock}" ]]; then
+        op_agent_blobs="$(SSH_AUTH_SOCK="${op_sock}" ssh-add -L 2>/dev/null | awk '{print $2}' || true)"
+    fi
+
+    orphan_pubs=()
+    for pub in "${HOME}"/.ssh/*.pub; do
+        [[ -f "${pub}" ]] || continue
+        priv="${pub%.pub}"
+        if [[ ! -f "${priv}" ]]; then
+            # Check if key is backed by 1Password agent
+            pub_blob="$(awk '{print $2}' "${pub}" 2>/dev/null)"
+            if [[ -n "${pub_blob}" && -n "${op_agent_blobs}" ]] && printf '%s' "${op_agent_blobs}" | grep -q "${pub_blob}"; then
+                printf '  ✅ %s (1Password-managed, no local private key)\n' "$(basename "${pub}" .pub)"
+                continue
+            fi
+            printf '  ⚠️  Public key without private key: %s\n' "${pub}"
+            orphan_pubs+=("${pub}")
+        fi
+    done
+    orphan_privs=()
+    for priv in "${HOME}"/.ssh/id_*; do
+        [[ -f "${priv}" && "${priv}" != *.pub ]] || continue
+        if [[ ! -f "${priv}.pub" ]]; then
+            printf '  ⚠️  Private key without public key: %s\n' "${priv}"
+            orphan_privs+=("${priv}")
+        fi
+    done
+    if [[ ${#orphan_pubs[@]} -eq 0 && ${#orphan_privs[@]} -eq 0 ]]; then
+        printf '  ✅ No orphaned keys\n'
+    else
+        if [[ "${FORCE}" == true ]]; then
+            do_cleanup=true
+        else
+            confirm -y "  Clean up orphaned keys?" && do_cleanup=true || do_cleanup=false
+        fi
+        if [[ "${do_cleanup}" == true ]]; then
+            deleted_blobs=()
+            for pub in "${orphan_pubs[@]+"${orphan_pubs[@]}"}"; do
+                blob="$(awk '{print $2}' "${pub}" 2>/dev/null)"
+                rm -f "${pub}"
+                printf '    🗑  Removed %s\n' "${pub}"
+                [[ -n "${blob}" ]] && deleted_blobs+=("${blob}")
+            done
+            for priv in "${orphan_privs[@]+"${orphan_privs[@]}"}"; do
+                ssh-add -d "${priv}" 2>/dev/null || true
+                rm -f "${priv}"
+                printf '    🗑  Removed %s\n' "${priv}"
+            done
+
+            # Clean matching keys from GitHub and 1Password
+            if [[ ${#deleted_blobs[@]} -gt 0 ]]; then
+                if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+                    gh_matches=()
+                    while IFS=$'\t' read -r gh_id gh_title gh_key; do
+                        [[ -n "${gh_id}" ]] || continue
+                        gh_blob="$(printf '%s' "${gh_key}" | awk '{print $2}')"
+                        for blob in "${deleted_blobs[@]}"; do
+                            if [[ "${gh_blob}" == "${blob}" ]]; then
+                                gh_matches+=("${gh_id}	${gh_title}")
+                                break
+                            fi
+                        done
+                    done < <(gh_list_keys)
+
+                    for entry in "${gh_matches[@]+"${gh_matches[@]}"}"; do
+                        gh_id="${entry%%	*}"
+                        gh_title="${entry#*	}"
+                        printf '    Found matching GitHub key: %s\n' "${gh_title}"
+                        if [[ "${FORCE}" == true ]]; then
+                            gh ssh-key delete "${gh_id}" --yes
+                            printf '      🗑  Removed from GitHub\n'
+                        else
+                            if confirm -y "    Remove from GitHub?"; then
+                                gh ssh-key delete "${gh_id}" --yes
+                                printf '      🗑  Removed from GitHub\n'
+                            fi
+                        fi
+                    done
+                fi
+
+                if command -v op &>/dev/null && op account list &>/dev/null 2>&1; then
+                    vault="${OP_VAULT:-Private}"
+                    op_matches=()
+                    while IFS=$'\t' read -r op_id op_title op_blob; do
+                        [[ -n "${op_id}" ]] || continue
+                        for blob in "${deleted_blobs[@]}"; do
+                            if [[ "${op_blob}" == "${blob}" ]]; then
+                                op_matches+=("${op_id}	${op_title}")
+                                break
+                            fi
+                        done
+                    done < <(op item list --categories "SSH Key" --vault "${vault}" --format=json 2>/dev/null \
+                        | python3 -c "
+import sys, json, subprocess
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(0)
+items = json.loads(raw)
+for item in items:
+    detail = json.loads(subprocess.check_output(['op', 'item', 'get', item['id'], '--vault', '${vault}', '--format=json']))
+    for f in detail.get('fields', []):
+        if f.get('id') == 'public_key':
+            blob = f['value'].split()[1] if len(f['value'].split()) > 1 else f['value']
+            print(f\"{item['id']}\t{item['title']}\t{blob}\")
+            break
+" 2>/dev/null)
+
+                    for entry in "${op_matches[@]+"${op_matches[@]}"}"; do
+                        op_id="${entry%%	*}"
+                        op_title="${entry#*	}"
+                        printf '    Found matching 1Password item: %s\n' "${op_title}"
+                        if [[ "${FORCE}" == true ]]; then
+                            op item delete "${op_id}" --vault "${vault}" 2>/dev/null
+                            printf '      🗑  Removed from 1Password\n'
+                        else
+                            if confirm -y "    Remove from 1Password?"; then
+                                op item delete "${op_id}" --vault "${vault}" 2>/dev/null
+                                printf '      🗑  Removed from 1Password\n'
+                            fi
+                        fi
+                    done
+                fi
+            fi
+        else
+            ((issues++))
+        fi
+    fi
+
+    # Check GitHub connectivity
+    printf '🔍 Checking GitHub SSH connectivity...\n'
+    if ssh_output="$(ssh -o ConnectTimeout=5 -T git@github.com 2>&1 || true)" && [[ "${ssh_output}" == *"successfully authenticated"* ]]; then
+        printf '  ✅ GitHub SSH authentication working\n'
+    else
+        printf '  ❌ GitHub SSH authentication failed\n'
+
+        # Try to diagnose and fix
+        fixed=false
+        # Check if any local keys exist
+        has_local_key=false
+        for pub in "${HOME}"/.ssh/*.pub; do
+            [[ -f "${pub}" ]] || continue
+            has_local_key=true
+            break
+        done
+
+        if [[ "${has_local_key}" == false ]]; then
+            printf '  No SSH keys found. Generate one with: sshkey -gh\n'
+        else
+            # Check if key is loaded in ssh-agent
+            for pub in "${HOME}"/.ssh/*.pub; do
+                [[ -f "${pub}" ]] || continue
+                priv="${pub%.pub}"
+                [[ -f "${priv}" ]] || continue
+                pub_blob="$(awk '{print $2}' "${pub}" 2>/dev/null)"
+                if ! ssh-add -l 2>/dev/null | grep -q "${pub_blob}"; then
+                    printf '  Key not in ssh-agent: %s\n' "$(basename "${priv}")"
+                    if [[ "${FORCE}" == true ]] || confirm -y "  Add to ssh-agent?"; then
+                        ssh-add "${priv}" 2>/dev/null && printf '  🔧 Added\n' || printf '  ⚠️  Failed to add\n'
+                    fi
+                fi
+            done
+
+            # Check if key is on GitHub
+            if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+                for pub in "${HOME}"/.ssh/*.pub; do
+                    [[ -f "${pub}" ]] || continue
+                    pub_blob="$(awk '{print $2}' "${pub}" 2>/dev/null)"
+                    if ! gh ssh-key list 2>/dev/null | grep -q "${pub_blob}"; then
+                        printf '  Key not on GitHub: %s\n' "$(basename "${pub}" .pub)"
+                        if [[ "${FORCE}" == true ]] || confirm -y "  Upload to GitHub?"; then
+                            title="SSH Key: $(basename "${pub}" .pub) — ${USER}@$(hostname -s)"
+                            if gh ssh-key add "${pub}" --title "${title}" --type authentication 2>/dev/null; then
+                                printf '  🔧 Uploaded\n'
+                            else
+                                printf '  ⚠️  Failed — you may need: gh auth refresh -h github.com -s admin:public_key\n'
+                            fi
+                        fi
+                    fi
+                done
+            fi
+
+            # Check if 1Password agent is configured but has no keys
+            if grep -q "1password" "${HOME}/.ssh/config" 2>/dev/null || grep -q "1password" "${HOME}/.ssh/config.local" 2>/dev/null; then
+                if command -v op &>/dev/null && op account list &>/dev/null 2>&1; then
+                    vault="${OP_VAULT:-Private}"
+                    op_count="$(op item list --categories "SSH Key" --vault "${vault}" --format=json 2>/dev/null | python3 -c "import sys,json;d=sys.stdin.read().strip();print(len(json.loads(d)) if d else 0)" 2>/dev/null || echo "0")"
+                    if [[ "${op_count}" == "0" ]]; then
+                        printf '  ⚠️  1Password agent is configured but vault "%s" has no SSH keys\n' "${vault}"
+                        printf '  Generate one with: sshkey -gh -1p\n'
+                    fi
+                fi
+            fi
+
+            # Re-test after fixes
+            if ssh_output="$(ssh -o ConnectTimeout=5 -T git@github.com 2>&1 || true)" && [[ "${ssh_output}" == *"successfully authenticated"* ]]; then
+                printf '  ✅ Fixed! GitHub SSH authentication working\n'
+                fixed=true
+            else
+                printf '  ⚠️  Still failing — check your SSH config and 1Password setup\n'
+            fi
+        fi
+
+        if [[ "${fixed}" == false ]]; then
+            ((issues++))
+        fi
+    fi
+
+    # Check GitHub for keys not on this machine
+    if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+        printf '🔍 Checking GitHub SSH keys against local keys...\n'
+        local_blobs=()
+        for pub in "${HOME}"/.ssh/*.pub; do
+            [[ -f "${pub}" ]] || continue
+            b="$(awk '{print $2}' "${pub}" 2>/dev/null)"
+            [[ -n "${b}" ]] && local_blobs+=("${b}")
+        done
+
+        gh_unknown=()
+        while IFS=$'\t' read -r gh_id gh_title gh_key; do
+            [[ -n "${gh_id}" ]] || continue
+            gh_blob="$(printf '%s' "${gh_key}" | awk '{print $2}')"
+            matched=false
+            for b in "${local_blobs[@]+"${local_blobs[@]}"}"; do
+                if [[ "${gh_blob}" == "${b}" ]]; then
+                    matched=true
+                    break
+                fi
+            done
+            if [[ "${matched}" == false ]]; then
+                gh_unknown+=("${gh_id}	${gh_title}")
+            fi
+        done < <(gh_list_keys)
+
+        if [[ ${#gh_unknown[@]} -eq 0 ]]; then
+            printf '  ✅ All GitHub keys match local keys\n'
+        else
+            for entry in "${gh_unknown[@]}"; do
+                gh_id="${entry%%	*}"
+                gh_title="${entry#*	}"
+                printf '  ⚠️  Unknown GitHub key: %s (ID: %s)\n' "${gh_title}" "${gh_id}"
+                if [[ "${FORCE}" == true ]]; then
+                    gh ssh-key delete "${gh_id}" --yes
+                    printf '    🗑  Removed from GitHub\n'
+                else
+                    if confirm -y "  Remove from GitHub?"; then
+                        gh ssh-key delete "${gh_id}" --yes
+                        printf '    🗑  Removed from GitHub\n'
+                    else
+                        ((issues++))
+                    fi
+                fi
+            done
+        fi
+    fi
+
+    # Check known_hosts
+    printf '🔍 Checking known_hosts...\n'
+    if [[ -f "${HOME}/.ssh/known_hosts" ]]; then
+        host_count="$(wc -l < "${HOME}/.ssh/known_hosts" | tr -d ' ')"
+        printf '  ✅ known_hosts exists (%s entries)\n' "${host_count}"
+    else
+        printf '  ⚠️  No known_hosts file\n'
+    fi
+
+    printf '\n'
+    if [[ "${issues}" -eq 0 ]]; then
+        printf '✅ All checks passed\n'
+    else
+        printf '❌ Found %d issue(s)\n' "${issues}"
+        exit 1
+    fi
+    exit 0
+fi
+
+# --- Cleanup mode ---
+if [[ "${ACTION}" == "cleanup" ]]; then
+    cleaned=0
+
+    # Collect blobs of deleted orphan keys for remote cleanup
+    deleted_blobs=()
+
+    # Collect blobs from 1Password agent to skip pub-only keys backed by 1Password
+    op_agent_blobs=""
+    op_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+    if [[ -S "${op_sock}" ]]; then
+        op_agent_blobs="$(SSH_AUTH_SOCK="${op_sock}" ssh-add -L 2>/dev/null | awk '{print $2}' || true)"
+    fi
+
+    # Remove orphaned public keys (no matching private key)
+    printf '🔍 Scanning for orphaned keys...\n'
+    for pub in "${HOME}"/.ssh/*.pub; do
+        [[ -f "${pub}" ]] || continue
+        priv="${pub%.pub}"
+        if [[ ! -f "${priv}" ]]; then
+            blob="$(awk '{print $2}' "${pub}" 2>/dev/null)"
+            # Skip keys backed by 1Password agent
+            if [[ -n "${blob}" && -n "${op_agent_blobs}" ]] && printf '%s' "${op_agent_blobs}" | grep -q "${blob}"; then
+                continue
+            fi
+            printf '  Found orphaned public key: %s\n' "${pub}"
+            if [[ "${FORCE}" == true ]]; then
+                rm -f "${pub}"
+                printf '    🗑  Removed\n'
+                ((cleaned++))
+                [[ -n "${blob}" ]] && deleted_blobs+=("${blob}")
+            else
+                if confirm -y "  Delete?"; then
+                    rm -f "${pub}"
+                    printf '    🗑  Removed\n'
+                    ((cleaned++))
+                    [[ -n "${blob}" ]] && deleted_blobs+=("${blob}")
+                fi
+            fi
+        fi
+    done
+
+    # Remove orphaned private keys (no matching public key)
+    for priv in "${HOME}"/.ssh/id_*; do
+        [[ -f "${priv}" && "${priv}" != *.pub ]] || continue
+        if [[ ! -f "${priv}.pub" ]]; then
+            printf '  Found orphaned private key: %s\n' "${priv}"
+            if [[ "${FORCE}" == true ]]; then
+                ssh-add -d "${priv}" 2>/dev/null || true
+                rm -f "${priv}"
+                printf '    🗑  Removed\n'
+                ((cleaned++))
+            else
+                if confirm -y "  Delete?"; then
+                    ssh-add -d "${priv}" 2>/dev/null || true
+                    rm -f "${priv}"
+                    printf '    🗑  Removed\n'
+                    ((cleaned++))
+                fi
+            fi
+        fi
+    done
+
+    # Clean up deleted orphan keys from GitHub and 1Password
+    if [[ ${#deleted_blobs[@]} -gt 0 ]]; then
+        # GitHub
+        if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+            printf '🔍 Checking GitHub for deleted orphan keys...\n'
+            gh_matches=()
+            while IFS=$'\t' read -r gh_id gh_title gh_key; do
+                [[ -n "${gh_id}" ]] || continue
+                gh_blob="$(printf '%s' "${gh_key}" | awk '{print $2}')"
+                for blob in "${deleted_blobs[@]}"; do
+                    if [[ "${gh_blob}" == "${blob}" ]]; then
+                        gh_matches+=("${gh_id}	${gh_title}")
+                        break
+                    fi
+                done
+            done < <(gh_list_keys)
+
+            for entry in "${gh_matches[@]+"${gh_matches[@]}"}"; do
+                gh_id="${entry%%	*}"
+                gh_title="${entry#*	}"
+                printf '  Found matching GitHub key: %s (ID: %s)\n' "${gh_title}" "${gh_id}"
+                if [[ "${FORCE}" == true ]]; then
+                    gh ssh-key delete "${gh_id}" --yes
+                    printf '    🗑  Removed from GitHub\n'
+                    ((cleaned++))
+                else
+                    if confirm -y "  Remove from GitHub?"; then
+                        gh ssh-key delete "${gh_id}" --yes
+                        printf '    🗑  Removed from GitHub\n'
+                        ((cleaned++))
+                    fi
+                fi
+            done
+        fi
+
+        # 1Password
+        if command -v op &>/dev/null && op account list &>/dev/null 2>&1; then
+            vault="${OP_VAULT:-Private}"
+            printf '🔍 Checking 1Password (%s) for deleted orphan keys...\n' "${vault}"
+            op_matches=()
+            while IFS=$'\t' read -r op_id op_title op_blob; do
+                [[ -n "${op_id}" ]] || continue
+                for blob in "${deleted_blobs[@]}"; do
+                    if [[ "${op_blob}" == "${blob}" ]]; then
+                        op_matches+=("${op_id}	${op_title}")
+                        break
+                    fi
+                done
+            done < <(op item list --categories "SSH Key" --vault "${vault}" --format=json 2>/dev/null \
+                | python3 -c "
+import sys, json, subprocess
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(0)
+items = json.loads(raw)
+for item in items:
+    detail = json.loads(subprocess.check_output(['op', 'item', 'get', item['id'], '--vault', '${vault}', '--format=json']))
+    for f in detail.get('fields', []):
+        if f.get('id') == 'public_key':
+            blob = f['value'].split()[1] if len(f['value'].split()) > 1 else f['value']
+            print(f\"{item['id']}\t{item['title']}\t{blob}\")
+            break
+" 2>/dev/null)
+
+            for entry in "${op_matches[@]+"${op_matches[@]}"}"; do
+                op_id="${entry%%	*}"
+                op_title="${entry#*	}"
+                printf '  Found matching 1Password item: %s\n' "${op_title}"
+                if [[ "${FORCE}" == true ]]; then
+                    op item delete "${op_id}" --vault "${vault}" 2>/dev/null
+                    printf '    🗑  Removed from 1Password\n'
+                    ((cleaned++))
+                else
+                    if confirm -y "  Remove from 1Password?"; then
+                        op item delete "${op_id}" --vault "${vault}" 2>/dev/null
+                        printf '    🗑  Removed from 1Password\n'
+                        ((cleaned++))
+                    fi
+                fi
+            done
+        fi
+    fi
+
+    # Remove agent entries whose key file no longer exists on disk
+    printf '🔍 Checking ssh-agent for stale entries...\n'
+    stale_keys=()
+    while IFS= read -r line; do
+        # ssh-add -l format: <bits> <blob> <comment> (<type>)
+        # comment may be a file path or an email — only act on file paths
+        key_path="$(printf '%s' "${line}" | awk '{print $3}')"
+        if [[ "${key_path}" == /* && ! -f "${key_path}" ]]; then
+            stale_keys+=("${key_path}")
+        fi
+    done < <(ssh-add -l 2>/dev/null || true)
+
+    for key_path in "${stale_keys[@]+"${stale_keys[@]}"}"; do
+        printf '  Found stale agent entry: %s\n' "${key_path}"
+        if [[ "${FORCE}" == true ]]; then
+            ssh-add -d "${key_path}" 2>/dev/null || true
+            printf '    🗑  Removed from agent\n'
+            ((cleaned++))
+        else
+            if confirm -y "  Remove from agent?"; then
+                ssh-add -d "${key_path}" 2>/dev/null || true
+                printf '    🗑  Removed from agent\n'
+                ((cleaned++))
+            fi
+        fi
+    done
+
+    # Fix permissions
+    printf '🔍 Fixing permissions...\n'
+    if [[ -d "${HOME}/.ssh" ]]; then
+        dir_perms="$(stat -f '%Lp' "${HOME}/.ssh" 2>/dev/null || stat -c '%a' "${HOME}/.ssh" 2>/dev/null)"
+        if [[ "${dir_perms}" != "700" ]]; then
+            chmod 700 "${HOME}/.ssh"
+            printf '  🔧 Fixed ~/.ssh directory permissions\n'
+            ((cleaned++))
+        fi
+    fi
+    for key in "${HOME}"/.ssh/id_*; do
+        [[ -f "${key}" && "${key}" != *.pub ]] || continue
+        perms="$(stat -f '%Lp' "${key}" 2>/dev/null || stat -c '%a' "${key}" 2>/dev/null)"
+        if [[ "${perms}" != "600" ]]; then
+            chmod 600 "${key}"
+            printf '  🔧 Fixed permissions on %s\n' "${key}"
+            ((cleaned++))
+        fi
+    done
+
+    # Remove GitHub keys that don't match any local public key
+    if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+        printf '🔍 Checking GitHub SSH keys...\n'
+        # Collect local public key data (just the key blob, no comment)
+        local_keys=()
+        for pub in "${HOME}"/.ssh/*.pub; do
+            [[ -f "${pub}" ]] || continue
+            blob="$(awk '{print $2}' "${pub}")"
+            if [[ -n "${blob}" ]]; then
+                local_keys+=("${blob}")
+            fi
+        done
+
+        gh_unmatched=()
+        while IFS=$'\t' read -r gh_id gh_title gh_key; do
+            [[ -n "${gh_id}" ]] || continue
+            gh_blob="$(printf '%s' "${gh_key}" | awk '{print $2}')"
+            matched=false
+            for local_blob in "${local_keys[@]+"${local_keys[@]}"}"; do
+                if [[ "${gh_blob}" == "${local_blob}" ]]; then
+                    matched=true
+                    break
+                fi
+            done
+            if [[ "${matched}" == false ]]; then
+                gh_unmatched+=("${gh_id}	${gh_title}")
+            fi
+        done < <(gh_list_keys)
+
+        for entry in "${gh_unmatched[@]+"${gh_unmatched[@]}"}"; do
+            gh_id="${entry%%	*}"
+            gh_title="${entry#*	}"
+            printf '  Found unmatched GitHub key: %s (ID: %s)\n' "${gh_title}" "${gh_id}"
+            if [[ "${FORCE}" == true ]]; then
+                gh ssh-key delete "${gh_id}" --yes
+                printf '    🗑  Removed from GitHub\n'
+                ((cleaned++))
+            else
+                if confirm -y "  Remove from GitHub?"; then
+                    gh ssh-key delete "${gh_id}" --yes
+                    printf '    🗑  Removed from GitHub\n'
+                    ((cleaned++))
+                fi
+            fi
+        done
+    fi
+
+    printf '\n'
+    if [[ "${cleaned}" -eq 0 ]]; then
+        printf '✅ Nothing to clean up\n'
+    else
+        printf '✅ Cleaned up %d item(s)\n' "${cleaned}"
+    fi
+    exit 0
+fi
+
+# --- Resolve key name ---
+if [[ -z "${PROFILE}" ]]; then
+    if [[ "${USE_GH}" == true ]]; then
+        PROFILE="id_ed25519"
+    else
+        usage
+        exit 0
+    fi
+fi
+
+KEY="${HOME}/.ssh/${PROFILE}"
+MACHINE="${USER}@$(hostname -s)"
+if [[ "${USE_GH}" == true ]]; then
+    EMAIL="$(git config user.email 2>/dev/null || echo "${MACHINE}")"
+    TITLE="${PROFILE} — ${MACHINE}"
+else
+    EMAIL=""
+    TITLE="${PROFILE} — ${MACHINE}"
+fi
+
+# --- Delete mode ---
+if [[ "${ACTION}" == "delete" ]]; then
+    if [[ ! -f "${KEY}" && ! -f "${KEY}.pub" ]]; then
+        printf '⚠️  No key found at %s\n' "${KEY}"
+        exit 1
+    fi
+
+    if [[ "${FORCE}" == false ]]; then
+        printf 'This will delete:\n'
+        [[ -f "${KEY}" ]] && printf '  %s\n' "${KEY}"
+        [[ -f "${KEY}.pub" ]] && printf '  %s\n' "${KEY}.pub"
+        if ! confirm -y "Continue?"; then
+            exit 0
+        fi
+    fi
+
+    printf '🗑  Removing key pair...\n'
+    ssh-add -d "${KEY}" 2>/dev/null || true
+    rm -f "${KEY}" "${KEY}.pub"
+
+    if [[ "${USE_GH}" == true ]] && command -v gh &>/dev/null && gh ssh-key list &>/dev/null; then
+        if confirm -y "Remove key from GitHub too?"; then
+            gh ssh-key list
+            read -rp "Enter the key ID to delete (or blank to skip): " key_id
+            if [[ -n "${key_id}" ]]; then
+                gh ssh-key delete "${key_id}" --yes
+                printf '✅ Key removed from GitHub\n'
+            fi
+        fi
+    fi
+
+    printf '✅ Key deleted\n'
+    exit 0
+fi
+
+# --- Check existing connection (GitHub only) ---
+if [[ "${USE_GH}" == true && "${FORCE}" == false ]]; then
+    printf '🔍 Checking for existing GitHub SSH connection...\n'
+    if ssh_output="$(ssh -T git@github.com 2>&1 || true)" && [[ "${ssh_output}" == *"successfully authenticated"* ]]; then
+        printf '✅ Already authenticated with GitHub\n'
+        if ! confirm "Generate a new key anyway?"; then
+            exit 0
+        fi
+    fi
+fi
+
+# --- Force: remove existing key ---
+if [[ "${FORCE}" == true && -f "${KEY}" ]]; then
+    printf '🗑  Removing existing key pair...\n'
+    rm -f "${KEY}" "${KEY}.pub"
+    ssh-add -d "${KEY}" 2>/dev/null || true
+fi
+
+# --- Check for existing key file ---
+if [[ -f "${KEY}" || -f "${KEY}.pub" ]]; then
+    printf '⚠️  Key already exists at %s\n' "${KEY}"
+    if ! confirm "Overwrite?"; then
+        exit 0
+    fi
+    rm -f "${KEY}" "${KEY}.pub"
+fi
+
+# --- Generate key ---
+# -v implies -1p
+if [[ -n "${OP_VAULT}" ]]; then
+    USE_OP=true
+fi
+
+if [[ "${USE_OP}" == true ]]; then
+    if ! command -v op &>/dev/null; then
+        printf '❌ 1Password CLI (op) not found\n' >&2
+        exit 1
+    fi
+    if ! op account list &>/dev/null; then
+        printf '❌ Not signed in to 1Password CLI\n' >&2
+        exit 1
+    fi
+    vault="${OP_VAULT:-Private}"
+
+    # Check for existing item with the same title
+    existing_id="$(op item list --categories "SSH Key" --vault "${vault}" --format=json 2>/dev/null \
+        | python3 -c "
+import sys, json
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(0)
+items = json.loads(raw)
+for item in items:
+    if item.get('title') == '${TITLE}':
+        print(item['id'])
+        break
+" 2>/dev/null)"
+
+    if [[ -n "${existing_id}" ]]; then
+        printf '⚠️  1Password already has "%s" in %s vault\n' "${TITLE}" "${vault}"
+        if [[ "${FORCE}" == true ]] || confirm -y "Replace it?"; then
+            op item delete "${existing_id}" --vault "${vault}" 2>/dev/null
+            printf '  🗑  Removed old entry\n'
+        else
+            printf 'Aborted\n'
+            exit 0
+        fi
+    fi
+
+    printf '🔑 Generating SSH key in 1Password (%s)...\n' "${vault}"
+    pubkey="$(op item create \
+        --category "SSH Key" \
+        --title "${TITLE}" \
+        --vault "${vault}" \
+        --ssh-generate-key ed25519 \
+        "machine[text]=${MACHINE}" \
+        --format=json \
+        | python3 -c "import sys,json; d=json.load(sys.stdin); [print(f['value']) for f in d.get('fields',[]) if f.get('id')=='public_key']")"
+    printf '%s\n' "${pubkey}" > "${KEY}.pub"
+    printf '✅ Key generated in 1Password, public key saved to %s.pub\n' "${KEY}"
+else
+    comment="${EMAIL:-${PROFILE}}"
+    printf '🔑 Generating SSH key for %s...\n' "${comment}"
+    ssh-keygen -t ed25519 -C "${comment}" -f "${KEY}"
+    printf '📋 Adding key to ssh-agent...\n'
+    ssh-add "${KEY}"
+fi
+
+# --- Show public key ---
+printf '\n'
+printf '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
+printf 'Your public key:\n'
+printf '\n'
+cat "${KEY}.pub"
+printf '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
+
+# --- GitHub-specific post-setup ---
+if [[ "${USE_GH}" == true ]]; then
+    key_added=false
+    if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+        # Check if gh token has the required scope before attempting
+        gh_check="$(gh ssh-key list 2>&1)"
+        if ! printf '%s' "${gh_check}" | grep -qi "scope\|404"; then
+            printf '\n📤 Adding key to GitHub...\n'
+            if gh ssh-key add "${KEY}.pub" --title "${TITLE}" --type authentication 2>/dev/null; then
+                printf '✅ Key added to GitHub\n'
+                key_added=true
+            else
+                printf '❌ Failed to add key via gh CLI\n'
+            fi
+        fi
+    fi
+
+    if [[ "${key_added}" == false ]]; then
+        if command -v gh &>/dev/null; then
+            printf '\n🔑 Requesting admin:public_key scope...\n'
+            if gh auth refresh -h github.com -s admin:public_key; then
+                printf '\n📤 Adding key to GitHub...\n'
+                if gh ssh-key add "${KEY}.pub" --title "${TITLE}" --type authentication 2>/dev/null; then
+                    printf '✅ Key added to GitHub\n'
+                    key_added=true
+                else
+                    printf '❌ Failed to add key via gh CLI\n'
+                fi
+            fi
+        fi
+
+        if [[ "${key_added}" == false ]]; then
+            printf '\n'
+            printf '👆 Copy the key above and add it at:\n'
+            printf '   https://github.com/settings/keys\n'
+            printf '\n'
+            read -rp "Press enter when done (Ctrl+C to cancel)..."
+        fi
+    fi
+
+    printf '\n'
+    printf '🐈‍⬛ Testing connection to GitHub...\n'
+    if ssh_output="$(ssh -T git@github.com 2>&1 || true)" && [[ "${ssh_output}" == *"successfully authenticated"* ]]; then
+        printf '✅ Success!\n'
+    else
+        printf '❌ Something went wrong. Check your key was added correctly.\n'
+        printf 'https://github.com/settings/keys\n'
+    fi
+fi

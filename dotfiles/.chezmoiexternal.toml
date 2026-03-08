@@ -1,4 +1,0 @@
-[".ssh/github_public_keys"]
-type = "file"
-url = "https://github.com/smithbr.keys"
-refreshPeriod = "168h"

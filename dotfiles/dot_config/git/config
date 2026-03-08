@@ -1,21 +1,27 @@
 # Shared git defaults (machine-specific overrides live in ~/.config/git/config.local)
-[user]
-    name = Brandon Smith
-    email = 1495361+smithbr@users.noreply.github.com
-    username = smithbr
+
 [core]
     ignorecase = false
+
 [include]
     path = ~/.config/git/config.local
+
 [init]
     defaultBranch = main
+
+[difftool]
+    prompt = false
+
 [pull]
     rebase = true
+
 [push]
     autoSetupRemote = true
     default = current
+
 [rebase]
     updateRefs = true
+
 [alias]
     st = status -sb
     co = checkout
@@ -30,5 +36,3 @@
     cleanup = !git branch --no-color | fzf -m | xargs -I {} git branch -D '{}'
     clean-all = !git reset --hard && git clean -xfd
     recent = branch --sort=-committerdate
-[difftool]
-    prompt = false
