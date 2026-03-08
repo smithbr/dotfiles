@@ -18,6 +18,7 @@ brew "node"
 brew "nvm"
 brew "pnpm"
 brew "ripgrep"
+brew "shellcheck"
 brew "wget"
 brew "zsh"
 
