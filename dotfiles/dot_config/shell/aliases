@@ -39,5 +39,8 @@ alias tld="domain-check --preset startup --pretty"
 # git
 alias lg="lazygit"
 
+# brew
+alias brewls="brew list --formula -t"
+
 # generate random token
 alias newtoken="openssl rand -hex 32"
