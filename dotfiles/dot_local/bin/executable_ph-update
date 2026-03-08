@@ -2,7 +2,10 @@
 
 set -euo pipefail
 
-# Run with: sudo /home/pi/.config/pihole/update.sh
+# Self-elevate if not root
+if [[ "${EUID}" -ne 0 ]]; then
+    exec sudo "${0}" "${@}"
+fi
 
 # Update packages
 apt-get update --fix-missing
@@ -15,7 +18,7 @@ apt-get clean
 pihole -up
 
 # Update PADD
-/home/pi/.config/padd/padd.sh -u
+ph-padd -u
 
 # Reboot the system
 # reboot
