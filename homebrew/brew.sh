@@ -5,10 +5,7 @@ set -euo pipefail
 BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${BASEDIR}/scripts/common.sh"
 
-if [[ "${EUID}" -eq 0 ]]; then
-    echo "error: package-managers/homebrew/brew.sh must be run as a non-root user" >&2
-    exit 1
-fi
+require_non_root
 
 case "$OSTYPE" in
     darwin*)
@@ -34,7 +31,7 @@ case "$OSTYPE" in
         brewsbinpath=/home/linuxbrew/.linuxbrew/sbin
         ;;
     *)
-        echo "Unsupported OS: ${OSTYPE}" >&2
+        log_error "Unsupported OS: ${OSTYPE}"
         exit 1
         ;;
 esac
@@ -150,8 +147,6 @@ cask_app_available() {
     local search_dir
     local title_name
     local -a app_names=()
-    local -a token_parts=()
-    local part
 
     case "${pkg_name}" in
         1password)
@@ -337,8 +332,6 @@ prompt_optional_brewfile() {
     local selected_entries
     local selected_entry
     local selected_kind
-    local selected_category
-    local selected_display
     local selected_package_entry
     local display_entry
     local installed_count=0
@@ -485,7 +478,7 @@ prompt_optional_brewfile() {
 
         while IFS= read -r selected_entry || [[ -n "${selected_entry}" ]]; do
             [[ -z "${selected_entry}" ]] && continue
-            IFS=$'\t' read -r selected_kind selected_category selected_display selected_package_entry _ <<< "${selected_entry}"
+            IFS=$'\t' read -r selected_kind _ _ selected_package_entry _ <<< "${selected_entry}"
             [[ "${selected_kind}" != "item" ]] && continue
             printf '%s\n' "${selected_package_entry}" >> "${tmp_optional_brewfile}"
             selected_optional=$((selected_optional + 1))

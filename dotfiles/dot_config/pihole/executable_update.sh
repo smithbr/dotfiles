@@ -1,4 +1,6 @@
-#!/bin/bash -e
+#!/usr/bin/env bash
+
+set -euo pipefail
 
 # Run with: sudo /home/pi/.config/pihole/update.sh
 
