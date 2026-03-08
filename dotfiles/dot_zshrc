@@ -42,18 +42,6 @@ if command -v starship >/dev/null 2>&1; then
     eval "$(starship init zsh)"
 fi
 
-# Smart Tab: accept suggestion if present, otherwise do normal completion
-function __smart_completion() {
-  if [ -n "$POSTDISPLAY" ]; then
-    zle autosuggest-accept
-  else
-    zle expand-or-complete
-  fi
-}
-
-zle -N __smart_completion
-bindkey '\t' __smart_completion
-
 fpath+=~/.zfunc; autoload -Uz compinit; compinit
 
 zstyle ':completion:*' menu select
