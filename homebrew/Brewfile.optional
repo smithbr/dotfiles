@@ -2,39 +2,33 @@
 # Supported entry types: brew, cask, tap, mas.
 
 # Cross-platform
-brew "tailscale"
+cask "1password-cli"
+cask "claude-code"
+cask "codex"
 brew "opencode"
-brew "claude-code"
-brew "1password-cli"
-brew "codex"
+brew "tailscale"
 
-# macOS Only
+# macOS Apps
 if OS.mac?
-    # Terminal and utilities
-    brew "mactop"
-    cask "appcleaner"
-    cask "ghostty"
-    cask "yaak"
-
-    # Productivity
-    cask "utm"
-    cask "github"
-    cask "visual-studio-code"
     cask "1password"
-    cask "tailscale-app"
-    cask "protonvpn"
-    cask "obsidian"
-    cask "docker-desktop"
-
-    # Browsers
-    cask "comet"
-    cask "google-chrome"
-    cask "firefox"
+    cask "appcleaner"
     cask "brave-browser"
-
-    # AI
-    cask "cursor"
     cask "chatgpt"
-    cask "codex-app"
     cask "claude"
+    cask "codex-app"
+    cask "comet"
+    cask "cursor"
+    cask "docker-desktop"
+    cask "firefox"
+    cask "ghostty"
+    cask "github"
+    cask "google-chrome"
+    brew "mactop"
+    cask "obsidian"
+    cask "opencode-desktop"
+    cask "protonvpn"
+    cask "tailscale-app"
+    cask "utm"
+    cask "visual-studio-code"
+    cask "yaak"
 end

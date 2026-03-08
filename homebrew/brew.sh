@@ -321,7 +321,6 @@ prompt_optional_brewfile() {
     local -a optional_categories=()
     local -a optional_installed=()
     local -a optional_names=()
-    local -a installed_names=()
     local raw_line
     local line
     local pkg_type
@@ -342,13 +341,6 @@ prompt_optional_brewfile() {
     local display_entry
     local installed_count=0
     local installable_count=0
-    local installed_two_col_threshold=12
-    local rows
-    local row
-    local col_width
-    local right_idx
-    local left_name
-    local right_name
     local macos_conditional_depth=0
     local palette_theme="${DOTFILES_FZF_THEME:-auto}"
     local bg_code
@@ -367,6 +359,10 @@ prompt_optional_brewfile() {
             else
                 palette_theme="dark"
             fi
+        elif [[ "${os_name}" == "Darwin" ]] && defaults read -g AppleInterfaceStyle &>/dev/null; then
+            palette_theme="dark"
+        elif [[ "${os_name}" == "Darwin" ]]; then
+            palette_theme="light"
         else
             palette_theme="dark"
         fi
@@ -374,9 +370,9 @@ prompt_optional_brewfile() {
 
     if [[ "${palette_theme}" == "light" ]]; then
         color_header=$'\033[1;34m'
-        color_category=$'\033[0;30m'
-        color_package=$'\033[1;30m'
-        fzf_palette='header:4,info:4,prompt:2,pointer:5,marker:1,fg+:0,bg+:254'
+        color_category=$'\033[38;2;110;110;110m'
+        color_package=$'\033[38;2;0;0;0m'
+        fzf_palette='fg:#333333,header:4,info:4,prompt:2,pointer:5,marker:1,fg+:#000000,bg+:#e8e8e8'
     else
         color_header=$'\033[1;36m'
         color_category=$'\033[2;37m'
@@ -434,7 +430,6 @@ prompt_optional_brewfile() {
         optional_names+=("${pkg_name}")
         if entry_is_already_installed "${pkg_type}" "${pkg_name}"; then
             optional_installed+=("1")
-            installed_names+=("${pkg_name}")
             installed_count=$((installed_count + 1))
         else
             optional_installed+=("0")
@@ -456,59 +451,31 @@ prompt_optional_brewfile() {
             {
                 last_category=""
                 for idx in "${!optional_entries[@]}"; do
-                    if [[ "${optional_installed[${idx}]}" == "1" ]]; then
-                        continue
-                    fi
                     entry_category="${optional_categories[${idx}]}"
                     entry="${optional_entries[${idx}]}"
                     display_entry="${optional_names[${idx}]}"
 
                     if [[ "${entry_category}" != "${last_category}" ]]; then
-                        printf 'header\t%s\t%s---------- %s ----------%s\t\n' "${entry_category}" "${color_header}" "${entry_category}" "${color_reset}"
+                        if [[ -n "${last_category}" ]]; then
+                            printf 'meta\t_spacer\t \t\n'
+                        fi
+                        printf 'header\t%s\t%s%s%s\t\n' "${entry_category}" "${color_header}" "${entry_category}" "${color_reset}"
                         last_category="${entry_category}"
                     fi
 
-                    printf 'item\t%s\t  %s%s%s\t%s\t%s\n' \
-                        "${entry_category}" \
-                        "${color_package}" "${display_entry}" "${color_reset}" \
-                        "${entry}" \
-                        "${optional_installed[${idx}]}"
-                done
-
-                if [[ "${installed_count}" -gt 0 ]]; then
-                    printf 'meta\tinstalled\t\n\t\t\n'
-                    printf 'meta\tinstalled\t%sAlready Installed%s\t\t\n' "${color_header}" "${color_reset}"
-                    if [[ "${installed_count}" -gt 0 ]]; then
-                        if [[ "${installed_count}" -gt "${installed_two_col_threshold}" ]]; then
-                            rows=$(((installed_count + 1) / 2))
-                            col_width=0
-                            for ((row = 0; row < rows; row++)); do
-                                left_name="${installed_names[${row}]}"
-                                if [[ "${#left_name}" -gt "${col_width}" ]]; then
-                                    col_width="${#left_name}"
-                                fi
-                            done
-                            if [[ "${col_width}" -gt 36 ]]; then
-                                col_width=36
-                            fi
-                            for ((row = 0; row < rows; row++)); do
-                                left_name="${installed_names[${row}]}"
-                                right_idx=$((row + rows))
-                                right_name=""
-                                if [[ "${right_idx}" -lt "${installed_count}" ]]; then
-                                    right_name="${installed_names[${right_idx}]}"
-                                fi
-                                printf 'meta\tinstalled\t  %s%-*s%s  %s%s%s\t\t\n' \
-                                    "${color_category}" "${col_width}" "${left_name}" "${color_reset}" \
-                                    "${color_category}" "${right_name}" "${color_reset}"
-                            done
-                        else
-                            for left_name in "${installed_names[@]}"; do
-                                printf 'meta\tinstalled\t  %s%s%s\t\t\n' "${color_category}" "${left_name}" "${color_reset}"
-                            done
-                        fi
+                    if [[ "${optional_installed[${idx}]}" == "1" ]]; then
+                        printf 'meta\t%s\t%s✓ %s%s\t%s\t1\n' \
+                            "${entry_category}" \
+                            "${color_category}" "${display_entry}" "${color_reset}" \
+                            "${entry}"
+                    else
+                        printf 'item\t%s\t  %s%s%s\t%s\t%s\n' \
+                            "${entry_category}" \
+                            "${color_package}" "${display_entry}" "${color_reset}" \
+                            "${entry}" \
+                            "${optional_installed[${idx}]}"
                     fi
-                fi
+                done
             } | fzf --multi --marker="* " --pointer=" " \
                 --ansi \
                 --delimiter=$'\t' \
