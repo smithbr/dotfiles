@@ -142,15 +142,15 @@ test_network() {
 test_dns() {
     header "Tailscale DNS resolution"
 
-    # First verify 100.100.100.100 is actually a Tailscale address on this machine
-    local ts_ip
-    ts_ip=$(tailscale ip -4 2>/dev/null) || true
-    if [[ -z "${ts_ip}" ]]; then
-        info "No Tailscale IP — skipping DNS resolver check"
+    # Only test if MagicDNS is enabled — otherwise 100.100.100.100 may be
+    # answered by another local resolver (e.g. Pi-hole) giving false positives
+    local accept_dns
+    accept_dns=$(tailscale debug prefs 2>/dev/null | grep -o '"CorpDNS"\s*:\s*[a-z]*' | awk -F: '{gsub(/[[:space:]]/, "", $2); print $2}') || true
+    if [[ "${accept_dns}" != "true" ]]; then
+        info "MagicDNS is disabled — skipping DNS resolver check"
         return
     fi
 
-    # Query a Tailscale-specific name (MagicDNS) to confirm the resolver is Tailscale's
     local self_hostname result
     self_hostname=$(tailscale status --json 2>/dev/null | grep -o '"DNSName"\s*:\s*"[^"]*"' | head -1 | cut -d'"' -f4 | sed 's/\.$//')
 
