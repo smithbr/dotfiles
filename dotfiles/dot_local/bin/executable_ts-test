@@ -178,8 +178,11 @@ test_exit_node() {
         return
     fi
 
-    local advertises_exit
-    advertises_exit=$(printf '%s' "${prefs}" | grep -o '"AdvertisesExitNode"\s*:\s*[a-z]*' | awk -F: '{gsub(/[[:space:]]/, "", $2); print $2}') || true
+    # Exit node = advertises 0.0.0.0/0 and ::/0
+    local advertises_exit=false
+    if printf '%s' "${prefs}" | grep -q '"0\.0\.0\.0/0"'; then
+        advertises_exit=true
+    fi
 
     if [[ "${advertises_exit}" == "true" ]]; then
         pass "This node advertises as an exit node"
