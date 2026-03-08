@@ -99,18 +99,18 @@ fi
 zsh_path="$(command -v zsh || true)"
 if [[ -n "${zsh_path}" ]]; then
     if ! grep -qxF "${zsh_path}" /etc/shells; then
-        echo "adding $zsh_path to /etc/shells"
+        log_info "Adding ${zsh_path} to /etc/shells"
         if command -v sudo >/dev/null 2>&1; then
-            echo "$zsh_path" | sudo tee -a /etc/shells >/dev/null
+            echo "${zsh_path}" | sudo tee -a /etc/shells >/dev/null
         else
             log_warn "sudo not found; could not update /etc/shells"
         fi
     fi
     if [[ "${SHELL}" != "${zsh_path}" ]]; then
-        chsh -s "$zsh_path"
-        echo "default shell changed to $zsh_path"
+        chsh -s "${zsh_path}"
+        log_info "Default shell changed to ${zsh_path}"
     fi
-    echo 'run "rl" (or open a new terminal) to reload your shell'
+    log_info 'Run "rl" (or open a new terminal) to reload your shell'
 fi
 
 printf "\nDone.\n"
