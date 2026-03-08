@@ -524,8 +524,5 @@ if brew list --cask 2>/dev/null | grep -qx tailscale-app; then
         brew services stop tailscale 2>/dev/null || true
         brew uninstall tailscale
     fi
-elif brew list --formula 2>/dev/null | grep -qx tailscale; then
-    log_info "Starting tailscale service"
-    brew services start tailscale 2>/dev/null || true
 fi
 
