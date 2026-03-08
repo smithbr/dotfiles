@@ -516,3 +516,16 @@ if [[ -f "${OPTIONAL_BREWFILE}" ]]; then
     prompt_optional_brewfile "${OPTIONAL_BREWFILE}" "optional Homebrew package"
 fi
 
+# Tailscale: the app (cask) and the formula run separate daemons that conflict.
+# If the cask is installed, remove the formula to avoid issues.
+if brew list --cask 2>/dev/null | grep -qx tailscale-app; then
+    if brew list --formula 2>/dev/null | grep -qx tailscale; then
+        log_info "Removing tailscale formula (conflicts with tailscale-app)"
+        brew services stop tailscale 2>/dev/null || true
+        brew uninstall tailscale
+    fi
+elif brew list --formula 2>/dev/null | grep -qx tailscale; then
+    log_info "Starting tailscale service"
+    brew services start tailscale 2>/dev/null || true
+fi
+
