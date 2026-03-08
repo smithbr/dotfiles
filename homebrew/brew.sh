@@ -504,6 +504,14 @@ prompt_optional_brewfile() {
     fi
 
     if [[ "${selected_optional}" -gt 0 ]]; then
+        # Tailscale: the cask and formula run separate daemons that conflict.
+        # If both were selected, drop the formula — the cask is sufficient.
+        if [[ "$OSTYPE" == darwin* ]] && grep -q '^cask "tailscale-app"' "${tmp_optional_brewfile}" \
+                     && grep -q '^brew "tailscale"' "${tmp_optional_brewfile}"; then
+            log_info "Removing tailscale formula from selection (conflicts with tailscale-app cask)"
+            sed -i '' '/^brew "tailscale"$/d' "${tmp_optional_brewfile}"
+            selected_optional=$((selected_optional - 1))
+        fi
         log_info "Installing optional Homebrew packages"
         brew bundle install --file="${tmp_optional_brewfile}"
     elif [[ "${installable_count}" -gt 0 ]]; then
@@ -516,13 +524,12 @@ if [[ -f "${OPTIONAL_BREWFILE}" ]]; then
     prompt_optional_brewfile "${OPTIONAL_BREWFILE}" "optional Homebrew package"
 fi
 
-# Tailscale: the app (cask) and the formula run separate daemons that conflict.
-# If the cask is installed, remove the formula to avoid issues.
-if brew list --cask 2>/dev/null | grep -qx tailscale-app; then
-    if brew list --formula 2>/dev/null | grep -qx tailscale; then
-        log_info "Removing tailscale formula (conflicts with tailscale-app)"
-        brew services stop tailscale 2>/dev/null || true
-        brew uninstall tailscale
-    fi
+# Tailscale: the cask and formula run separate daemons that conflict.
+# The selection phase already prevents co-installation, but handle the case
+# where the formula was installed in a previous run.
+if _brew_has_cask tailscale-app && _brew_has_formula tailscale; then
+    log_info "Removing tailscale formula (conflicts with tailscale-app cask)"
+    brew services stop tailscale 2>/dev/null || true
+    brew uninstall tailscale
 fi
 

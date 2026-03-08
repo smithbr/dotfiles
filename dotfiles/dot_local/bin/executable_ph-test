@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-#  ph-test — Quick diagnostics for Unbound DNS
+#  ph-test — Quick diagnostics for Pi-hole + Unbound DNS
 # ============================================================
 
 set -euo pipefail
@@ -14,6 +14,9 @@ DNS_SERVER="${1:-127.0.0.1}"
 GOOD_DOMAIN="google.com"
 DNSSEC_FAIL_DOMAIN="dnssec-failed.org"
 BLOCKED_DOMAIN="doubleclick.net"
+UNBOUND_CONF=$(unbound-checkconf -o config-file 2>/dev/null || echo "/etc/unbound/unbound.conf")
+UNBOUND_DIR=$(dirname "${UNBOUND_CONF}")
+PIHOLE_SETUPVARS=$(find /etc -name "setupVars.conf" -path "*/pihole/*" 2>/dev/null | head -1)
 
 # ── Colours ─────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -60,7 +63,7 @@ check_deps() {
     fi
 }
 
-# ── 1. Config check ──────────────────────────────────────────
+# ── 2. Config check ──────────────────────────────────────────
 test_config() {
     header "Config syntax check"
     if sudo unbound-checkconf 2>&1 | grep -q "no errors"; then
@@ -68,13 +71,13 @@ test_config() {
     else
         fail "unbound-checkconf reported issues:"
         sudo unbound-checkconf
-        fix "Review the errors above in /etc/unbound/unbound.conf (or included files)"
+        fix "Review the errors above in ${UNBOUND_CONF} (or included files)"
         fix "Check for typos, duplicate keys, or incorrect indentation"
-        fix "Validate with: sudo unbound-checkconf /etc/unbound/unbound.conf"
+        fix "Validate with: sudo unbound-checkconf ${UNBOUND_CONF}"
     fi
 }
 
-# ── 2. Service status ────────────────────────────────────────
+# ── 3. Service status ────────────────────────────────────────
 test_status() {
     header "Service status"
     if sudo unbound-control status 2>&1 | grep -q "is running"; then
@@ -87,7 +90,7 @@ test_status() {
     fi
 }
 
-# ── 3. Listening on expected port ───────────────────────────
+# ── 4. Listening on expected port ───────────────────────────
 test_listening() {
     header "Network / listening check"
     if sudo ss -tulnp 2>/dev/null | grep -q "unbound\|:53"; then
@@ -97,14 +100,14 @@ test_listening() {
         done
     else
         fail "Nothing detected on port 53 — Unbound may not be bound correctly"
-        fix "Ensure unbound.conf has: interface: 0.0.0.0 (or 127.0.0.1) and port: 53"
+        fix "Ensure ${UNBOUND_CONF} has: interface: 0.0.0.0 (or 127.0.0.1) and port: 53"
         fix "Check if another DNS service is blocking port 53: sudo ss -tulnp | grep :53"
         fix "If systemd-resolved is conflicting: sudo systemctl disable --now systemd-resolved"
         fix "After config changes: sudo systemctl restart unbound"
     fi
 }
 
-# ── 4. Basic resolution ──────────────────────────────────────
+# ── 5. Basic resolution ──────────────────────────────────────
 test_basic_resolution() {
     header "Basic resolution  (${GOOD_DOMAIN} @ ${DNS_SERVER})"
     local result
@@ -116,13 +119,13 @@ test_basic_resolution() {
         fail "Could not resolve ${GOOD_DOMAIN}"
         fix "Verify Unbound is running: sudo unbound-control status"
         fix "Check upstream connectivity: dig @1.1.1.1 ${GOOD_DOMAIN} +short"
-        fix "Ensure root hints are present: ls -la /etc/unbound/root.hints"
-        fix "Update root hints: wget -O /etc/unbound/root.hints https://www.internic.net/domain/named.root"
+        fix "Ensure root hints are present: ls -la ${UNBOUND_DIR}/root.hints"
+        fix "Update root hints: wget -O ${UNBOUND_DIR}/root.hints https://www.internic.net/domain/named.root"
         fix "Check for firewall rules blocking outbound DNS (port 53)"
     fi
 }
 
-# ── 5. Caching (latency comparison) ─────────────────────────
+# ── 6. Caching (latency comparison) ─────────────────────────
 test_caching() {
     header "Cache speed test  (${GOOD_DOMAIN})"
     local t1 t2
@@ -135,18 +138,18 @@ test_caching() {
     fi
     info "First query:  ${t1} ms"
     info "Second query: ${t2} ms"
-    if [[ "${t2}" -lt "${t1}" ]]; then
+    if [[ "${t1}" -eq 0 || "${t2}" -eq 0 ]]; then
+        pass "Cache is working (0 ms query — served from cache)"
+    elif [[ "${t2}" -lt "${t1}" ]]; then
         pass "Cache is working (second query faster)"
-    elif [[ "${t2}" -eq 0 ]]; then
-        pass "Cache is working (second query: 0 ms)"
     else
         info "Cache result inconclusive (timing may vary on fast networks)"
-        fix "Check cache settings in unbound.conf: msg-cache-size, rrset-cache-size"
+        fix "Check cache settings: grep -E 'msg-cache-size|rrset-cache-size' ${UNBOUND_CONF}"
         fix "Verify cache content: sudo unbound-control dump_cache | head -20"
     fi
 }
 
-# ── 6. DNSSEC validation ─────────────────────────────────────
+# ── 7. DNSSEC validation ─────────────────────────────────────
 test_dnssec() {
     header "DNSSEC validation"
 
@@ -157,42 +160,224 @@ test_dnssec() {
         pass "DNSSEC working — ${DNSSEC_FAIL_DOMAIN} correctly returned SERVFAIL"
     else
         fail "Expected SERVFAIL for ${DNSSEC_FAIL_DOMAIN}, got: ${status:-no response}"
-        fix "Ensure unbound.conf has: module-config: \"validator iterator\""
+        fix "Ensure ${UNBOUND_CONF} has: module-config: \"validator iterator\""
         fix "Set val-permissive-mode: no  (strict DNSSEC enforcement)"
-        fix "Verify trust anchor exists: ls -la /etc/unbound/root.key"
-        fix "Regenerate trust anchor: sudo unbound-anchor -a /etc/unbound/root.key"
+        fix "Verify trust anchor exists: ls -la ${UNBOUND_DIR}/root.key"
+        fix "Regenerate trust anchor: sudo unbound-anchor -a ${UNBOUND_DIR}/root.key"
         fix "After changes: sudo systemctl restart unbound"
     fi
 
     # Good domain should carry the AD (Authenticated Data) flag
+    # Pi-hole (dnsmasq/FTL) strips the AD flag, so query Unbound directly
+    local ad_target="${DNS_SERVER}" ad_port=""
+    if has_pihole; then
+        ad_target="127.0.0.1"
+        ad_port="-p 5335"
+    fi
     local ad_flag
-    ad_flag=$(dig @"${DNS_SERVER}" "${GOOD_DOMAIN}" +dnssec 2>/dev/null | awk '/flags:/ {print}')
+    ad_flag=$(dig @"${ad_target}" ${ad_port} "${GOOD_DOMAIN}" +dnssec 2>/dev/null | awk '/flags:/ {print}')
     if printf '%s' "${ad_flag}" | grep -q " ad"; then
         pass "AD flag present on ${GOOD_DOMAIN} — DNSSEC authenticated"
     else
-        info "AD flag not set for ${GOOD_DOMAIN} (may be normal depending on trust anchor config)"
+        fail "AD flag not set for ${GOOD_DOMAIN}"
+        fix "Verify trust anchor: sudo unbound-anchor -a ${UNBOUND_DIR}/root.key"
+        fix "Ensure ${UNBOUND_CONF} has: val-permissive-mode: no"
+        fix "Restart after changes: sudo systemctl restart unbound"
     fi
 }
 
-# ── 7. Blocklist check ───────────────────────────────────────
+has_pihole() {
+    command -v pihole &>/dev/null || pgrep -x pihole-FTL &>/dev/null
+}
+
+# ── Setup & security audit ──────────────────────────────────
+check_user_group() {
+    local label="${1}" user="${2}" group="${3}"
+    if id "${user}" &>/dev/null; then
+        pass "${label} user '${user}' exists"
+    else
+        fail "${label} user '${user}' does not exist"
+        fix "sudo useradd -r -s /usr/sbin/nologin ${user}"
+    fi
+    if getent group "${group}" &>/dev/null; then
+        pass "${label} group '${group}' exists"
+    else
+        fail "${label} group '${group}' does not exist"
+        fix "sudo groupadd -r ${group}"
+    fi
+}
+
+check_service_user() {
+    local label="${1}" service="${2}" expected_user="${3}"
+    local actual_user
+    actual_user=$(ps -eo user,comm --no-headers 2>/dev/null \
+        | awk -v svc="${service}" '$2 == svc {print $1; exit}')
+    if [[ -z "${actual_user}" ]]; then
+        info "${label} process '${service}' not found (may not be running)"
+    elif [[ "${actual_user}" == "${expected_user}" ]]; then
+        pass "${label} running as '${expected_user}'"
+    else
+        fail "${label} running as '${actual_user}' (expected '${expected_user}')"
+        fix "Check systemd unit: systemctl cat ${service}"
+    fi
+}
+
+check_ownership() {
+    local path="${1}" expected_owner="${2}" label="${3}"
+    if [[ ! -e "${path}" ]]; then
+        info "${label}: ${path} not found — skipping"
+        return
+    fi
+    local actual_owner
+    actual_owner=$(stat -c '%U:%G' "${path}" 2>/dev/null)
+    if [[ "${actual_owner}" == "${expected_owner}" ]]; then
+        pass "${label} ownership ${actual_owner}"
+    else
+        fail "${label} owned by ${actual_owner} (expected ${expected_owner})"
+        fix "sudo chown ${expected_owner} ${path}"
+    fi
+}
+
+check_permissions() {
+    local path="${1}" expected_perms="${2}" label="${3}"
+    if [[ ! -e "${path}" ]]; then
+        return
+    fi
+    local actual_perms
+    actual_perms=$(stat -c '%a' "${path}" 2>/dev/null)
+    if [[ "${actual_perms}" == "${expected_perms}" ]]; then
+        pass "${label} permissions ${actual_perms}"
+    else
+        fail "${label} permissions ${actual_perms} (expected ${expected_perms})"
+        fix "sudo chmod ${expected_perms} ${path}"
+    fi
+}
+
+check_systemd_enabled() {
+    local label="${1}" unit="${2}"
+    if systemctl is-enabled "${unit}" &>/dev/null; then
+        pass "${label} enabled on boot"
+    else
+        fail "${label} not enabled on boot"
+        fix "sudo systemctl enable ${unit}"
+    fi
+}
+
+test_setup_security() {
+    header "Setup & security audit"
+
+    # ── Unbound ──
+    info "— Unbound —"
+    check_user_group "Unbound" "unbound" "unbound"
+    check_service_user "Unbound" "unbound" "unbound"
+    check_systemd_enabled "Unbound" "unbound"
+    check_ownership "${UNBOUND_CONF}" "root:root" "${UNBOUND_CONF}"
+    check_ownership "${UNBOUND_DIR}" "root:root" "${UNBOUND_DIR}"
+
+    # Unbound should listen only on loopback
+    local ub_iface
+    ub_iface=$(grep -E '^\s*interface:' "${UNBOUND_CONF}" 2>/dev/null | head -1 | awk '{print $2}')
+    if [[ "${ub_iface}" == "127.0.0.1" || "${ub_iface}" == "::1" ]]; then
+        pass "Unbound listens on loopback only (${ub_iface})"
+    elif [[ -n "${ub_iface}" ]]; then
+        fail "Unbound interface is ${ub_iface} (expected 127.0.0.1)"
+        fix "Set interface: 127.0.0.1 in ${UNBOUND_CONF}"
+    else
+        info "Could not determine Unbound interface from ${UNBOUND_CONF}"
+    fi
+
+    # Unbound hardening flags
+    local key val actual
+    for setting in "harden-glue: yes" "harden-dnssec-stripped: yes" "hide-identity: yes" "hide-version: yes"; do
+        key="${setting%%:*}" val="${setting#*: }"
+        actual=$(grep -E "^\s*${key}:" "${UNBOUND_CONF}" 2>/dev/null | tail -1 | awk '{print $2}')
+        if [[ "${actual}" == "${val}" ]]; then
+            pass "Unbound ${key}: ${actual}"
+        elif [[ -z "${actual}" ]]; then
+            info "Unbound ${key} not set in ${UNBOUND_CONF}"
+            fix "Add to server: section in ${UNBOUND_CONF}: ${setting}"
+        else
+            fail "Unbound ${key}: ${actual} (expected ${val})"
+            fix "Set ${setting} in ${UNBOUND_CONF}"
+        fi
+    done
+
+    # Check unbound-resolvconf is disabled (conflicts with Pi-hole)
+    if has_pihole && systemctl is-active unbound-resolvconf &>/dev/null; then
+        fail "unbound-resolvconf is active (conflicts with Pi-hole)"
+        fix "sudo systemctl disable --now unbound-resolvconf.service"
+    fi
+
+    # ── Pi-hole ──
+    if has_pihole; then
+        info "— Pi-hole —"
+        check_user_group "Pi-hole" "pihole" "pihole"
+        check_service_user "Pi-hole" "pihole-FTL" "pihole"
+        check_systemd_enabled "Pi-hole" "pihole-FTL"
+
+        if [[ -n "${PIHOLE_SETUPVARS}" ]]; then
+            local pihole_dir
+            pihole_dir=$(dirname "${PIHOLE_SETUPVARS}")
+            check_ownership "${pihole_dir}" "pihole:pihole" "${pihole_dir}"
+            check_permissions "${pihole_dir}" "755" "${pihole_dir}"
+        else
+            info "Could not locate Pi-hole config directory — skipping ownership checks"
+            fix "find /etc -name 'setupVars.conf' -path '*/pihole/*'"
+        fi
+
+        local pihole_log_dir
+        pihole_log_dir=$(find /var/log -maxdepth 1 -type d -name "pihole" 2>/dev/null | head -1)
+        if [[ -n "${pihole_log_dir}" ]]; then
+            check_ownership "${pihole_log_dir}" "pihole:pihole" "${pihole_log_dir}"
+        fi
+
+        if [[ -n "${PIHOLE_SETUPVARS}" ]]; then
+            # Pi-hole should NOT have its own DNSSEC enabled when Unbound handles it
+            local pihole_dnssec
+            pihole_dnssec=$(grep -i 'DNSSEC' "${PIHOLE_SETUPVARS}" 2>/dev/null | grep -i 'true' || true)
+            if [[ -n "${pihole_dnssec}" ]]; then
+                fail "Pi-hole DNSSEC is enabled (Unbound already handles DNSSEC)"
+                fix "Disable DNSSEC in Pi-hole web UI: Settings > DNS > uncheck DNSSEC"
+            else
+                pass "Pi-hole DNSSEC correctly deferred to Unbound"
+            fi
+
+            # Pi-hole upstream should point to Unbound
+            local upstream
+            upstream=$(grep -i 'PIHOLE_DNS' "${PIHOLE_SETUPVARS}" 2>/dev/null | head -1 | cut -d= -f2)
+            if [[ "${upstream}" == *"127.0.0.1#5335"* ]]; then
+                pass "Pi-hole upstream points to Unbound (${upstream})"
+            elif [[ -n "${upstream}" ]]; then
+                info "Pi-hole upstream: ${upstream} (expected 127.0.0.1#5335)"
+                fix "Set Custom DNS in Pi-hole to 127.0.0.1#5335"
+            fi
+        fi
+    fi
+}
+
 test_blocklist() {
     header "Blocklist / RPZ check  (${BLOCKED_DOMAIN})"
     local result rcode
     result=$(dig @"${DNS_SERVER}" "${BLOCKED_DOMAIN}" +short 2>/dev/null)
     rcode=$(dig @"${DNS_SERVER}" "${BLOCKED_DOMAIN}" 2>/dev/null | awk '/status:/ {print $6}' | tr -d ',')
-    if [[ "${rcode}" == "NXDOMAIN" || "${result}" == "0.0.0.0" || -z "${result}" ]]; then
+    if [[ "${rcode}" == "NXDOMAIN" || "${result}" == "0.0.0.0" || "${result}" == "::" || -z "${result}" ]]; then
         pass "${BLOCKED_DOMAIN} appears to be blocked (${rcode:-no answer})"
     else
-        info "${BLOCKED_DOMAIN} resolved to: ${result}"
-        info "If you expected this domain to be blocked, check your blocklist config"
-        fix "Verify RPZ zone is loaded: sudo unbound-control list_local_zones | grep rpz"
-        fix "Check blocklist file path in unbound.conf under rpz: or local-zone:"
-        fix "If using Pi-hole for blocking, ensure queries flow through Pi-hole first"
-        fix "Reload blocklist: sudo unbound-control reload"
+        info "${BLOCKED_DOMAIN} resolved to: ${result} (expected blocked)"
+        if has_pihole; then
+            fix "Check Pi-hole gravity: pihole -q ${BLOCKED_DOMAIN}"
+            fix "Update gravity database: pihole -g"
+            fix "Add to blacklist: pihole -b ${BLOCKED_DOMAIN}"
+            fix "Verify Pi-hole upstream is Unbound: grep -i 'pihole_dns' ${PIHOLE_SETUPVARS}"
+        else
+            fix "Verify RPZ zone is loaded: sudo unbound-control list_local_zones | grep rpz"
+            fix "Check blocklist config: grep -E 'rpz|local-zone' ${UNBOUND_CONF}"
+            fix "Reload blocklist: sudo unbound-control reload"
+        fi
     fi
 }
 
-# ── 8. Stats snapshot ───────────────────────────────────────
+# ── 9. Stats snapshot ───────────────────────────────────────
 test_stats() {
     header "Unbound stats snapshot"
     local stats
@@ -206,7 +391,7 @@ test_stats() {
         done
     else
         fail "Could not retrieve stats (is unbound-control configured?)"
-        fix "Enable remote control in unbound.conf:"
+        fix "Enable remote control in ${UNBOUND_CONF}:"
         fix "  remote-control:"
         fix "    control-enable: yes"
         fix "    control-interface: 127.0.0.1"
@@ -218,12 +403,13 @@ test_stats() {
 # ── Main ─────────────────────────────────────────────────────
 main() {
     printf '\n%b╔══════════════════════════════════════╗%b\n' "${BOLD}" "${RESET}"
-    printf '║       Unbound DNS Test Suite         ║\n'
+    printf '║    Pi-hole + Unbound Test Suite       ║\n'
     printf '%b╚══════════════════════════════════════╝%b\n' "${BOLD}" "${RESET}"
     printf '  DNS server under test: %b%s%b\n' "${CYAN}" "${DNS_SERVER}" "${RESET}"
     printf '  Usage: %s [dns-server-ip]\n' "${0}"
 
     check_deps
+    test_setup_security
     test_config
     test_status
     test_listening
