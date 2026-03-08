@@ -269,6 +269,9 @@ test_peers() {
     header "Tailscale peer connectivity"
     local peer_count=0 reachable=0 unreachable=0
 
+    local self_ip
+    self_ip=$(tailscale ip -4 2>/dev/null) || true
+
     while read -r peer_ip peer_name; do
         [[ -z "${peer_ip}" ]] && continue
         ((peer_count++))
@@ -280,7 +283,7 @@ test_peers() {
             ((unreachable++))
             warn "Peer unreachable: ${peer_name} (${peer_ip})"
         fi
-    done < <(tailscale status 2>/dev/null | awk '/^100\./ {print $1, $2}')
+    done < <(tailscale status 2>/dev/null | awk -v self="${self_ip}" '/^100\./ && $1 != self {print $1, $2}')
 
     if [[ "${peer_count}" -eq 0 ]]; then
         info "No peers found in tailnet"
