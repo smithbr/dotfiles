@@ -10,27 +10,34 @@ if [[ "${EUID}" -eq 0 ]]; then
     exit 1
 fi
 
-os_name="$(uname -s)"
-
-if [[ "${os_name}" == "Darwin" ]]; then
-    brewplatform=Homebrew
-    brewpath=homebrew
-    if [[ "$(uname -m)" == "arm64" ]]; then
-        brewbinpath=/opt/homebrew/bin
-        brewsbinpath=/opt/homebrew/sbin
-    else
-        brewbinpath=/usr/local/bin
-        brewsbinpath=/usr/local/sbin
-    fi
-elif [[ "${os_name}" == "Linux" ]]; then
-    brewplatform=Homebrew
-    brewpath=homebrew
-    brewbinpath=/home/linuxbrew/.linuxbrew/bin
-    brewsbinpath=/home/linuxbrew/.linuxbrew/sbin
-else
-    echo "Unsupported OS: ${os_name}" >&2
-    exit 1
-fi
+case "$OSTYPE" in
+    darwin*)
+        os_name="Darwin"
+        brewplatform=Homebrew
+        brewpath=homebrew
+        case "$(uname -m)" in
+            arm64)
+                brewbinpath=/opt/homebrew/bin
+                brewsbinpath=/opt/homebrew/sbin
+                ;;
+            *)
+                brewbinpath=/usr/local/bin
+                brewsbinpath=/usr/local/sbin
+                ;;
+        esac
+        ;;
+    linux*)
+        os_name="Linux"
+        brewplatform=Homebrew
+        brewpath=homebrew
+        brewbinpath=/home/linuxbrew/.linuxbrew/bin
+        brewsbinpath=/home/linuxbrew/.linuxbrew/sbin
+        ;;
+    *)
+        echo "Unsupported OS: ${OSTYPE}" >&2
+        exit 1
+        ;;
+esac
 
 export PATH="${brewbinpath}:${brewsbinpath}:${PATH}"
 
