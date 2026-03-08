@@ -13,6 +13,7 @@ Review code for common security vulnerabilities and issues.
 ### Injection Vulnerabilities
 - SQL injection (unsanitized input in queries)
 - Command injection (shell commands with user input)
+- Remote code execution (`curl | bash` and similar patterns — flag unless using well-known upstream URLs over HTTPS)
 - XSS (unescaped output in HTML/templates)
 - Path traversal (user input in file paths)
 
