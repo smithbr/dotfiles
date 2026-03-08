@@ -227,8 +227,7 @@ test_exit_node() {
             if [[ "${has_masq}" == "true" ]]; then
                 pass "NAT masquerade rules detected"
             else
-                info "No NAT masquerade rules detected — Tailscale may handle this automatically"
-                fix "If traffic isn't routing, check: sudo iptables -t nat -L -v"
+                info "No static NAT masquerade rules — Tailscale manages its own dynamically"
             fi
         fi
 
@@ -290,6 +289,8 @@ test_peers() {
 
     if [[ "${peer_count}" -eq 0 ]]; then
         info "No peers found in tailnet"
+    elif [[ "${reachable}" -eq 0 ]]; then
+        fail "No peers reachable (0 of ${peer_count})"
     else
         info "Peers: ${reachable} reachable, ${unreachable} unreachable out of ${peer_count}"
     fi
