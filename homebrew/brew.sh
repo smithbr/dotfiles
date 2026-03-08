@@ -392,15 +392,12 @@ prompt_optional_brewfile() {
             fi
             continue
         fi
-        if [[ "${line}" == "if OS.mac?" ]]; then
-            macos_conditional_depth=$((macos_conditional_depth + 1))
-            continue
-        fi
-        if [[ "${line}" == "end" && "${macos_conditional_depth}" -gt 0 ]]; then
-            macos_conditional_depth=$((macos_conditional_depth - 1))
-            continue
-        fi
-        if [[ "${macos_conditional_depth}" -gt 0 && "${os_name}" != "Darwin" ]]; then
+        if [[ "${line}" == "if OS.mac?" || ( "${line}" == "end" && "${macos_conditional_depth}" -gt 0 ) ]]; then
+            if [[ "${line}" == "if OS.mac?" ]]; then
+                macos_conditional_depth=$((macos_conditional_depth + 1))
+            else
+                macos_conditional_depth=$((macos_conditional_depth - 1))
+            fi
             continue
         fi
 
