@@ -192,8 +192,8 @@ test_exit_node() {
         if [[ "${IS_LINUX}" == "true" ]]; then
             header "Exit node: IP forwarding"
             local ipv4_fwd ipv6_fwd
-            ipv4_fwd=$(sysctl -n net.ipv4.ip_forward 2>/dev/null) || true
-            ipv6_fwd=$(sysctl -n net.ipv6.conf.all.forwarding 2>/dev/null) || true
+            ipv4_fwd=$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null) || true
+            ipv6_fwd=$(cat /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null) || true
 
             if [[ "${ipv4_fwd}" == "1" ]]; then
                 pass "IPv4 forwarding is enabled"
@@ -277,13 +277,13 @@ test_peers() {
 
     while read -r peer_ip peer_name; do
         [[ -z "${peer_ip}" ]] && continue
-        ((peer_count++))
+        peer_count=$((peer_count + 1))
 
         if tailscale ping --timeout=3s --c=1 "${peer_ip}" &>/dev/null; then
             pass "Peer reachable: ${peer_name} (${peer_ip})"
-            ((reachable++))
+            reachable=$((reachable + 1))
         else
-            ((unreachable++))
+            unreachable=$((unreachable + 1))
             warn "Peer unreachable: ${peer_name} (${peer_ip})"
         fi
     done < <(tailscale status 2>/dev/null | awk -v self="${self_ip}" '/^100\./ && $1 != self {print $1, $2}')
@@ -307,11 +307,11 @@ print_summary() {
     for result in "${SUMMARY_RESULTS[@]}"; do
         printf '  %b\n' "${result}"
         if printf '%s' "${result}" | grep -q "PASS"; then
-            ((passes++))
+            passes=$((passes + 1))
         elif printf '%s' "${result}" | grep -q "WARN"; then
-            ((warnings++))
+            warnings=$((warnings + 1))
         else
-            ((failures++))
+            failures=$((failures + 1))
         fi
     done
 

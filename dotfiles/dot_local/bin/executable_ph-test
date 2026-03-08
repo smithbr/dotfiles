@@ -248,9 +248,9 @@ print_summary() {
     for result in "${SUMMARY_RESULTS[@]}"; do
         printf '  %b\n' "${result}"
         if printf '%s' "${result}" | grep -q "PASS"; then
-            ((passes++))
+            passes=$((passes + 1))
         else
-            ((failures++))
+            failures=$((failures + 1))
         fi
     done
 
