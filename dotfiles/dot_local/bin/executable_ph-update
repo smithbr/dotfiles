@@ -4,7 +4,7 @@ set -euo pipefail
 
 # Preserve user's PATH through sudo for ~/.local/bin commands
 if [[ "${EUID}" -ne 0 ]]; then
-    exec sudo PATH="${PATH}" "${0}" "${@}"
+    exec sudo PATH="${PATH}" "${0}" "${@+"${@}"}"
 fi
 
 # Update packages

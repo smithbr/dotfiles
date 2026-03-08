@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ============================================================
-#  unbound-tests.sh — Quick diagnostics for Unbound DNS
+#  ph-test — Quick diagnostics for Unbound DNS
 # ============================================================
 
 set -euo pipefail
 
 # Self-elevate if not root
 if [[ "${EUID}" -ne 0 ]]; then
-    exec sudo "${0}" "${@}"
+    exec sudo "${0}" "${@+"${@}"}"
 fi
 
 DNS_SERVER="${1:-127.0.0.1}"
@@ -192,7 +192,7 @@ test_blocklist() {
     fi
 }
 
-# ── 8. Stats snapshot ────────────────────────────────────────
+# ── 8. Stats snapshot ───────────────────────────────────────
 test_stats() {
     header "Unbound stats snapshot"
     local stats
@@ -218,10 +218,10 @@ test_stats() {
 # ── Main ─────────────────────────────────────────────────────
 main() {
     printf '\n%b╔══════════════════════════════════════╗%b\n' "${BOLD}" "${RESET}"
-    printf '║     Unbound DNS Test Suite           ║\n'
+    printf '║       Unbound DNS Test Suite         ║\n'
     printf '%b╚══════════════════════════════════════╝%b\n' "${BOLD}" "${RESET}"
     printf '  DNS server under test: %b%s%b\n' "${CYAN}" "${DNS_SERVER}" "${RESET}"
-    printf '  Usage: %s [dns-server-ip]\n' "$0"
+    printf '  Usage: %s [dns-server-ip]\n' "${0}"
 
     check_deps
     test_config
@@ -264,7 +264,7 @@ print_summary() {
         printf '  %b2.%b View logs:       sudo journalctl -u unbound --no-pager -n 30\n' "${YELLOW}" "${RESET}"
         printf '  %b3.%b Restart service: sudo systemctl restart unbound\n' "${YELLOW}" "${RESET}"
         printf '  %b4.%b Run verbosely:   sudo unbound -d -vvv\n' "${YELLOW}" "${RESET}"
-        printf '  %b5.%b Re-run tests:    %s %s\n\n' "${YELLOW}" "${RESET}" "$0" "${DNS_SERVER}"
+        printf '  %b5.%b Re-run tests:    %s %s\n\n' "${YELLOW}" "${RESET}" "${0}" "${DNS_SERVER}"
     fi
 }
 
