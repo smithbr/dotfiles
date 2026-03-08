@@ -26,7 +26,6 @@ fail() {
 info() { echo -e "  ${CYAN}→${RESET}  $*"; }
 fix()  { echo -e "  ${YELLOW}💡 Fix:${RESET} $*"; }
 header() {
-    CURRENT_TEST="$*"
     echo -e "\n${BOLD}${YELLOW}▶ $*${RESET}"
 }
 
@@ -82,9 +81,9 @@ test_status() {
 # ── 3. Listening on expected port ───────────────────────────
 test_listening() {
     header "Network / listening check"
-    if ss -tulnp 2>/dev/null | grep -q "unbound\|:53"; then
+    if sudo ss -tulnp 2>/dev/null | grep -q "unbound\|:53"; then
         pass "Unbound is listening on port 53"
-        ss -tulnp | grep "unbound\|:53" | while read -r line; do
+        sudo ss -tulnp | grep "unbound\|:53" | while read -r line; do
             info "$line"
         done
     else
@@ -118,11 +117,16 @@ test_caching() {
     header "Cache speed test  ($GOOD_DOMAIN)"
     t1=$(dig @"$DNS_SERVER" "$GOOD_DOMAIN" 2>/dev/null | awk '/Query time/ {print $4}')
     t2=$(dig @"$DNS_SERVER" "$GOOD_DOMAIN" 2>/dev/null | awk '/Query time/ {print $4}')
+    if [[ -z "$t1" || -z "$t2" ]]; then
+        fail "Could not measure query times (dig may have failed)"
+        fix "Verify Unbound is running: sudo unbound-control status"
+        return
+    fi
     info "First query:  ${t1} ms"
     info "Second query: ${t2} ms"
-    if [[ -n "$t2" && "$t2" -lt "$t1" ]] 2>/dev/null; then
+    if [[ "$t2" -lt "$t1" ]]; then
         pass "Cache is working (second query faster)"
-    elif [[ "$t2" -eq 0 ]] 2>/dev/null; then
+    elif [[ "$t2" -eq 0 ]]; then
         pass "Cache is working (second query: 0 ms)"
     else
         info "Cache result inconclusive (timing may vary on fast networks)"
@@ -136,8 +140,6 @@ test_dnssec() {
     header "DNSSEC validation"
 
     # Should SERVFAIL for a deliberately broken domain
-    rcode=$(dig @"$DNS_SERVER" "$DNSSEC_FAIL_DOMAIN" +short 2>/dev/null; \
-            dig @"$DNS_SERVER" "$DNSSEC_FAIL_DOMAIN" 2>/dev/null | awk '/status:/ {print $6}' | tr -d ',')
     status=$(dig @"$DNS_SERVER" "$DNSSEC_FAIL_DOMAIN" 2>/dev/null | awk '/status:/ {print $6}' | tr -d ',')
     if [[ "$status" == "SERVFAIL" ]]; then
         pass "DNSSEC working — $DNSSEC_FAIL_DOMAIN correctly returned SERVFAIL"
