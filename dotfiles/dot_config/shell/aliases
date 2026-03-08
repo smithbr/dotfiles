@@ -9,7 +9,7 @@ alias fish="asciiquarium"
 alias cz="chezmoi"
 
 # system
-alias top="btop"
+alias top="btm"
 alias df="df -HT"
 
 # docker
