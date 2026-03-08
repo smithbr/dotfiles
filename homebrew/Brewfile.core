@@ -2,22 +2,24 @@
 # Usage: brew bundle [--file=Brewfile.core]
 
 # Core Tools
-brew "git"
+brew "bottom"
+brew "btop"
+brew "curl"
+brew "docker"
+brew "domain-check"
+brew "fresh-editor"
 brew "gh"
-brew "lazygit"
-brew "ripgrep"
+brew "git"
 brew "glances"
 brew "htop"
+brew "lazygit"
 brew "nethogs"
 brew "node"
 brew "nvm"
 brew "pnpm"
+brew "ripgrep"
 brew "wget"
-brew "curl"
-brew "domain-check"
 brew "zsh"
-brew "docker"
-brew "fresh-editor"
 
 # Shell Enhancements
 brew "antidote"
