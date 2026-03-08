@@ -7,6 +7,8 @@ alias cdd="cd ~/.dotfiles"
 alias rl="exec $SHELL -l"
 alias fish="asciiquarium"
 alias cz="chezmoi"
+alias cza="chezmoi apply"
+alias czs="chezmoi status"
 
 # system
 alias top="btm"
