@@ -7,7 +7,7 @@ set -euo pipefail
 
 # Self-elevate if not root
 if [[ "${EUID}" -ne 0 ]]; then
-    exec sudo "$0" "$@"
+    exec sudo "${0}" "${@}"
 fi
 
 DNS_SERVER="${1:-127.0.0.1}"
