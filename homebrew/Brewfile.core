@@ -5,6 +5,7 @@
 brew "bottom"
 brew "btop"
 brew "curl"
+brew "difftastic"
 brew "docker"
 brew "domain-check"
 brew "fresh-editor"
