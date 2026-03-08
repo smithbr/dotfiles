@@ -81,6 +81,15 @@ if [[ "$(chezmoi source-path 2>/dev/null || true)" != "${CHEZMOI_DEFAULT_SOURCE}
     log_warn "chezmoi sourceDir is not set to ${CHEZMOI_DEFAULT_SOURCE}"
 fi
 
+# Symlink Claude Code global instructions
+CLAUDE_SOURCE="${HOME}/.config/agents/tools/claude/CLAUDE.md"
+CLAUDE_TARGET="${HOME}/.claude/CLAUDE.md"
+if [[ -f "${CLAUDE_SOURCE}" ]]; then
+    mkdir -p "${HOME}/.claude"
+    ln -sfn "${CLAUDE_SOURCE}" "${CLAUDE_TARGET}"
+    log_info "Linked ${CLAUDE_TARGET} → ${CLAUDE_SOURCE}"
+fi
+
 if [[ "${run_system_bootstrap}" -eq 1 ]]; then
     case "$OSTYPE" in
         darwin*)
