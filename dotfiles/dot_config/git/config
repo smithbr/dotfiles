@@ -1,27 +1,19 @@
 # Shared git defaults (machine-specific overrides live in ~/.config/git/config.local)
-
 [core]
     ignorecase = false
-
 [include]
     path = ~/.config/git/config.local
-
 [init]
     defaultBranch = main
-
 [difftool]
     prompt = false
-
 [pull]
     rebase = true
-
 [push]
     autoSetupRemote = true
     default = current
-
 [rebase]
     updateRefs = true
-
 [alias]
     st = status -sb
     co = checkout
@@ -36,3 +28,8 @@
     cleanup = !git branch --no-color | fzf -m | xargs -I {} git branch -D '{}'
     clean-all = !git reset --hard && git clean -xfd
     recent = branch --sort=-committerdate
+[filter "lfs"]
+	clean = git-lfs clean -- %f
+	smudge = git-lfs smudge -- %f
+	process = git-lfs filter-process
+	required = true
