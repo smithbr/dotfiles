@@ -17,6 +17,26 @@ CHEZMOI_DEFAULT_SOURCE="${HOME}/.dotfiles/dotfiles"
 CHEZMOI_CONFIG_DIR="${HOME}/.config/chezmoi"
 CHEZMOI_CONFIG_FILE="${CHEZMOI_CONFIG_DIR}/chezmoi.toml"
 
+print_example_file_instructions() {
+    local example_path
+    local target_name
+    local target_path
+    local found_examples=0
+
+    while IFS= read -r -d '' example_path; do
+        target_path="$(chezmoi target-path --source "${CHEZMOI_SOURCE}" "${example_path}")"
+        target_name="${target_path##*/}"
+        target_name="${target_name%.example}"
+
+        if [[ "${found_examples}" -eq 0 ]]; then
+            printf "\nReview these local config files if you still need to personalize this machine:\n"
+            found_examples=1
+        fi
+
+        printf "  - %s -> %s\n" "${target_path}" "${target_name}"
+    done < <(find "${CHEZMOI_SOURCE}" -type f -name '*.example' -print0)
+}
+
 cd "${BASEDIR}"
 
 run_system_bootstrap=1
@@ -119,7 +139,12 @@ if [[ -n "${zsh_path}" ]]; then
         chsh -s "${zsh_path}"
         log_info "Default shell changed to ${zsh_path}"
     fi
-    log_info "Run 'exec -l $SHELL' (or open a new terminal) to reload your shell"
+fi
+
+print_example_file_instructions
+
+if [[ -n "${zsh_path:-}" ]]; then
+    log_info "Run 'exec -l \$SHELL' (or open a new terminal) to reload your shell"
 fi
 
 printf "\nDone.\n"
