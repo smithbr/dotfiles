@@ -1,2 +1,12 @@
-# Put machine-specific secrets here
-# Copy to ~/.ssh/config.local
+# Put machine-specific SSH config here.
+# Copy to ~/.ssh/config.local.
+
+# On a local machine with 1Password, point IdentityAgent at your local agent.
+# Leave it unset on remote servers so forwarded SSH_AUTH_SOCK keeps working.
+# Match exec "test -z \"$SSH_TTY\""
+#   IdentityAgent ~/.1password/agent.sock
+
+# Host entries for other servers
+#
+# Host example.internal
+#   ForwardAgent yes

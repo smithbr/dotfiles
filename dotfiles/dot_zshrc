@@ -4,6 +4,9 @@ export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 export XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
 export PATH="$HOME/.local/bin:$PATH"
 export OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME}/agents/tools/opencode"
+if [[ -S "${HOME}/.1password/agent.sock" ]]; then
+    export SSHKEY_IDENTITY_AGENT="${HOME}/.1password/agent.sock"
+fi
 
 source "${XDG_CONFIG_HOME}/shell/aliases"
 source "${XDG_CONFIG_HOME}/shell/functions"
