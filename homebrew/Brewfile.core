@@ -2,6 +2,7 @@
 # Usage: brew bundle [--file=Brewfile.core]
 
 # Core Tools
+cask "1password-cli"
 brew "bottom"
 brew "btop"
 brew "curl"
@@ -20,6 +21,7 @@ brew "nvm"
 brew "pnpm"
 brew "ripgrep"
 brew "shellcheck"
+brew "uv"
 brew "wget"
 brew "zsh"
 

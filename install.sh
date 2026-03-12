@@ -119,7 +119,7 @@ if [[ -n "${zsh_path}" ]]; then
         chsh -s "${zsh_path}"
         log_info "Default shell changed to ${zsh_path}"
     fi
-    log_info 'Run "rl" (or open a new terminal) to reload your shell'
+    log_info "Run 'exec -l $SHELL' (or open a new terminal) to reload your shell"
 fi
 
 printf "\nDone.\n"
