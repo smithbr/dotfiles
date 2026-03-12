@@ -1,0 +1,11 @@
+# 1Password SSH Agent configuration
+# https://developer.1password.com/docs/ssh/agent/config/
+# Keep the real file local if different machines should expose different keys.
+
+[[ssh-keys]]
+vault = "Example Vault"
+
+# To expose only a single key instead of a whole vault:
+# [[ssh-keys]]
+# item = "id_ed25519 -- user@host"
+# vault = "Example Vault"
