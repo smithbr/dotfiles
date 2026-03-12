@@ -49,10 +49,13 @@ export PATH="${brew_prefix}/bin:${brew_prefix}/sbin:${PATH}"
 BREWFILE="${BASEDIR}/homebrew/Brewfile.core"
 OPTIONAL_BREWFILE="${BASEDIR}/homebrew/Brewfile.optional"
 
-# Snapshot installed packages once to avoid repeated brew calls.
-_installed_formulae=" $(brew list --formula 2>/dev/null | tr '\n' ' ') "
-_installed_casks=" $(brew list --cask 2>/dev/null | tr '\n' ' ') "
-_installed_taps=" $(brew tap 2>/dev/null | tr '\n' ' ') "
+refresh_brew_state() {
+    _installed_formulae=" $(brew list --formula 2>/dev/null | tr '\n' ' ') "
+    _installed_casks=" $(brew list --cask 2>/dev/null | tr '\n' ' ') "
+    _installed_taps=" $(brew tap 2>/dev/null | tr '\n' ' ') "
+}
+
+refresh_brew_state
 
 _brew_has_formula() { [[ "${_installed_formulae}" == *" $1 "* ]]; }
 _brew_has_cask()    { [[ "${_installed_casks}" == *" $1 "* ]]; }
@@ -61,6 +64,7 @@ _brew_has_tap()     { [[ "${_installed_taps}" == *" $1 "* ]]; }
 if ! _brew_has_formula fzf; then
     log_info "Installing required dependency: fzf"
     brew install fzf
+    refresh_brew_state
 fi
 
 formula_command_available() {
@@ -141,87 +145,129 @@ linux_system_package_available() {
     return 1
 }
 
-cask_app_available() {
+normalize_name() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]'
+}
+
+cask_name_candidates() {
     local pkg_name="$1"
-    local app_name
-    local search_dir
-    local title_name
-    local -a app_names=()
+    local base_name="${pkg_name%%@*}"
+    local stripped_name
 
-    case "${pkg_name}" in
-        1password)
-            app_names=("1Password.app")
-            ;;
-        1password-cli)
-            command -v op >/dev/null 2>&1
-            return $?
-            ;;
-        appcleaner)
-            app_names=("AppCleaner.app")
-            ;;
-        brave-browser)
-            app_names=("Brave Browser.app")
-            ;;
-        chatgpt)
-            app_names=("ChatGPT.app")
-            ;;
-        claude-code)
-            command -v claude >/dev/null 2>&1
-            return $?
-            ;;
-        codex)
-            command -v codex >/dev/null 2>&1
-            return $?
-            ;;
-        codex-app)
-            app_names=("Codex.app")
-            ;;
-        docker-desktop)
-            app_names=("Docker.app")
-            ;;
-        github)
-            app_names=("GitHub Desktop.app")
-            ;;
-        google-chrome)
-            app_names=("Google Chrome.app")
-            ;;
-        protonvpn)
-            app_names=("Proton VPN.app" "ProtonVPN.app")
-            ;;
-        tailscale-app)
-            app_names=("Tailscale.app")
-            ;;
-        utm)
-            app_names=("UTM.app")
-            ;;
-        visual-studio-code)
-            app_names=("Visual Studio Code.app")
-            ;;
-        *)
-            title_name="$(printf '%s\n' "${pkg_name}" | awk -F- '{
-                for (i = 1; i <= NF; i++) {
-                    $i = toupper(substr($i, 1, 1)) substr($i, 2)
-                }
-                OFS = " "
-                $1 = $1
-                print
-            }')"
-            app_names=("${title_name}.app")
-            ;;
-    esac
+    printf '%s\n' "${base_name}"
 
-    for app_name in "${app_names[@]}"; do
-        for search_dir in "/Applications" "${HOME}/Applications"; do
-            if [[ -d "${search_dir}/${app_name}" ]]; then
-                return 0
-            fi
-        done
+    for stripped_name in \
+        "${base_name%-app}" \
+        "${base_name%-cli}" \
+        "${base_name%-desktop}" \
+        "${base_name%-browser}" \
+        "${base_name%-code}"
+    do
+        if [[ "${stripped_name}" != "${base_name}" ]]; then
+            printf '%s\n' "${stripped_name}"
+        fi
     done
+}
+
+cask_definition_candidates() {
+    local pkg_name="$1"
+    local raw_line
+    local line
+    local source_path
+    local target_name
+
+    while IFS= read -r raw_line || [[ -n "${raw_line}" ]]; do
+        line="${raw_line#"${raw_line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+
+        if [[ "${line}" =~ ^(app|suite)[[:space:]]+\"([^\"]+\.app)\" ]]; then
+            printf 'app\t%s\n' "${BASH_REMATCH[2]%.app}"
+            continue
+        fi
+        if [[ "${line}" =~ ^(app|suite)[[:space:]]+\'([^\']+\.app)\' ]]; then
+            printf 'app\t%s\n' "${BASH_REMATCH[2]%.app}"
+            continue
+        fi
+        if [[ "${line}" =~ ^binary[[:space:]]+\"([^\"]+)\" ]]; then
+            source_path="${BASH_REMATCH[1]}"
+            target_name="${source_path##*/}"
+            if [[ "${line}" =~ target:[[:space:]]*\"([^\"]+)\" ]]; then
+                target_name="${BASH_REMATCH[1]}"
+            fi
+            printf 'bin\t%s\n' "${target_name}"
+            continue
+        fi
+        if [[ "${line}" =~ ^binary[[:space:]]+\'([^\']+)\' ]]; then
+            source_path="${BASH_REMATCH[1]}"
+            target_name="${source_path##*/}"
+            if [[ "${line}" =~ target:[[:space:]]*\'([^\']+)\' ]]; then
+                target_name="${BASH_REMATCH[1]}"
+            fi
+            printf 'bin\t%s\n' "${target_name}"
+        fi
+    done < <(brew cat --cask "${pkg_name}" 2>/dev/null || true)
+}
+
+cask_artifact_available() {
+    local pkg_name="$1"
+    local search_dir
+    local app_path
+    local app_name
+    local app_normalized
+    local candidate_name
+    local candidate_normalized
+    local candidate_type
+
+    while IFS= read -r candidate_name || [[ -n "${candidate_name}" ]]; do
+        [[ -z "${candidate_name}" ]] && continue
+        candidate_normalized="$(normalize_name "${candidate_name}")"
+        [[ -z "${candidate_normalized}" ]] && continue
+
+        for search_dir in "/Applications" "${HOME}/Applications"; do
+            [[ -d "${search_dir}" ]] || continue
+            for app_path in "${search_dir}"/*.app; do
+                [[ -d "${app_path}" ]] || continue
+                app_name="${app_path##*/}"
+                app_name="${app_name%.app}"
+                app_normalized="$(normalize_name "${app_name}")"
+                if [[ "${app_normalized}" == "${candidate_normalized}" ]] || [[ "${app_normalized}" == *"${candidate_normalized}"* ]]; then
+                    return 0
+                fi
+            done
+        done
+    done < <(cask_name_candidates "${pkg_name}")
+
+    while IFS=$'\t' read -r candidate_type candidate_name || [[ -n "${candidate_type}${candidate_name}" ]]; do
+        [[ -z "${candidate_name}" ]] && continue
+        case "${candidate_type}" in
+            app)
+                candidate_normalized="$(normalize_name "${candidate_name}")"
+                [[ -z "${candidate_normalized}" ]] && continue
+                for search_dir in "/Applications" "${HOME}/Applications"; do
+                    [[ -d "${search_dir}" ]] || continue
+                    for app_path in "${search_dir}"/*.app; do
+                        [[ -d "${app_path}" ]] || continue
+                        app_name="${app_path##*/}"
+                        app_name="${app_name%.app}"
+                        app_normalized="$(normalize_name "${app_name}")"
+                        if [[ "${app_normalized}" == "${candidate_normalized}" ]] || [[ "${app_normalized}" == *"${candidate_normalized}"* ]]; then
+                            return 0
+                        fi
+                    done
+                done
+                ;;
+            bin)
+                if command -v "${candidate_name}" >/dev/null 2>&1; then
+                    return 0
+                fi
+                ;;
+        esac
+    done < <(cask_definition_candidates "${pkg_name}")
 
     return 1
 }
 
-entry_is_already_installed() {
+entry_is_brew_managed() {
     local pkg_type="$1"
     local pkg_name="$2"
 
@@ -230,18 +276,9 @@ entry_is_already_installed() {
             if _brew_has_formula "${pkg_name}"; then
                 return 0
             fi
-            if formula_command_available "${pkg_name}"; then
-                return 0
-            fi
-            if linux_system_package_available "${pkg_name}"; then
-                return 0
-            fi
             ;;
         cask)
             if _brew_has_cask "${pkg_name}"; then
-                return 0
-            fi
-            if [[ "${os_name}" == "Darwin" ]] && cask_app_available "${pkg_name}"; then
                 return 0
             fi
             ;;
@@ -253,6 +290,33 @@ entry_is_already_installed() {
         mas)
             # `mas` entries are installed from the App Store and typically use IDs.
             # Leave these to `brew bundle` unless already tracked by brew.
+            ;;
+    esac
+
+    return 1
+}
+
+entry_is_already_installed() {
+    local pkg_type="$1"
+    local pkg_name="$2"
+
+    if entry_is_brew_managed "${pkg_type}" "${pkg_name}"; then
+        return 0
+    fi
+
+    case "${pkg_type}" in
+        brew)
+            if formula_command_available "${pkg_name}"; then
+                return 0
+            fi
+            if linux_system_package_available "${pkg_name}"; then
+                return 0
+            fi
+            ;;
+        cask)
+            if [[ "${os_name}" == "Darwin" ]] && cask_artifact_available "${pkg_name}"; then
+                return 0
+            fi
             ;;
     esac
 
@@ -289,7 +353,7 @@ install_filtered_brewfile() {
             continue
         fi
 
-        if entry_is_already_installed "${pkg_type}" "${pkg_name}"; then
+        if entry_is_brew_managed "${pkg_type}" "${pkg_name}"; then
             continue
         fi
 
@@ -299,11 +363,40 @@ install_filtered_brewfile() {
 
     if [[ "${selected_count}" -gt 0 ]]; then
         brew bundle install --file="${tmp_brewfile}"
+        refresh_brew_state
     else
         log_info "All ${prompt_label}s already installed"
     fi
 
     rm -f "${tmp_brewfile}"
+}
+
+ensure_1password_agent_symlink() {
+    local target_socket=""
+    local link_dir="${HOME}/.1password"
+    local link_path="${link_dir}/agent.sock"
+
+    if ! command -v op >/dev/null 2>&1; then
+        return 0
+    fi
+
+    case "${OSTYPE}" in
+        darwin*)
+            target_socket="${HOME}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+
+    mkdir -p "${link_dir}"
+
+    if [[ -L "${link_path}" ]] && [[ "$(readlink "${link_path}")" == "${target_socket}" ]]; then
+        return 0
+    fi
+
+    ln -snf "${target_socket}" "${link_path}"
+    log_info "Linked 1Password SSH agent socket at ${link_path}"
 }
 
 log_info "Installing core Homebrew packages"
@@ -325,7 +418,7 @@ prompt_optional_brewfile() {
     local current_category="Other"
     local entry_category
     local category_text
-    local last_category=""
+    local prompt_last_category=""
     local idx
     local entry
     local reply
@@ -336,7 +429,6 @@ prompt_optional_brewfile() {
     local display_entry
     local installed_count=0
     local installable_count=0
-    local macos_conditional_depth=0
     local palette_theme="${DOTFILES_FZF_THEME:-auto}"
     local bg_code
     local color_reset=$'\033[0m'
@@ -383,20 +475,8 @@ prompt_optional_brewfile() {
         if [[ "${line}" == \#* ]]; then
             category_text="${line#\# }"
             if [[ "${category_text}" != "Optional dependencies. \`homebrew/brew.sh\` prompts for each entry." ]] && \
-                [[ "${category_text}" != "Supported entry types: brew, cask, tap, mas." ]] && \
-                [[ "${category_text}" != "macOS-only entries can be wrapped in:" ]] && \
-                [[ "${category_text}" != "if OS.mac?" ]] && \
-                [[ "${category_text}" != "..." ]] && \
-                [[ "${category_text}" != "end" ]]; then
+                [[ "${category_text}" != "Supported entry types: brew, cask, tap, mas." ]]; then
                 current_category="${category_text}"
-            fi
-            continue
-        fi
-        if [[ "${line}" == "if OS.mac?" || ( "${line}" == "end" && "${macos_conditional_depth}" -gt 0 ) ]]; then
-            if [[ "${line}" == "if OS.mac?" ]]; then
-                macos_conditional_depth=$((macos_conditional_depth + 1))
-            else
-                macos_conditional_depth=$((macos_conditional_depth - 1))
             fi
             continue
         fi
@@ -437,18 +517,18 @@ prompt_optional_brewfile() {
     elif command -v fzf >/dev/null 2>&1 && [[ -t 0 && -t 1 ]]; then
         selected_entries="$(
             {
-                last_category=""
+                fzf_last_category=""
                 for idx in "${!optional_entries[@]}"; do
                     entry_category="${optional_categories[${idx}]}"
                     entry="${optional_entries[${idx}]}"
                     display_entry="${optional_names[${idx}]}"
 
-                    if [[ "${entry_category}" != "${last_category}" ]]; then
-                        if [[ -n "${last_category}" ]]; then
+                    if [[ "${entry_category}" != "${fzf_last_category}" ]]; then
+                        if [[ -n "${fzf_last_category}" ]]; then
                             printf 'meta\t_spacer\t \t\n'
                         fi
                         printf 'header\t%s\t%s%s%s\t\n' "${entry_category}" "${color_header}" "${entry_category}" "${color_reset}"
-                        last_category="${entry_category}"
+                        fzf_last_category="${entry_category}"
                     fi
 
                     if [[ "${optional_installed[${idx}]}" == "1" ]]; then
@@ -491,9 +571,9 @@ prompt_optional_brewfile() {
             entry="${optional_entries[${idx}]}"
             display_entry="${optional_names[${idx}]}"
             entry_category="${optional_categories[${idx}]}"
-            if [[ "${entry_category}" != "${last_category}" ]]; then
+            if [[ "${entry_category}" != "${prompt_last_category}" ]]; then
                 log_info "${entry_category}"
-                last_category="${entry_category}"
+                prompt_last_category="${entry_category}"
             fi
             read -r -p "Install ${prompt_label} ${display_entry}? [Y/n] " reply
             if [[ -z "${reply}" || "${reply}" =~ ^[Yy]$ ]]; then
@@ -514,6 +594,7 @@ prompt_optional_brewfile() {
         fi
         log_info "Installing optional Homebrew packages"
         brew bundle install --file="${tmp_optional_brewfile}"
+        refresh_brew_state
     elif [[ "${installable_count}" -gt 0 ]]; then
         log_info "No ${prompt_label} selected"
     fi
@@ -527,9 +608,11 @@ fi
 # Tailscale: the cask and formula run separate daemons that conflict.
 # The selection phase already prevents co-installation, but handle the case
 # where the formula was installed in a previous run.
+refresh_brew_state
 if _brew_has_cask tailscale-app && _brew_has_formula tailscale; then
     log_info "Removing tailscale formula (conflicts with tailscale-app cask)"
     brew services stop tailscale 2>/dev/null || true
     brew uninstall tailscale
 fi
 
+ensure_1password_agent_symlink

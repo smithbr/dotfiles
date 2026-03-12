@@ -1,35 +1,38 @@
 # Optional dependencies. `homebrew/brew.sh` prompts for each entry.
 # Supported entry types: brew, cask, tap, mas.
 
-# Cross-platform
-cask "1password-cli"
+# AI Apps
+cask "chatgpt"
 cask "claude-code"
+cask "claude"
+cask "codex-app"
 cask "codex"
 brew "opencode"
-brew "tailscale"
+cask "opencode-desktop"
 
-# macOS Apps
-if OS.mac?
-    cask "1password"
-    cask "appcleaner"
-    cask "brave-browser"
-    cask "chatgpt"
-    cask "claude"
-    cask "cmux"
-    cask "codex-app"
-    cask "comet"
-    cask "cursor"
-    cask "docker-desktop"
-    cask "firefox"
-    cask "ghostty"
-    cask "github"
-    cask "google-chrome"
-    brew "mactop"
-    cask "obsidian"
-    cask "opencode-desktop"
-    cask "protonvpn"
-    cask "tailscale-app"
-    cask "utm"
-    cask "visual-studio-code"
-    cask "yaak"
-end
+# Browsers
+cask "brave-browser"
+cask "comet"
+cask "firefox"
+cask "google-chrome"
+
+# Development Tools
+brew "mactop"
+cask "cmux"
+cask "cursor"
+cask "docker-desktop"
+cask "ghostty"
+cask "github"
+cask "visual-studio-code"
+cask "yaak"
+
+# Productivity
+cask "appcleaner"
+cask "obsidian"
+cask "utm"
+
+# Security and Networking
+cask "1password"
+cask "protonvpn"
+brew "tailscale"
+cask "tailscale-app"
