@@ -615,6 +615,7 @@ generate_onepassword_key() {
     local key_path="$1"
     local title="$2"
     local public_key=""
+    local private_key=""
     local vault=""
     local create_output=""
 
@@ -641,7 +642,19 @@ generate_onepassword_key() {
 
     [[ -n "${public_key}" ]] || die "1Password did not return a public key"
 
+    if ! private_key="$(
+        printf '%s\n' "${create_output}" \
+            | python3 -c "import json, sys; data=json.load(sys.stdin); [print(field['value']) for field in data.get('fields', []) if field.get('id') == 'private_key']"
+    )"; then
+        die "1Password returned an unreadable response while extracting the private key"
+    fi
+
+    [[ -n "${private_key}" ]] || die "1Password did not return a private key"
+
+    printf '%s\n' "${private_key}" > "${key_path}"
+    chmod 600 "${key_path}"
     printf '%s\n' "${public_key}" > "${key_path}.pub"
+    ssh-add "${key_path}"
 }
 
 should_use_1password() {
