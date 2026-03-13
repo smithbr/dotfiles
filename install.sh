@@ -76,7 +76,7 @@ run_system_bootstrap=1
 run_brew=1
 declare -a chezmoi_args=()
 while [[ $# -gt 0 ]]; do
-    case "$1" in
+    case "${1}" in
         --skip-system)
             run_system_bootstrap=0
             ;;
@@ -146,7 +146,7 @@ if [[ -f "${CLAUDE_SOURCE}" ]]; then
 fi
 
 if [[ "${run_system_bootstrap}" -eq 1 ]]; then
-    case "$OSTYPE" in
+    case "${OSTYPE}" in
         darwin*)
             chmod +x scripts/bootstrap/macos.sh && ./scripts/bootstrap/macos.sh
             ;;
@@ -165,7 +165,7 @@ if [[ -n "${zsh_path}" ]]; then
     if ! grep -qxF "${zsh_path}" /etc/shells; then
         log_info "Adding ${zsh_path} to /etc/shells"
         if command -v sudo >/dev/null 2>&1; then
-            echo "${zsh_path}" | sudo tee -a /etc/shells >/dev/null
+            printf '%s\n' "${zsh_path}" | sudo tee -a /etc/shells >/dev/null
         else
             log_warn "sudo not found; could not update /etc/shells"
         fi
