@@ -5,8 +5,6 @@
 cask "1password-cli"
 brew "bottom"
 brew "btop"
-tap "charmbracelet/tap"
-brew "charmbracelet/tap/crush"
 brew "curl"
 brew "git-delta"
 brew "domain-check"
