@@ -14,6 +14,8 @@ GITHUB_TITLE_TEMPLATE="${SSHKEY_GITHUB_TITLE_TEMPLATE:-github - {{machine_type}}
 USE_1PASSWORD_DEFAULT="${SSHKEY_USE_1PASSWORD:-false}"
 HOSTNAME_SHORT="$(hostname -s 2>/dev/null || hostname)"
 USER_NAME="${USER:-$(id -un)}"
+PROTECTED_LOCAL_KEY_NAME="${SSHKEY_PROTECTED_LOCAL_KEY_NAME:-id_rsa}"
+_PROTECTED_LOCAL_KEY_PATH="${HOME}/.ssh/${PROTECTED_LOCAL_KEY_NAME}"
 FORCE=false
 USE_OP_FLAG=false
 USE_GH_FLAG=false
@@ -64,6 +66,45 @@ strip_quotes() {
 
 command_exists() {
     command -v "$1" >/dev/null 2>&1
+}
+
+protected_local_key_path() {
+    printf '%s\n' "${_PROTECTED_LOCAL_KEY_PATH}"
+}
+
+protected_local_key_message() {
+    printf 'Refusing to modify protected local key: %s\n' "${_PROTECTED_LOCAL_KEY_PATH}"
+}
+
+is_protected_key_name() {
+    local name="$1"
+
+    [[ -n "${PROTECTED_LOCAL_KEY_NAME}" && "${name}" == "${PROTECTED_LOCAL_KEY_NAME}" ]]
+}
+
+is_protected_key_path() {
+    local key_path="$1"
+
+    [[ -n "${PROTECTED_LOCAL_KEY_NAME}" && "${key_path}" == "${_PROTECTED_LOCAL_KEY_PATH}" ]]
+}
+
+ensure_mutable_key_name() {
+    local name="$1"
+
+    if is_protected_key_name "${name}"; then
+        die "$(protected_local_key_message)"
+    fi
+}
+
+skip_protected_key_path() {
+    local key_path="$1"
+
+    if is_protected_key_path "${key_path}"; then
+        printf 'Skipping protected local key: %s\n' "${key_path}"
+        return 0
+    fi
+
+    return 1
 }
 
 confirm() {
@@ -403,6 +444,10 @@ for item in json.loads(raw):
 remove_local_key_files() {
     local key_path="$1"
 
+    if skip_protected_key_path "${key_path}"; then
+        return 0
+    fi
+
     ssh-add -d "${key_path}" >/dev/null 2>&1 || true
     rm -f "${key_path}" "${key_path}.pub"
 }
@@ -686,6 +731,7 @@ create_key_command() {
     local staged_local_private=false
     local replace_existing=false
 
+    ensure_mutable_key_name "${name}"
     title="$(key_comment "${key_kind}" "${name}")"
     if [[ -f "${key_path}" || -f "${key_path}.pub" ]]; then
         if ! confirm "Key already exists at '${key_path}'. Recreate it?"; then
@@ -750,6 +796,7 @@ delete_key_command() {
     local had_any=false
 
     validate_key_name "${name}"
+    ensure_mutable_key_name "${name}"
     key_path="$(custom_key_path "${name}")"
     title="$(custom_github_title "${name}")"
 
@@ -1051,6 +1098,9 @@ cleanup_command() {
     for pub in "${HOME}"/.ssh/*.pub; do
         [[ -f "${pub}" ]] || continue
         priv="${pub%.pub}"
+        if is_protected_key_path "${priv}"; then
+            continue
+        fi
         blob="$(public_key_blob "${pub}")"
         if [[ ! -f "${priv}" ]] && ! blob_in_any_agent "${blob}"; then
             if confirm "Delete orphaned public key '${pub}'?"; then
@@ -1063,6 +1113,9 @@ cleanup_command() {
 
     for priv in "${HOME}"/.ssh/id_* "${HOME}"/.ssh/*.key; do
         [[ -f "${priv}" && "${priv}" != *.pub ]] || continue
+        if is_protected_key_path "${priv}"; then
+            continue
+        fi
         if [[ ! -f "${priv}.pub" ]]; then
             if confirm "Delete orphaned private key '${priv}'?"; then
                 ssh-add -d "${priv}" >/dev/null 2>&1 || true
@@ -1077,6 +1130,9 @@ cleanup_command() {
         [[ -n "${entry}" ]] || continue
         key_path="$(printf '%s\n' "${entry}" | awk '{print $3}')"
         if [[ "${key_path}" == /* && ! -f "${key_path}" ]]; then
+            if is_protected_key_path "${key_path}"; then
+                continue
+            fi
             if confirm "Remove stale agent entry '${key_path}'?"; then
                 ssh-add -d "${key_path}" >/dev/null 2>&1 || true
                 printf 'Removed stale agent entry: %s\n' "${key_path}"
@@ -1088,6 +1144,9 @@ cleanup_command() {
     chmod 700 "${HOME}/.ssh"
     for key_path in "${HOME}"/.ssh/id_* "${HOME}"/.ssh/*.key; do
         [[ -f "${key_path}" && "${key_path}" != *.pub ]] || continue
+        if is_protected_key_path "${key_path}"; then
+            continue
+        fi
         perms="$(stat -f '%Lp' "${key_path}" 2>/dev/null || stat -c '%a' "${key_path}" 2>/dev/null)"
         if [[ "${perms}" != "600" ]]; then
             chmod 600 "${key_path}"
@@ -1097,6 +1156,9 @@ cleanup_command() {
     done
     for pub in "${HOME}"/.ssh/*.pub; do
         [[ -f "${pub}" ]] || continue
+        if is_protected_key_path "${pub%.pub}"; then
+            continue
+        fi
         perms="$(stat -f '%Lp' "${pub}" 2>/dev/null || stat -c '%a' "${pub}" 2>/dev/null)"
         if [[ "${perms}" != "644" && "${perms}" != "600" ]]; then
             chmod 644 "${pub}"
