@@ -107,17 +107,6 @@ ln -sfn "${BASEDIR}" "${HOME}/.dotfiles"
 
 ensure_local_install_ssh_key
 
-# Ensure chezmoi config exists and points at this repo BEFORE the first apply.
-# This prevents chezmoi from creating a default .toml that later conflicts.
-mkdir -p "${CHEZMOI_CONFIG_DIR}"
-if [[ -f "${CHEZMOI_CONFIG_FILE}" ]]; then
-    if ! grep -qE '^[[:space:]]*sourceDir[[:space:]]*=' "${CHEZMOI_CONFIG_FILE}"; then
-        printf "\nsourceDir = \"%s\"\n" "${CHEZMOI_DEFAULT_SOURCE}" >> "${CHEZMOI_CONFIG_FILE}"
-    fi
-else
-    printf "sourceDir = \"%s\"\n" "${CHEZMOI_DEFAULT_SOURCE}" > "${CHEZMOI_CONFIG_FILE}"
-fi
-
 log_info "Applying dotfiles with chezmoi source ${CHEZMOI_SOURCE}"
 if [[ "${#chezmoi_args[@]}" -gt 0 ]]; then
     chezmoi --source "${CHEZMOI_SOURCE}" apply "${chezmoi_args[@]}"
