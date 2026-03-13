@@ -218,24 +218,9 @@ cask_artifact_available() {
     local candidate_normalized
     local candidate_type
 
-    while IFS= read -r candidate_name || [[ -n "${candidate_name}" ]]; do
-        [[ -z "${candidate_name}" ]] && continue
-        candidate_normalized="$(normalize_name "${candidate_name}")"
-        [[ -z "${candidate_normalized}" ]] && continue
-
-        for search_dir in "/Applications" "${HOME}/Applications"; do
-            [[ -d "${search_dir}" ]] || continue
-            for app_path in "${search_dir}"/*.app; do
-                [[ -d "${app_path}" ]] || continue
-                app_name="${app_path##*/}"
-                app_name="${app_name%.app}"
-                app_normalized="$(normalize_name "${app_name}")"
-                if [[ "${app_normalized}" == "${candidate_normalized}" ]] || [[ "${app_normalized}" == *"${candidate_normalized}"* ]]; then
-                    return 0
-                fi
-            done
-        done
-    done < <(cask_name_candidates "${pkg_name}")
+    if quick_cask_artifact_available "${pkg_name}"; then
+        return 0
+    fi
 
     while IFS=$'\t' read -r candidate_type candidate_name || [[ -n "${candidate_type}${candidate_name}" ]]; do
         [[ -z "${candidate_name}" ]] && continue
@@ -263,6 +248,37 @@ cask_artifact_available() {
                 ;;
         esac
     done < <(cask_definition_candidates "${pkg_name}")
+
+    return 1
+}
+
+quick_cask_artifact_available() {
+    local pkg_name="$1"
+    local search_dir
+    local app_path
+    local app_name
+    local app_normalized
+    local candidate_name
+    local candidate_normalized
+
+    while IFS= read -r candidate_name || [[ -n "${candidate_name}" ]]; do
+        [[ -z "${candidate_name}" ]] && continue
+        candidate_normalized="$(normalize_name "${candidate_name}")"
+        [[ -z "${candidate_normalized}" ]] && continue
+
+        for search_dir in "/Applications" "${HOME}/Applications"; do
+            [[ -d "${search_dir}" ]] || continue
+            for app_path in "${search_dir}"/*.app; do
+                [[ -d "${app_path}" ]] || continue
+                app_name="${app_path##*/}"
+                app_name="${app_name%.app}"
+                app_normalized="$(normalize_name "${app_name}")"
+                if [[ "${app_normalized}" == "${candidate_normalized}" ]] || [[ "${app_normalized}" == *"${candidate_normalized}"* ]]; then
+                    return 0
+                fi
+            done
+        done
+    done < <(cask_name_candidates "${pkg_name}")
 
     return 1
 }
@@ -296,9 +312,10 @@ entry_is_brew_managed() {
     return 1
 }
 
-entry_is_already_installed() {
+_entry_is_installed_impl() {
     local pkg_type="$1"
     local pkg_name="$2"
+    local cask_check_fn="$3"
 
     if entry_is_brew_managed "${pkg_type}" "${pkg_name}"; then
         return 0
@@ -314,13 +331,21 @@ entry_is_already_installed() {
             fi
             ;;
         cask)
-            if [[ "${os_name}" == "Darwin" ]] && cask_artifact_available "${pkg_name}"; then
+            if [[ "${os_name}" == "Darwin" ]] && "${cask_check_fn}" "${pkg_name}"; then
                 return 0
             fi
             ;;
     esac
 
     return 1
+}
+
+entry_is_already_installed() {
+    _entry_is_installed_impl "$1" "$2" cask_artifact_available
+}
+
+entry_is_menu_installed() {
+    _entry_is_installed_impl "$1" "$2" quick_cask_artifact_available
 }
 
 install_filtered_brewfile() {
@@ -402,6 +427,56 @@ ensure_1password_agent_symlink() {
 log_info "Installing core Homebrew packages"
 install_filtered_brewfile "${BREWFILE}" "core Homebrew package"
 
+gum_choose_optional_category() {
+    local prompt_label="$1"
+    local category_name="$2"
+    shift 2
+
+    local option_count="$#"
+    local height=8
+
+    if [[ "${option_count}" -lt "${height}" ]]; then
+        height="${option_count}"
+    fi
+    if [[ "${height}" -lt 3 ]]; then
+        height=3
+    fi
+
+    gum choose \
+        --no-limit \
+        --ordered \
+        --height="${height}" \
+        --cursor="> " \
+        --show-help=false \
+        --header="Select ${prompt_label}s from ${category_name}" \
+        --selected-prefix="* " \
+        --unselected-prefix="  " \
+        "$@" || true
+}
+
+append_gum_optional_selection() {
+    local category_name="$1"
+    local selected_names
+    local selected_name
+    local idx
+
+    [[ "${#gum_category_names[@]}" -eq 0 ]] && return
+
+    selected_names="$(gum_choose_optional_category "${prompt_label}" "${category_name}" "${gum_category_names[@]}")"
+
+    while IFS= read -r selected_name || [[ -n "${selected_name}" ]]; do
+        [[ -z "${selected_name}" ]] && continue
+
+        for idx in "${!gum_category_names[@]}"; do
+            if [[ "${gum_category_names[${idx}]}" == "${selected_name}" ]]; then
+                printf '%s\n' "${gum_category_entries[${idx}]}" >> "${tmp_optional_brewfile}"
+                selected_optional=$((selected_optional + 1))
+                break
+            fi
+        done
+    done <<< "${selected_names}"
+}
+
 prompt_optional_brewfile() {
     local optional_brewfile="$1"
     local prompt_label="$2"
@@ -422,50 +497,13 @@ prompt_optional_brewfile() {
     local idx
     local entry
     local reply
-    local selected_entries
-    local selected_entry
-    local selected_kind
-    local selected_package_entry
     local display_entry
     local installed_count=0
     local installable_count=0
-    local palette_theme="${DOTFILES_FZF_THEME:-auto}"
-    local bg_code
-    local color_reset=$'\033[0m'
-    local color_header
-    local color_category
-    local color_package
-    local fzf_palette
+    local gum_category_name=""
+    local -a gum_category_entries=()
+    local -a gum_category_names=()
     tmp_optional_brewfile="$(mktemp "${TMPDIR:-/tmp}/brewfile-optional.XXXXXX")"
-
-    if [[ "${palette_theme}" == "auto" ]]; then
-        if [[ -n "${COLORFGBG:-}" ]]; then
-            bg_code="${COLORFGBG##*;}"
-            if [[ "${bg_code}" =~ ^[0-9]+$ ]] && [[ "${bg_code}" -le 7 ]]; then
-                palette_theme="light"
-            else
-                palette_theme="dark"
-            fi
-        elif [[ "${os_name}" == "Darwin" ]] && defaults read -g AppleInterfaceStyle &>/dev/null; then
-            palette_theme="dark"
-        elif [[ "${os_name}" == "Darwin" ]]; then
-            palette_theme="light"
-        else
-            palette_theme="dark"
-        fi
-    fi
-
-    if [[ "${palette_theme}" == "light" ]]; then
-        color_header=$'\033[1;34m'
-        color_category=$'\033[38;2;110;110;110m'
-        color_package=$'\033[38;2;0;0;0m'
-        fzf_palette='fg:#333333,header:4,info:4,prompt:2,pointer:5,marker:1,fg+:#000000,bg+:#e8e8e8'
-    else
-        color_header=$'\033[1;36m'
-        color_category=$'\033[2;37m'
-        color_package=$'\033[1;97m'
-        fzf_palette='header:6,info:6,prompt:2,pointer:5,marker:3,fg+:15,bg+:236'
-    fi
 
     while IFS= read -r raw_line || [[ -n "${raw_line}" ]]; do
         line="${raw_line#"${raw_line%%[![:space:]]*}"}"
@@ -496,7 +534,7 @@ prompt_optional_brewfile() {
         optional_entries+=("${pkg_type} \"${pkg_name}\"")
         optional_categories+=("${entry_category}")
         optional_names+=("${pkg_name}")
-        if entry_is_already_installed "${pkg_type}" "${pkg_name}"; then
+        if entry_is_menu_installed "${pkg_type}" "${pkg_name}"; then
             optional_installed+=("1")
             installed_count=$((installed_count + 1))
         else
@@ -511,58 +549,28 @@ prompt_optional_brewfile() {
         return
     fi
 
-    # Use fzf checklist-style selection when available.
+    # Prefer a compact gum picker when interactive.
     if [[ "${installable_count}" -eq 0 ]]; then
         log_info "No ${prompt_label} selected"
-    elif command -v fzf >/dev/null 2>&1 && [[ -t 0 && -t 1 ]]; then
-        selected_entries="$(
-            {
-                fzf_last_category=""
-                for idx in "${!optional_entries[@]}"; do
-                    entry_category="${optional_categories[${idx}]}"
-                    entry="${optional_entries[${idx}]}"
-                    display_entry="${optional_names[${idx}]}"
+    elif command -v gum >/dev/null 2>&1 && [[ -t 0 && -t 1 ]]; then
+        for idx in "${!optional_entries[@]}"; do
+            if [[ "${optional_installed[${idx}]}" == "1" ]]; then
+                continue
+            fi
 
-                    if [[ "${entry_category}" != "${fzf_last_category}" ]]; then
-                        if [[ -n "${fzf_last_category}" ]]; then
-                            printf 'meta\t_spacer\t \t\n'
-                        fi
-                        printf 'header\t%s\t%s%s%s\t\n' "${entry_category}" "${color_header}" "${entry_category}" "${color_reset}"
-                        fzf_last_category="${entry_category}"
-                    fi
+            entry_category="${optional_categories[${idx}]}"
+            if [[ -n "${gum_category_name}" ]] && [[ "${entry_category}" != "${gum_category_name}" ]]; then
+                append_gum_optional_selection "${gum_category_name}"
+                gum_category_entries=()
+                gum_category_names=()
+            fi
 
-                    if [[ "${optional_installed[${idx}]}" == "1" ]]; then
-                        printf 'meta\t%s\t%s✓ %s%s\t%s\t1\n' \
-                            "${entry_category}" \
-                            "${color_category}" "${display_entry}" "${color_reset}" \
-                            "${entry}"
-                    else
-                        printf 'item\t%s\t  %s%s%s\t%s\t%s\n' \
-                            "${entry_category}" \
-                            "${color_package}" "${display_entry}" "${color_reset}" \
-                            "${entry}" \
-                            "${optional_installed[${idx}]}"
-                    fi
-                done
-            } | fzf --multi --marker="* " --pointer=" " \
-                --ansi \
-                --delimiter=$'\t' \
-                --with-nth=3 \
-                --layout=reverse \
-                --border \
-                --bind='space:toggle,tab:ignore,btab:ignore' \
-                --color="${fzf_palette}" \
-                --prompt="Select ${prompt_label}s > " \
-                --header=$'ESC to skip | SPACE to toggle | ENTER to confirm\n \n'
-        )" || true
+            gum_category_name="${entry_category}"
+            gum_category_entries+=("${optional_entries[${idx}]}")
+            gum_category_names+=("${optional_names[${idx}]}")
+        done
 
-        while IFS= read -r selected_entry || [[ -n "${selected_entry}" ]]; do
-            [[ -z "${selected_entry}" ]] && continue
-            IFS=$'\t' read -r selected_kind _ _ selected_package_entry _ <<< "${selected_entry}"
-            [[ "${selected_kind}" != "item" ]] && continue
-            printf '%s\n' "${selected_package_entry}" >> "${tmp_optional_brewfile}"
-            selected_optional=$((selected_optional + 1))
-        done <<< "${selected_entries}"
+        append_gum_optional_selection "${gum_category_name}"
     else
         for idx in "${!optional_entries[@]}"; do
             if [[ "${optional_installed[${idx}]}" == "1" ]]; then
