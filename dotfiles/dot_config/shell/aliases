@@ -1,33 +1,39 @@
 # navigation
-alias lsa="ls -FGlAhp"
-alias h="history"
+alias bat="glow"
 alias cdd="cd ~/.dotfiles"
+alias h="history"
+alias lsa="ls -FGlAhp"
+alias xb="cd ~/.local/bin"
+alias xc="cd ~/.config"
 
 # shell
-alias rl="exec $SHELL -l"
-alias fish="asciiquarium"
-alias fastfetch="fastfetch -c all"
 alias cz="chezmoi"
 alias cza="chezmoi apply"
 alias czs="chezmoi status"
 alias czui="chezit"
+alias fastfetch="fastfetch -c all"
+alias fish="asciiquarium"
+alias rl="exec $SHELL -l"
 
 # system
-alias top="btm"
 alias df="df -HT"
+alias top="btm"
+
+# brew
+alias brewls="brew list --formula -t"
 
 # docker
+alias dclean="docker system prune -af"
+alias dlogs="docker logs -f"
 alias dps="docker ps"
 alias dpsa="docker ps -a"
-alias dstop="docker stop \$(docker ps -q)"
 alias drm="docker rm \$(docker ps -a -q)"
 alias drmi="docker rmi \$(docker images -q)"
-alias dlogs="docker logs -f"
-alias dclean="docker system prune -af"
+alias dstop="docker stop \$(docker ps -q)"
 
 # network
-alias ip_public="dig +short myip.opendns.com @resolver1.opendns.com"
 alias dns="cat /etc/resolv.conf"
+alias ip_public="dig +short myip.opendns.com @resolver1.opendns.com"
 case "$OSTYPE" in
     darwin*)
         alias ip_local="ipconfig getifaddr en0"
@@ -45,14 +51,11 @@ alias cleanupds="find . -type f -name '*.DS_Store' -ls -delete"
 alias emptyfolders="du -a --max-depth=1 | sort -n"
 
 # encode/decode strings
-alias urlencode='python3 -c "import sys, urllib.parse; print(urllib.parse.quote_plus(sys.argv[1]))"'
 alias urldecode='python3 -c "import sys, urllib.parse; print(urllib.parse.unquote_plus(sys.argv[1]))"'
+alias urlencode='python3 -c "import sys, urllib.parse; print(urllib.parse.quote_plus(sys.argv[1]))"'
 
 # domain lookup
 alias tld="domain-check --preset startup --pretty"
-
-# brew
-alias brewls="brew list --formula -t"
 
 # generate random token
 alias newtoken="openssl rand -hex 32"
