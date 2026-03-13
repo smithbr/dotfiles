@@ -10,4 +10,3 @@ ohmyzsh/ohmyzsh path:plugins/macos
 zsh-users/zsh-completions
 zsh-users/zsh-autosuggestions
 zsh-users/zsh-syntax-highlighting
-mass8326/zsh-chezmoi
