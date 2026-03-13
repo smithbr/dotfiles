@@ -15,26 +15,59 @@ fi
 CHEZMOI_SOURCE="${BASEDIR}/dotfiles"
 CHEZMOI_DEFAULT_SOURCE="${HOME}/.dotfiles/dotfiles"
 CHEZMOI_CONFIG_DIR="${HOME}/.config/chezmoi"
-CHEZMOI_CONFIG_FILE="${CHEZMOI_CONFIG_DIR}/chezmoi.toml"
+CHEZMOI_CONFIG_FILE="${CHEZMOI_CONFIG_DIR}/chezmoi.json"
+LOCAL_INSTALL_SSH_KEY_PATH="${HOME}/.ssh/id_rsa"
 
-print_example_file_instructions() {
+ssh_key_comment() {
+    printf '%s@%s\n' "${USER:-$(id -un)}" "$(hostname -s 2>/dev/null || hostname)"
+}
+
+ensure_local_install_ssh_key() {
+    local key_comment=""
+
+    mkdir -p "${HOME}/.ssh"
+    chmod 700 "${HOME}/.ssh"
+
+    if [[ -f "${LOCAL_INSTALL_SSH_KEY_PATH}" ]]; then
+        if [[ ! -f "${LOCAL_INSTALL_SSH_KEY_PATH}.pub" ]]; then
+            log_info "Restoring missing public key for ${LOCAL_INSTALL_SSH_KEY_PATH}"
+            ssh-keygen -y -f "${LOCAL_INSTALL_SSH_KEY_PATH}" > "${LOCAL_INSTALL_SSH_KEY_PATH}.pub"
+            chmod 644 "${LOCAL_INSTALL_SSH_KEY_PATH}.pub"
+        fi
+        return 0
+    fi
+
+    key_comment="$(ssh_key_comment)"
+    log_info "Creating local SSH key at ${LOCAL_INSTALL_SSH_KEY_PATH}"
+    ssh-keygen -q -t rsa -b 4096 -N "" -C "${key_comment}" -f "${LOCAL_INSTALL_SSH_KEY_PATH}"
+    chmod 600 "${LOCAL_INSTALL_SSH_KEY_PATH}"
+    chmod 644 "${LOCAL_INSTALL_SSH_KEY_PATH}.pub"
+}
+
+copy_and_list_local_example_files() {
     local example_path
-    local target_name
     local target_path
-    local found_examples=0
+    local local_path
+    local -a local_paths=()
 
     while IFS= read -r -d '' example_path; do
         target_path="$(chezmoi target-path --source "${CHEZMOI_SOURCE}" "${example_path}")"
-        target_name="${target_path##*/}"
-        target_name="${target_name%.example}"
+        local_path="${target_path%.example}"
 
-        if [[ "${found_examples}" -eq 0 ]]; then
-            printf "\nReview these local config files if you still need to personalize this machine:\n"
-            found_examples=1
+        if [[ ! -e "${local_path}" && ! -L "${local_path}" ]]; then
+            cp "${target_path}" "${local_path}"
+            log_info "Created local config from example: ${local_path}"
         fi
 
-        printf "  - %s -> %s\n" "${target_path}" "${target_name}"
-    done < <(find "${CHEZMOI_SOURCE}" -type f -name '*.example' -print0)
+        local_paths+=("${local_path}")
+    done < <(find "${CHEZMOI_SOURCE}" -type f -name '*.local.example' -print0)
+
+    if [[ "${#local_paths[@]}" -gt 0 ]]; then
+        printf "\nReview these local config files if you still need to personalize this machine:\n"
+        for local_path in "${local_paths[@]}"; do
+            printf "  - %s\n" "${local_path/#"${HOME}"/\~}"
+        done
+    fi
 }
 
 cd "${BASEDIR}"
@@ -71,6 +104,8 @@ fi
 
 log_info "Linking dotfiles repo to ${HOME}/.dotfiles"
 ln -sfn "${BASEDIR}" "${HOME}/.dotfiles"
+
+ensure_local_install_ssh_key
 
 log_info "Applying dotfiles with chezmoi source ${CHEZMOI_SOURCE}"
 if [[ "${#chezmoi_args[@]}" -gt 0 ]]; then
@@ -141,7 +176,7 @@ if [[ -n "${zsh_path}" ]]; then
     fi
 fi
 
-print_example_file_instructions
+copy_and_list_local_example_files
 
 if [[ -n "${zsh_path:-}" ]]; then
     log_info "Run 'exec -l \$SHELL' (or open a new terminal) to reload your shell"
