@@ -1,15 +1,15 @@
-export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
-export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
-export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
-export XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$HOME/.local/run}"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
+export XDG_DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${HOME}/.cache}"
+export XDG_STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-${HOME}/.local/run}"
 export DOCKER_CONFIG="${XDG_CONFIG_HOME}/docker"
 export NPM_CONFIG_INIT_MODULE="${XDG_CONFIG_HOME}/npm/config/npm-init.js"
 export NPM_CONFIG_CACHE="${XDG_CACHE_HOME}/npm"
 export NPM_CONFIG_TMP="${XDG_RUNTIME_DIR}/npm"
 export RUSTUP_HOME="${XDG_DATA_HOME}/rustup"
 export HISTFILE="${XDG_STATE_HOME}/zsh/history"
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="${HOME}/.local/bin:${PATH}"
 if [[ -S "${HOME}/.1password/agent.sock" ]]; then
     export SSHKEY_IDENTITY_AGENT="${HOME}/.1password/agent.sock"
 fi
@@ -36,15 +36,15 @@ fi
 if command -v brew >/dev/null 2>&1; then
     antidote_zsh="$(brew --prefix)/opt/antidote/share/antidote/antidote.zsh"
     if [[ -f "${antidote_zsh}" ]]; then
-        source "$antidote_zsh"
+        source "${antidote_zsh}"
         antidote load "${XDG_CONFIG_HOME}/zsh/plugins.txt"
     else
-        echo "antidote not found at $antidote_zsh" >&2
+        printf '%s\n' "antidote not found at ${antidote_zsh}" >&2
     fi
 elif command -v antidote >/dev/null 2>&1; then
     antidote load "${XDG_CONFIG_HOME}/zsh/plugins.txt"
 else
-    echo "brew is not available; cannot load antidote" >&2
+    printf '%s\n' "brew is not available; cannot load antidote" >&2
 fi
 
 if command -v starship >/dev/null 2>&1; then

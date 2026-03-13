@@ -14,7 +14,7 @@ alias czs="chezmoi status"
 alias czui="chezit"
 alias fastfetch="fastfetch -c all"
 alias fish="asciiquarium"
-alias rl="exec $SHELL -l"
+alias rl="exec ${SHELL} -l"
 
 # system
 alias df="df -HT"
@@ -35,7 +35,7 @@ alias dstop="docker stop \$(docker ps -q)"
 # network
 alias dns="cat /etc/resolv.conf"
 alias ip_public="dig +short myip.opendns.com @resolver1.opendns.com"
-case "$OSTYPE" in
+case "${OSTYPE}" in
     darwin*)
         alias ip_local="ipconfig getifaddr en0"
         alias flushdns="dscacheutil -flushcache"

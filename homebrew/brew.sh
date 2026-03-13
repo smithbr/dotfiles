@@ -7,7 +7,7 @@ source "${BASEDIR}/scripts/common.sh"
 
 require_non_root
 
-case "$OSTYPE" in
+case "${OSTYPE}" in
     darwin*)
         os_name="Darwin"
         brewplatform=Homebrew
@@ -594,7 +594,7 @@ prompt_optional_brewfile() {
     if [[ "${selected_optional}" -gt 0 ]]; then
         # Tailscale: the cask and formula run separate daemons that conflict.
         # If both were selected, drop the formula — the cask is sufficient.
-        if [[ "$OSTYPE" == darwin* ]] && grep -q '^cask "tailscale-app"' "${tmp_optional_brewfile}" \
+        if [[ "${OSTYPE}" == darwin* ]] && grep -q '^cask "tailscale-app"' "${tmp_optional_brewfile}" \
                      && grep -q '^brew "tailscale"' "${tmp_optional_brewfile}"; then
             log_info "Removing tailscale formula from selection (conflicts with tailscale-app cask)"
             sed -i '' '/^brew "tailscale"$/d' "${tmp_optional_brewfile}"
