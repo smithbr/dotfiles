@@ -5,6 +5,7 @@ alias h="history"
 alias lsa="ls -FGlAhp"
 alias xb="cd ~/.local/bin"
 alias xc="cd ~/.config"
+alias xdn="xdg-ninja"
 
 # shell
 alias cz="chezmoi"
