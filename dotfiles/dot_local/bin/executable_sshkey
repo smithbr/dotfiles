@@ -20,29 +20,136 @@ USE_GH_FLAG=false
 COMMAND=""
 KEY_NAME=""
 
+HAS_GUM=false
+command -v gum >/dev/null 2>&1 && [[ -t 1 ]] && HAS_GUM=true
+
+# --- gum wrappers (degrade to plain output when gum is unavailable) ---
+
+_header() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --bold --foreground 212 "$1"
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
+_success() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum log --level info "$1"
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
+_warn() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum log --level warn "$1" >&2
+    else
+        printf '%s\n' "$1" >&2
+    fi
+}
+
+_check() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 76 "  $(printf '\xe2\x9c\x93') $1"
+    else
+        printf '  %s\n' "$1"
+    fi
+}
+
+_cross() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 196 "  $(printf '\xe2\x9c\x97') $1"
+    else
+        printf '  %s\n' "$1"
+    fi
+}
+
+_item() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 244 "  $1"
+    else
+        printf '  %s\n' "$1"
+    fi
+}
+
+_key_display() {
+    local key_content="$1"
+    if [[ "${HAS_GUM}" == true ]]; then
+        printf '\n'
+        gum style --border rounded --padding "0 1" --border-foreground 212 "${key_content}"
+        printf '\n'
+    else
+        printf '\nPublic key:\n%s\n\n' "${key_content}"
+    fi
+}
+
+_spin() {
+    local title="$1"
+    shift
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum spin --spinner dot --title "${title}" -- "$@"
+    else
+        "$@"
+    fi
+}
+
+# --- core helpers ---
+
 usage() {
-    cat <<EOF
+    local help_text
+    help_text="$(cat <<'EOF'
+# sshkey
+
+Manage SSH keys across local, GitHub, and 1Password.
+
+## Commands
+
+| Command   | Description                                      |
+|-----------|--------------------------------------------------|
+| `gh`      | Create/recreate the default GitHub key           |
+| `create`  | Create/recreate a named SSH key                  |
+| `delete`  | Delete a named key and optional remote entries    |
+| `list`    | Show local keys, agent, GitHub, or 1Password     |
+| `doctor`  | Check local SSH health and GitHub key status      |
+| `cleanup` | Remove orphaned keys, fix permissions             |
+
+## Flags
+
+| Flag   | Description                      |
+|--------|----------------------------------|
+| `-m`   | Machine type: home, work, server |
+| `-y`   | Skip confirmations               |
+| `-1p`  | Include 1Password operations     |
+| `-gh`  | Include GitHub operations        |
+EOF
+)"
+    help_text+=$'\n\n'"**Config:** \`${CONFIG_PATH}\`"
+
+    if [[ "${HAS_GUM}" == true ]]; then
+        printf '%s\n' "${help_text}" | gum format
+    else
+        # plain fallback
+        cat <<EOF
 Usage:
   sshkey gh [-m <home|work|server>] [-y] [-1p]
-    Create or recreate the default GitHub key at ~/.ssh/id_ed25519.
   sshkey create <name> [-m <home|work|server>] [-y] [-1p] [-gh]
-    Create or recreate a named SSH key at ~/.ssh/<name>.
   sshkey delete <name> [-m <home|work|server>] [-y] [-1p] [-gh]
-    Delete a named local key and optionally remove matching remote entries.
   sshkey list [-m <home|work|server>] [-gh] [-1p]
-    Show local keys, agent keys, and optional GitHub or 1Password inventory.
   sshkey doctor [-m <home|work|server>]
-    Check local SSH health and include GitHub key checks when the default key exists.
   sshkey cleanup [-m <home|work|server>] [-y]
-    Remove orphaned local key files, stale agent entries, and fix permissions.
 
-Config:
-  ${CONFIG_PATH}
+Config: ${CONFIG_PATH}
 EOF
+    fi
 }
 
 die() {
-    printf '%s\n' "$1" >&2
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum log --level error "$1" >&2
+    else
+        printf '%s\n' "$1" >&2
+    fi
     exit 1
 }
 
@@ -86,19 +193,23 @@ ensure_mutable_key_name() {
 
 skip_protected_key_path() {
     is_protected_key_path "$1" || return 1
-    printf 'Skipping protected local key: %s\n' "$1"
+    _warn "Skipping protected local key: $1"
 }
 
 confirm() {
     local prompt="$1"
-    local answer=""
 
     if [[ "${FORCE}" == true ]]; then
         return 0
     fi
 
-    read -r -p "${prompt} [y/N] " answer
-    [[ "${answer}" =~ ^[Yy]$ ]]
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum confirm "${prompt}"
+    else
+        local answer=""
+        read -r -p "${prompt} [y/N] " answer
+        [[ "${answer}" =~ ^[Yy]$ ]]
+    fi
 }
 
 load_config() {
@@ -144,12 +255,16 @@ validate_key_name() {
 }
 
 prompt_machine_type() {
-    local answer=""
-
     if [[ ! -t 0 ]]; then
         die "machine_type is required. Pass it with -m <home|work|server>"
     fi
 
+    if [[ "${HAS_GUM}" == true ]]; then
+        MACHINE_TYPE="$(gum choose --header "Machine type?" "home" "work" "server")"
+        return 0
+    fi
+
+    local answer=""
     while true; do
         read -r -p 'Machine type? [h]ome/[w]ork/[s]erver: ' answer
         case "${answer}" in
@@ -417,11 +532,11 @@ delete_remote_matches() {
 
     case "${service}" in
         github)
-            gh_ready || { printf 'GitHub CLI is not ready; skipping GitHub removal.\n' >&2; return 1; }
+            gh_ready || { _warn "GitHub CLI is not ready; skipping GitHub removal."; return 1; }
             list_data="$(gh_list_keys)"
             ;;
         1password)
-            op_ready || { printf '1Password CLI is not ready; skipping 1Password removal.\n' >&2; return 1; }
+            op_ready || { _warn "1Password CLI is not ready; skipping 1Password removal."; return 1; }
             vault="$(resolve_onepassword_vault)"
             list_data="$(op_list_keys)"
             ;;
@@ -434,7 +549,7 @@ delete_remote_matches() {
         if [[ -n "${matches}" ]]; then
             match_count="$(printf '%s\n' "${matches}" | grep -c .)"
             if [[ "${match_count}" != "1" ]]; then
-                printf 'Skipped %s deletion because title match was not unique: %s\n' "${service}" "${fallback_title}" >&2
+                _warn "Skipped ${service} deletion because title match was not unique: ${fallback_title}"
                 return 1
             fi
         fi
@@ -449,11 +564,11 @@ delete_remote_matches() {
         case "${service}" in
             github)
                 gh ssh-key delete "${id}" --yes >/dev/null 2>&1
-                printf 'Removed GitHub key: %s\n' "${title}"
+                _success "Removed GitHub key: ${title}"
                 ;;
             1password)
                 op item delete "${id}" --vault "${vault}" >/dev/null 2>&1
-                printf 'Removed 1Password item: %s\n' "${title}"
+                _success "Removed 1Password item: ${title}"
                 ;;
             *) die "delete_remote_matches: unknown service: ${service}" ;;
         esac
@@ -470,11 +585,10 @@ delete_onepassword_matches() {
 
 render_public_key() {
     local key_path="$1"
+    local key_content=""
 
-    printf '\n'
-    printf 'Public key:\n'
-    cat "${key_path}.pub"
-    printf '\n'
+    key_content="$(cat "${key_path}.pub")"
+    _key_display "${key_content}"
 }
 
 upload_key_to_github() {
@@ -484,21 +598,21 @@ upload_key_to_github() {
     [[ -f "${pub_path}" ]] || die "Public key not found: ${pub_path}"
 
     if gh_ready; then
-        if gh ssh-key add "${pub_path}" --title "${title}" --type authentication >/dev/null 2>&1; then
-            printf 'Added key to GitHub: %s\n' "${title}"
+        if _spin "Uploading key to GitHub..." gh ssh-key add "${pub_path}" --title "${title}" --type authentication >/dev/null 2>&1; then
+            _success "Added key to GitHub: ${title}"
             return 0
         fi
 
         if gh auth refresh -h github.com -s admin:public_key >/dev/null 2>&1; then
-            if gh ssh-key add "${pub_path}" --title "${title}" --type authentication >/dev/null 2>&1; then
-                printf 'Added key to GitHub: %s\n' "${title}"
+            if _spin "Uploading key to GitHub..." gh ssh-key add "${pub_path}" --title "${title}" --type authentication >/dev/null 2>&1; then
+                _success "Added key to GitHub: ${title}"
                 return 0
             fi
         fi
     fi
 
     render_public_key "${pub_path%.pub}"
-    printf 'Add this key on GitHub: https://github.com/settings/keys\n'
+    _warn "Add this key on GitHub: https://github.com/settings/keys"
 
     if [[ "${FORCE}" == true ]]; then
         die "Unable to upload to GitHub automatically while -y is enabled"
@@ -512,11 +626,11 @@ test_github_ssh() {
 
     ssh_output="$(ssh -o ConnectTimeout=5 -T git@github.com 2>&1 || true)"
     if [[ "${ssh_output}" == *"successfully authenticated"* ]]; then
-        printf 'GitHub SSH authentication working.\n'
+        _success "GitHub SSH authentication working."
         return 0
     fi
 
-    printf 'GitHub SSH authentication failed.\n' >&2
+    _warn "GitHub SSH authentication failed."
     printf '%s\n' "${ssh_output}" >&2
     return 1
 }
@@ -539,6 +653,7 @@ generate_onepassword_key() {
     vault="$(resolve_onepassword_vault)"
 
     if ! create_output="$(
+        _spin "Creating key in 1Password..." \
         op item create \
             --category "SSH Key" \
             --title "${title}" \
@@ -581,10 +696,10 @@ create_key_material() {
 
     if should_use_1password; then
         generate_onepassword_key "${key_path}" "${title}"
-        printf 'Generated key in 1Password and saved public key to %s.pub\n' "${key_path}"
+        _success "Generated key in 1Password and saved public key to ${key_path}.pub"
     else
         generate_local_key "${key_path}" "${title}"
-        printf 'Generated local key at %s\n' "${key_path}"
+        _success "Generated local key at ${key_path}"
     fi
 }
 
@@ -621,7 +736,7 @@ create_key_command() {
 
     if [[ "${key_kind}" == "github" || "${USE_GH_FLAG}" == true ]]; then
         upload_key_to_github "${staged_key_path}.pub" "${title}"
-        test_github_ssh
+        _spin "Testing GitHub SSH..." test_github_ssh
     fi
 
     if [[ "${replace_existing}" == true ]]; then
@@ -675,7 +790,7 @@ delete_key_command() {
             die "Aborted"
         fi
         remove_local_key_files "${key_path}"
-        printf 'Removed local key: %s\n' "${name}"
+        _success "Removed local key: ${name}"
     fi
 
     if [[ "${USE_GH_FLAG}" == true ]]; then
@@ -700,20 +815,21 @@ list_command() {
     local key_blob=""
     local local_name=""
     local op_backed_count=0
+    local section=""
 
     op_agent_keys="$(onepassword_agent_public_keys)"
 
-    printf 'Local keys (~/.ssh)\n'
+    section=""
     while IFS=$'\t' read -r name private_path blob comment; do
         [[ -n "${name}" ]] || continue
         found=true
         if [[ -f "${private_path}" ]]; then
-            printf '  %s\n' "${name}"
+            section+="  ${name}"$'\n'
         elif blob_in_public_key_stream "${blob}" "${op_agent_keys}"; then
             op_backed_count=$((op_backed_count + 1))
-            printf '  %s (1Password-backed)\n' "${name}"
+            section+="  ${name} (1Password-backed)"$'\n'
         else
-            printf '  %s (orphaned public key)\n' "${name}"
+            section+="  ${name} (orphaned public key)"$'\n'
         fi
     done < <(local_key_records)
 
@@ -721,67 +837,96 @@ list_command() {
         [[ -f "${private_path}" && "${private_path}" != *.pub ]] || continue
         if [[ ! -f "${private_path}.pub" ]]; then
             found=true
-            printf '  %s (orphaned private key)\n' "$(basename "${private_path}")"
+            section+="  $(basename "${private_path}") (orphaned private key)"$'\n'
         fi
     done
 
     if [[ "${found}" == false ]]; then
-        printf '  (none)\n'
+        section+="  (none)"$'\n'
+    fi
+
+    _header "Local keys (~/.ssh)"
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --border rounded --border-foreground 240 --padding "0 1" "${section%$'\n'}"
+    else
+        printf '%s' "${section}"
     fi
 
     if [[ "${op_backed_count}" -eq 0 ]]; then
-        printf '\nssh-agent\n'
+        section=""
         if ssh-add -l >/dev/null 2>&1; then
             while IFS= read -r entry; do
                 [[ -n "${entry}" ]] || continue
-                printf '  %s\n' "${entry}"
+                section+="  ${entry}"$'\n'
             done < <(ssh-add -l 2>/dev/null)
         else
-            printf '  (agent unavailable or no identities)\n'
+            section+="  (agent unavailable or no identities)"$'\n'
+        fi
+        printf '\n'
+        _header "ssh-agent"
+        if [[ "${HAS_GUM}" == true ]]; then
+            gum style --border rounded --border-foreground 240 --padding "0 1" "${section%$'\n'}"
+        else
+            printf '%s' "${section}"
         fi
     fi
 
     if [[ "${USE_GH_FLAG}" == true ]]; then
-        printf '\nGitHub\n'
+        printf '\n'
+        _header "GitHub"
         if gh_ready; then
+            section=""
             found=false
             while IFS=$'\t' read -r id title key_blob; do
                 [[ -n "${id}" ]] || continue
                 found=true
                 if local_name="$(find_local_match_by_blob "${key_blob}")"; then
-                    printf '  %s (ID: %s) <- %s\n' "${title}" "${id}" "${local_name}"
+                    section+="  ${title} (ID: ${id}) <- ${local_name}"$'\n'
                 else
-                    printf '  %s (ID: %s)\n' "${title}" "${id}"
+                    section+="  ${title} (ID: ${id})"$'\n'
                 fi
             done < <(gh_list_keys)
             if [[ "${found}" == false ]]; then
-                printf '  (none)\n'
+                section+="  (none)"$'\n'
+            fi
+            if [[ "${HAS_GUM}" == true ]]; then
+                gum style --border rounded --border-foreground 240 --padding "0 1" "${section%$'\n'}"
+            else
+                printf '%s' "${section}"
             fi
         else
-            printf '  gh CLI not ready\n'
+            _warn "gh CLI not ready"
         fi
     fi
 
     if [[ "${USE_OP_FLAG}" == true ]]; then
         if op_ready; then
             ONEPASSWORD_VAULT="$(resolve_onepassword_vault)"
-            printf '\n1Password (%s)\n' "${ONEPASSWORD_VAULT}"
+            printf '\n'
+            _header "1Password (${ONEPASSWORD_VAULT})"
+            section=""
             found=false
             while IFS=$'\t' read -r id title key_blob; do
                 [[ -n "${id}" ]] || continue
                 found=true
                 if local_name="$(find_local_match_by_blob "${key_blob}")"; then
-                    printf '  %s <- %s\n' "${title}" "${local_name}"
+                    section+="  ${title} <- ${local_name}"$'\n'
                 else
-                    printf '  %s\n' "${title}"
+                    section+="  ${title}"$'\n'
                 fi
             done < <(op_list_keys)
             if [[ "${found}" == false ]]; then
-                printf '  (none)\n'
+                section+="  (none)"$'\n'
+            fi
+            if [[ "${HAS_GUM}" == true ]]; then
+                gum style --border rounded --border-foreground 240 --padding "0 1" "${section%$'\n'}"
+            else
+                printf '%s' "${section}"
             fi
         else
-            printf '\n1Password\n'
-            printf '  op CLI not ready\n'
+            printf '\n'
+            _header "1Password"
+            _warn "op CLI not ready"
         fi
     fi
 }
@@ -795,7 +940,7 @@ doctor_default_key_permissions() {
     if [[ -f "${key_path}" ]]; then
         perms="$(get_perms "${key_path}")"
         if [[ "${perms}" != "600" ]]; then
-            printf '  Bad private key permissions for %s: %s\n' "${key_path}" "${perms}"
+            _cross "Bad private key permissions for ${key_path}: ${perms}"
             issues=1
         fi
     fi
@@ -803,7 +948,7 @@ doctor_default_key_permissions() {
     if [[ -f "${key_path}.pub" ]]; then
         perms="$(get_perms "${key_path}.pub")"
         if [[ "${perms}" != "644" && "${perms}" != "600" ]]; then
-            printf '  Bad public key permissions for %s.pub: %s\n' "${key_path}" "${perms}"
+            _cross "Bad public key permissions for ${key_path}.pub: ${perms}"
             issues=1
         fi
     fi
@@ -818,20 +963,21 @@ doctor_github_key() {
     local github_match=false
 
     key_path="$(ssh_key_path "${GITHUB_KEY_NAME}")"
-    printf 'GitHub key checks\n'
+    printf '\n'
+    _header "GitHub key checks"
 
     if [[ -f "${key_path}.pub" ]]; then
-        printf '  Found %s.pub\n' "${key_path}"
+        _check "Found ${key_path}.pub"
     else
-        printf '  Missing %s.pub\n' "${key_path}"
+        _cross "Missing ${key_path}.pub"
         return 1
     fi
 
     blob="$(public_key_blob "${key_path}.pub")"
     if blob_in_any_agent "${blob}"; then
-        printf '  Key is available through an SSH agent\n'
+        _check "Key is available through an SSH agent"
     else
-        printf '  Key is not available through an SSH agent\n'
+        _cross "Key is not available through an SSH agent"
         issues=$((issues + 1))
     fi
 
@@ -840,23 +986,23 @@ doctor_github_key() {
             [[ -n "${id}" ]] || continue
             if [[ "${key_blob}" == "${blob}" ]]; then
                 github_match=true
-                printf '  GitHub has matching key: %s\n' "${title}"
+                _check "GitHub has matching key: ${title}"
                 break
             fi
         done < <(gh_list_keys)
         if [[ "${github_match}" == false ]]; then
-            printf '  GitHub does not have a matching key blob\n'
+            _cross "GitHub does not have a matching key blob"
             issues=$((issues + 1))
         fi
     else
-        printf '  gh CLI not ready; skipped GitHub inventory check\n'
+        _cross "gh CLI not ready; skipped GitHub inventory check"
         issues=$((issues + 1))
     fi
 
     if test_github_ssh >/dev/null 2>&1; then
-        printf '  SSH auth to github.com works\n'
+        _check "SSH auth to github.com works"
     else
-        printf '  SSH auth to github.com failed\n'
+        _cross "SSH auth to github.com failed"
         issues=$((issues + 1))
     fi
 
@@ -875,24 +1021,27 @@ doctor_command() {
     local entry=""
     local permission_issue=0
 
-    printf 'Local checks\n'
+    _header "Local checks"
     if [[ -d "${HOME}/.ssh" ]]; then
         dir_perms="$(get_perms "${HOME}/.ssh")"
         if [[ "${dir_perms}" == "700" ]]; then
-            printf '  ~/.ssh permissions OK\n'
+            # shellcheck disable=SC2088
+            _check "~/.ssh permissions OK"
         else
-            printf '  ~/.ssh permissions should be 700, got %s\n' "${dir_perms}"
+            # shellcheck disable=SC2088
+            _cross "~/.ssh permissions should be 700, got ${dir_perms}"
             issues=$((issues + 1))
         fi
     else
-        printf '  ~/.ssh directory does not exist\n'
+        # shellcheck disable=SC2088
+        _cross "~/.ssh directory does not exist"
         issues=$((issues + 1))
     fi
 
     if ssh-add -l >/dev/null 2>&1; then
-        printf '  ssh-agent is running\n'
+        _check "ssh-agent is running"
     else
-        printf '  ssh-agent is unavailable or has no identities\n'
+        _item "ssh-agent is unavailable or has no identities"
     fi
 
     while IFS=$'\t' read -r name private_path blob comment; do
@@ -902,7 +1051,7 @@ doctor_command() {
             issues=$((issues + permission_issue))
         fi
         if [[ ! -f "${private_path}" ]] && ! blob_in_any_agent "${blob}"; then
-            printf '  Orphaned public key: %s.pub\n' "${private_path}"
+            _cross "Orphaned public key: ${private_path}.pub"
             issues=$((issues + 1))
         fi
     done < <(local_key_records)
@@ -910,15 +1059,15 @@ doctor_command() {
     for key_path in "${HOME}"/.ssh/id_* "${HOME}"/.ssh/*.key; do
         [[ -f "${key_path}" && "${key_path}" != *.pub ]] || continue
         if [[ ! -f "${key_path}.pub" ]]; then
-            printf '  Orphaned private key: %s\n' "${key_path}"
+            _cross "Orphaned private key: ${key_path}"
             issues=$((issues + 1))
         fi
     done
 
     if [[ -f "${HOME}/.ssh/known_hosts" ]]; then
-        printf '  known_hosts present\n'
+        _check "known_hosts present"
     else
-        printf '  known_hosts missing\n'
+        _cross "known_hosts missing"
     fi
 
     key_path="$(ssh_key_path "${GITHUB_KEY_NAME}")"
@@ -928,12 +1077,21 @@ doctor_command() {
         fi
     fi
 
+    printf '\n'
     if [[ "${issues}" -eq 0 ]]; then
-        printf 'All checks passed.\n'
+        if [[ "${HAS_GUM}" == true ]]; then
+            gum style --foreground 76 --bold "All checks passed."
+        else
+            printf 'All checks passed.\n'
+        fi
         return 0
     fi
 
-    printf 'Found %s issue(s).\n' "${issues}" >&2
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 196 --bold "Found ${issues} issue(s)."
+    else
+        printf 'Found %s issue(s).\n' "${issues}" >&2
+    fi
     return 1
 }
 
@@ -966,7 +1124,7 @@ cleanup_command() {
         if [[ ! -f "${priv}" ]] && ! blob_in_any_agent "${blob}"; then
             if confirm "Delete orphaned public key '${pub}'?"; then
                 rm -f "${pub}"
-                printf 'Removed %s\n' "${pub}"
+                _success "Removed ${pub}"
                 cleaned=$((cleaned + 1))
             fi
         fi
@@ -981,7 +1139,7 @@ cleanup_command() {
             if confirm "Delete orphaned private key '${priv}'?"; then
                 ssh-add -d "${priv}" >/dev/null 2>&1 || true
                 rm -f "${priv}"
-                printf 'Removed %s\n' "${priv}"
+                _success "Removed ${priv}"
                 cleaned=$((cleaned + 1))
             fi
         fi
@@ -996,7 +1154,7 @@ cleanup_command() {
             fi
             if confirm "Remove stale agent entry '${key_path}'?"; then
                 ssh-add -d "${key_path}" >/dev/null 2>&1 || true
-                printf 'Removed stale agent entry: %s\n' "${key_path}"
+                _success "Removed stale agent entry: ${key_path}"
                 cleaned=$((cleaned + 1))
             fi
         fi
@@ -1009,7 +1167,7 @@ cleanup_command() {
         perms="$(get_perms "${key_path}")"
         if [[ "${perms}" != "600" ]]; then
             chmod 600 "${key_path}"
-            printf 'Fixed permissions on %s\n' "${key_path}"
+            _success "Fixed permissions on ${key_path}"
             cleaned=$((cleaned + 1))
         fi
     done
@@ -1019,7 +1177,7 @@ cleanup_command() {
         perms="$(get_perms "${key_path}")"
         if [[ "${perms}" != "644" && "${perms}" != "600" ]]; then
             chmod 644 "${key_path}"
-            printf 'Fixed permissions on %s\n' "${key_path}"
+            _success "Fixed permissions on ${key_path}"
             cleaned=$((cleaned + 1))
         fi
     done
@@ -1048,33 +1206,70 @@ cleanup_command() {
             mv "${known_hosts_tmp}" "${known_hosts_path}"
             chmod 644 "${known_hosts_path}"
             if [[ "${github_removed}" -gt 0 ]]; then
-                printf 'Groomed %s (removed blank or duplicate entries and pruned %s stale github.com entry/entries)\n' "${known_hosts_path}" "${github_removed}"
+                _success "Groomed ${known_hosts_path} (removed blank/duplicate entries, pruned ${github_removed} stale github.com entries)"
             else
-                printf 'Groomed %s (removed blank or duplicate entries)\n' "${known_hosts_path}"
+                _success "Groomed ${known_hosts_path} (removed blank/duplicate entries)"
             fi
             cleaned=$((cleaned + 1))
         else
             rm -f "${known_hosts_tmp}"
             if [[ "${github_removed}" -gt 0 ]]; then
-                printf 'Pruned %s stale github.com entry/entries from %s\n' "${github_removed}" "${known_hosts_path}"
+                _success "Pruned ${github_removed} stale github.com entries from ${known_hosts_path}"
                 cleaned=$((cleaned + 1))
             fi
         fi
     fi
 
+    printf '\n'
     if [[ "${cleaned}" -eq 0 ]]; then
-        printf 'Nothing to clean up.\n'
+        _success "Nothing to clean up."
     else
-        printf 'Cleaned %s item(s).\n' "${cleaned}"
+        _success "Cleaned ${cleaned} item(s)."
     fi
+}
+
+interactive_mode() {
+    if [[ "${HAS_GUM}" != true ]]; then
+        usage
+        exit 1
+    fi
+
+    COMMAND="$(gum choose --header "sshkey" "gh" "create" "delete" "list" "doctor" "cleanup")"
+
+    case "${COMMAND}" in
+        create|delete)
+            KEY_NAME="$(gum input --placeholder "Key name" --header "Enter key name")"
+            validate_key_name "${KEY_NAME}"
+
+            local options=()
+            [[ "${COMMAND}" == "create" ]] && options+=("Add to GitHub (-gh)")
+            options+=("Use 1Password (-1p)")
+            options+=("Skip confirmations (-y)")
+            options+=("No extra options")
+
+            local selected=""
+            selected="$(gum choose --header "Options?" --no-limit "${options[@]}")"
+
+            if [[ "${selected}" == *"-gh"* ]]; then USE_GH_FLAG=true; fi
+            if [[ "${selected}" == *"-1p"* ]]; then USE_OP_FLAG=true; fi
+            if [[ "${selected}" == *"-y"* ]]; then FORCE=true; fi
+            ;;
+        list)
+            local selected=""
+            selected="$(gum choose --header "Include remote sources?" --no-limit "GitHub (-gh)" "1Password (-1p)" "Local only")"
+
+            if [[ "${selected}" == *"-gh"* ]]; then USE_GH_FLAG=true; fi
+            if [[ "${selected}" == *"-1p"* ]]; then USE_OP_FLAG=true; fi
+            ;;
+    esac
 }
 
 parse_args() {
     local arg=""
 
     [[ $# -gt 0 ]] || {
-        usage
-        exit 1
+        interactive_mode
+        return 0
     }
 
     case "$1" in
