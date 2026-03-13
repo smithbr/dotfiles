@@ -2,16 +2,40 @@
 
 set -euo pipefail
 
+_has_gum=""
+_has_gum_checked=0
+_check_gum() {
+    if [[ "${_has_gum_checked}" -eq 0 ]]; then
+        _has_gum_checked=1
+        command -v gum >/dev/null 2>&1 && _has_gum=1 || _has_gum=0
+    fi
+}
+
 log_info() {
-    printf "info: %s\n" "$*"
+    _check_gum
+    if [[ "${_has_gum}" -eq 1 ]]; then
+        gum log --level info "$*"
+    else
+        printf "info: %s\n" "$*"
+    fi
 }
 
 log_warn() {
-    printf "warning: %s\n" "$*" >&2
+    _check_gum
+    if [[ "${_has_gum}" -eq 1 ]]; then
+        gum log --level warn "$*" >&2
+    else
+        printf "warning: %s\n" "$*" >&2
+    fi
 }
 
 log_error() {
-    printf "error: %s\n" "$*" >&2
+    _check_gum
+    if [[ "${_has_gum}" -eq 1 ]]; then
+        gum log --level error "$*" >&2
+    else
+        printf "error: %s\n" "$*" >&2
+    fi
 }
 
 require_non_root() {
@@ -29,5 +53,16 @@ sudo_cmd() {
     else
         log_error "sudo is required for: $*"
         exit 1
+    fi
+}
+
+spin() {
+    local title="$1"
+    shift
+    if command -v gum >/dev/null 2>&1 && [[ "$(type -t "$1" 2>/dev/null)" != "function" ]]; then
+        gum spin --spinner dot --title "${title}" -- "$@"
+    else
+        log_info "${title}"
+        "$@"
     fi
 }

@@ -357,6 +357,7 @@ install_filtered_brewfile() {
     local pkg_type
     local pkg_name
     local selected_count=0
+    local -a pending_names=()
 
     tmp_brewfile="$(mktemp "${TMPDIR:-/tmp}/brewfile-required.XXXXXX")"
 
@@ -388,11 +389,19 @@ install_filtered_brewfile() {
         fi
 
         printf '%s "%s"\n' "${pkg_type}" "${pkg_name}" >> "${tmp_brewfile}"
+        pending_names+=("${pkg_name}")
         selected_count=$((selected_count + 1))
     done < "${source_brewfile}"
 
     if [[ "${selected_count}" -gt 0 ]]; then
-        brew bundle install --file="${tmp_brewfile}"
+        if command -v gum >/dev/null 2>&1; then
+            printf '\033[2m  %s\033[0m\n' "${pending_names[*]}"
+            gum spin --spinner dot --title "Installing ${prompt_label}s..." -- \
+                brew bundle install --file="${tmp_brewfile}"
+        else
+            log_info "Installing ${prompt_label}s: ${pending_names[*]}"
+            brew bundle install --file="${tmp_brewfile}"
+        fi
         refresh_brew_state
     else
         log_info "All ${prompt_label}s already installed"
@@ -429,7 +438,6 @@ ensure_1password_agent_symlink() {
     log_info "Linked 1Password SSH agent socket at ${link_path}"
 }
 
-log_info "Installing core Homebrew packages"
 install_filtered_brewfile "${BREWFILE}" "core Homebrew package"
 
 gum_choose_optional_category() {
@@ -456,7 +464,7 @@ gum_choose_optional_category() {
         --header="Select ${prompt_label}s from ${category_name}" \
         --selected-prefix="* " \
         --unselected-prefix="  " \
-        "$@" || true
+        "$@" 2>/dev/null || true
 }
 
 append_gum_optional_selection() {
@@ -471,6 +479,7 @@ append_gum_optional_selection() {
 
     while IFS= read -r selected_name || [[ -n "${selected_name}" ]]; do
         [[ -z "${selected_name}" ]] && continue
+        [[ "${selected_name}" == "nothing selected" ]] && continue
 
         for idx in "${!gum_category_names[@]}"; do
             if [[ "${gum_category_names[${idx}]}" == "${selected_name}" ]]; then
@@ -509,6 +518,12 @@ prompt_optional_brewfile() {
     local -a gum_category_entries=()
     local -a gum_category_names=()
     tmp_optional_brewfile="$(mktemp "${TMPDIR:-/tmp}/brewfile-optional.XXXXXX")"
+
+    local _spin_pid=""
+    if command -v gum >/dev/null 2>&1; then
+        gum spin --spinner dot --title "Scanning optional packages..." -- sleep infinity &
+        _spin_pid=$!
+    fi
 
     while IFS= read -r raw_line || [[ -n "${raw_line}" ]]; do
         line="${raw_line#"${raw_line%%[![:space:]]*}"}"
@@ -552,6 +567,11 @@ prompt_optional_brewfile() {
             installable_count=$((installable_count + 1))
         fi
     done < "${optional_brewfile}"
+
+    if [[ -n "${_spin_pid}" ]]; then
+        kill "${_spin_pid}" 2>/dev/null
+        wait "${_spin_pid}" 2>/dev/null || true
+    fi
 
     if [[ "${#optional_entries[@]}" -eq 0 ]]; then
         log_info "No ${prompt_label} entries available"
@@ -610,8 +630,21 @@ prompt_optional_brewfile() {
             sed -i '' '/^brew "tailscale"$/d' "${tmp_optional_brewfile}"
             selected_optional=$((selected_optional - 1))
         fi
-        log_info "Installing optional Homebrew packages"
-        brew bundle install --file="${tmp_optional_brewfile}"
+        local -a opt_names=()
+        local opt_line opt_name
+        while IFS= read -r opt_line || [[ -n "${opt_line}" ]]; do
+            if [[ "${opt_line}" =~ ^[a-z]+[[:space:]]+\"([^\"]+)\" ]]; then
+                opt_names+=("${BASH_REMATCH[1]}")
+            fi
+        done < "${tmp_optional_brewfile}"
+        if command -v gum >/dev/null 2>&1; then
+            printf '\033[2m  %s\033[0m\n' "${opt_names[*]}"
+            gum spin --spinner dot --title "Installing optional packages..." -- \
+                brew bundle install --file="${tmp_optional_brewfile}"
+        else
+            log_info "Installing optional Homebrew packages: ${opt_names[*]}"
+            brew bundle install --file="${tmp_optional_brewfile}"
+        fi
         refresh_brew_state
     elif [[ "${installable_count}" -gt 0 ]]; then
         log_info "No ${prompt_label} selected"
