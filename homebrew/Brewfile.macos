@@ -17,7 +17,7 @@ cask "firefox"
 cask "google-chrome"
 
 # Development Tools
-brew "mactop"
+cask "mactop"
 cask "cmux"
 cask "cursor"
 cask "docker-desktop"
@@ -34,5 +34,4 @@ cask "utm"
 # Security and Networking
 cask "1password"
 cask "protonvpn"
-brew "tailscale"
 cask "tailscale-app"
