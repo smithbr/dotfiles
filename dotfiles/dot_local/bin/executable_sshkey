@@ -5,9 +5,7 @@ set -euo pipefail
 CONFIG_PATH="${SSHKEY_CONFIG:-${XDG_CONFIG_HOME:-${HOME}/.config}/sshkey/config.toml}"
 ONEPASSWORD_VAULT="${SSHKEY_1PASSWORD_VAULT:-}"
 ONEPASSWORD_VAULT_EXPLICIT=false
-if [[ -n "${SSHKEY_1PASSWORD_VAULT:-}" ]]; then
-    ONEPASSWORD_VAULT_EXPLICIT=true
-fi
+[[ -n "${ONEPASSWORD_VAULT}" ]] && ONEPASSWORD_VAULT_EXPLICIT=true
 MACHINE_TYPE=""
 GITHUB_KEY_NAME="${SSHKEY_GITHUB_KEY_NAME:-id_ed25519}"
 GITHUB_TITLE_TEMPLATE="${SSHKEY_GITHUB_TITLE_TEMPLATE:-github - {{machine_type}} - {{user}}@{{hostname}}}"
@@ -68,43 +66,27 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-protected_local_key_path() {
-    printf '%s\n' "${_PROTECTED_LOCAL_KEY_PATH}"
-}
-
-protected_local_key_message() {
-    printf 'Refusing to modify protected local key: %s\n' "${_PROTECTED_LOCAL_KEY_PATH}"
+get_perms() {
+    stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
 }
 
 is_protected_key_name() {
-    local name="$1"
-
-    [[ -n "${PROTECTED_LOCAL_KEY_NAME}" && "${name}" == "${PROTECTED_LOCAL_KEY_NAME}" ]]
+    [[ -n "${PROTECTED_LOCAL_KEY_NAME}" && "$1" == "${PROTECTED_LOCAL_KEY_NAME}" ]]
 }
 
 is_protected_key_path() {
-    local key_path="$1"
-
-    [[ -n "${PROTECTED_LOCAL_KEY_NAME}" && "${key_path}" == "${_PROTECTED_LOCAL_KEY_PATH}" ]]
+    [[ -n "${PROTECTED_LOCAL_KEY_NAME}" && "$1" == "${_PROTECTED_LOCAL_KEY_PATH}" ]]
 }
 
 ensure_mutable_key_name() {
-    local name="$1"
-
-    if is_protected_key_name "${name}"; then
-        die "$(protected_local_key_message)"
+    if is_protected_key_name "$1"; then
+        die "Refusing to modify protected local key: ${_PROTECTED_LOCAL_KEY_PATH}"
     fi
 }
 
 skip_protected_key_path() {
-    local key_path="$1"
-
-    if is_protected_key_path "${key_path}"; then
-        printf 'Skipping protected local key: %s\n' "${key_path}"
-        return 0
-    fi
-
-    return 1
+    is_protected_key_path "$1" || return 1
+    printf 'Skipping protected local key: %s\n' "$1"
 }
 
 confirm() {
@@ -180,43 +162,21 @@ prompt_machine_type() {
 }
 
 resolve_machine_type() {
-    if [[ -n "${MACHINE_TYPE}" ]]; then
-        validate_machine_type
-        return 0
+    if [[ -z "${MACHINE_TYPE}" ]]; then
+        prompt_machine_type
     fi
-
-    prompt_machine_type
     validate_machine_type
 }
 
 command_requires_machine_type() {
     case "${COMMAND}" in
         gh) return 0 ;;
-        create|delete)
-            if [[ "${USE_OP_FLAG}" == true ]]; then
-                return 0
-            fi
-            return 1
-            ;;
-        list)
-            if [[ "${USE_OP_FLAG}" == true ]]; then
-                return 0
-            fi
-            return 1
-            ;;
-        doctor|cleanup)
-            return 1
-            ;;
+        create|delete|list) [[ "${USE_OP_FLAG}" == true ]] ;;
+        *) return 1 ;;
     esac
-
-    return 1
 }
 
-github_key_path() {
-    printf '%s/.ssh/%s\n' "${HOME}" "${GITHUB_KEY_NAME}"
-}
-
-custom_key_path() {
+ssh_key_path() {
     printf '%s/.ssh/%s\n' "${HOME}" "$1"
 }
 
@@ -227,15 +187,9 @@ ensure_ssh_dir() {
 
 github_title() {
     local title="${GITHUB_TITLE_TEMPLATE}"
-    title="${title//'{{machine_type}}}'/${MACHINE_TYPE}}"
     title="${title//'{{machine_type}}'/${MACHINE_TYPE}}"
-    title="${title//'{{machine_type}'/${MACHINE_TYPE}}"
-    title="${title//'{{user}}}'/${USER_NAME}}"
     title="${title//'{{user}}'/${USER_NAME}}"
-    title="${title//'{{user}'/${USER_NAME}}"
-    title="${title//'{{hostname}}}'/${HOSTNAME_SHORT}}"
     title="${title//'{{hostname}}'/${HOSTNAME_SHORT}}"
-    title="${title//'{{hostname}'/${HOSTNAME_SHORT}}"
     printf '%s\n' "${title}"
 }
 
@@ -268,19 +222,20 @@ github_known_host_key_allowed() {
 }
 
 public_key_blob() {
-    local input="$1"
+    local input="$1" _type="" blob=""
 
     if [[ -f "${input}" ]]; then
-        awk '{print $2}' "${input}" 2>/dev/null
+        read -r _type blob _ < "${input}" 2>/dev/null
     else
-        printf '%s\n' "${input}" | awk '{print $2}'
+        read -r _type blob _ <<< "${input}"
     fi
+    printf '%s\n' "${blob}"
 }
 
 gh_list_keys() {
     gh ssh-key list 2>/dev/null | while IFS=$'\t' read -r title key _created id _type; do
         [[ -n "${id}" ]] || continue
-        printf '%s\t%s\t%s\n' "${id}" "${title}" "${key}"
+        printf '%s\t%s\t%s\n' "${id}" "${title}" "$(public_key_blob "${key}")"
     done
 }
 
@@ -362,34 +317,17 @@ blob_in_public_key_stream() {
 }
 
 blob_in_any_agent() {
-    local blob="$1"
-    local default_agent_keys=""
-    local op_agent_keys=""
-
-    default_agent_keys="$(agent_public_keys)"
-    if blob_in_public_key_stream "${blob}" "${default_agent_keys}"; then
-        return 0
-    fi
-
-    op_agent_keys="$(onepassword_agent_public_keys)"
-    if blob_in_public_key_stream "${blob}" "${op_agent_keys}"; then
-        return 0
-    fi
-
-    return 1
+    blob_in_public_key_stream "$1" "$(agent_public_keys)" \
+        || blob_in_public_key_stream "$1" "$(onepassword_agent_public_keys)"
 }
 
 local_key_records() {
-    local pub=""
-    local name=""
-    local blob=""
-    local comment=""
+    local pub="" name="" _type="" blob="" comment=""
 
     for pub in "${HOME}"/.ssh/*.pub; do
         [[ -f "${pub}" ]] || continue
         name="$(basename "${pub}" .pub)"
-        blob="$(awk '{print $2}' "${pub}" 2>/dev/null)"
-        comment="$(awk '{print $3}' "${pub}" 2>/dev/null)"
+        read -r _type blob comment < "${pub}" 2>/dev/null || true
         printf '%s\t%s\t%s\t%s\n' "${name}" "${pub%.pub}" "${blob}" "${comment}"
     done
 }
@@ -452,147 +390,82 @@ remove_local_key_files() {
     rm -f "${key_path}" "${key_path}.pub"
 }
 
-find_github_matches_by_blob() {
-    local blob="$1"
-    local id=""
-    local title=""
-    local key=""
-    local gh_blob=""
+find_list_matches() {
+    local list_data="$1"
+    local field="$2"
+    local value="$3"
+    local id="" title="" blob=""
 
-    [[ -n "${blob}" ]] || return 0
+    [[ -n "${value}" && -n "${list_data}" ]] || return 0
 
-    while IFS=$'\t' read -r id title key; do
+    while IFS=$'\t' read -r id title blob; do
         [[ -n "${id}" ]] || continue
-        gh_blob="$(public_key_blob "${key}")"
-        if [[ "${gh_blob}" == "${blob}" ]]; then
-            printf '%s\t%s\n' "${id}" "${title}"
-        fi
-    done < <(gh_list_keys)
+        case "${field}" in
+            blob)  [[ "${blob}" == "${value}" ]] && printf '%s\t%s\n' "${id}" "${title}" ;;
+            title) [[ "${title}" == "${value}" ]] && printf '%s\t%s\n' "${id}" "${title}" ;;
+            *) die "find_list_matches: unknown field: ${field}" ;;
+        esac
+    done <<< "${list_data}"
 }
 
-find_github_matches_by_title() {
-    local target_title="$1"
-    local id=""
-    local title=""
-    local key=""
+delete_remote_matches() {
+    local service="$1"
+    local blob="$2"
+    local fallback_title="$3"
+    local list_data="" matches="" match_count=0
+    local entry="" id="" title="" vault=""
 
-    [[ -n "${target_title}" ]] || return 0
+    case "${service}" in
+        github)
+            gh_ready || { printf 'GitHub CLI is not ready; skipping GitHub removal.\n' >&2; return 1; }
+            list_data="$(gh_list_keys)"
+            ;;
+        1password)
+            op_ready || { printf '1Password CLI is not ready; skipping 1Password removal.\n' >&2; return 1; }
+            vault="$(resolve_onepassword_vault)"
+            list_data="$(op_list_keys)"
+            ;;
+        *) die "delete_remote_matches: unknown service: ${service}" ;;
+    esac
 
-    while IFS=$'\t' read -r id title key; do
-        [[ -n "${id}" ]] || continue
-        if [[ "${title}" == "${target_title}" ]]; then
-            printf '%s\t%s\n' "${id}" "${title}"
+    matches="$(find_list_matches "${list_data}" blob "${blob}")"
+    if [[ -z "${matches}" ]]; then
+        matches="$(find_list_matches "${list_data}" title "${fallback_title}")"
+        if [[ -n "${matches}" ]]; then
+            match_count="$(printf '%s\n' "${matches}" | grep -c .)"
+            if [[ "${match_count}" != "1" ]]; then
+                printf 'Skipped %s deletion because title match was not unique: %s\n' "${service}" "${fallback_title}" >&2
+                return 1
+            fi
         fi
-    done < <(gh_list_keys)
+    fi
+
+    [[ -n "${matches}" ]] || return 0
+
+    while IFS= read -r entry; do
+        [[ -n "${entry}" ]] || continue
+        id="${entry%%$'\t'*}"
+        title="${entry#*$'\t'}"
+        case "${service}" in
+            github)
+                gh ssh-key delete "${id}" --yes >/dev/null 2>&1
+                printf 'Removed GitHub key: %s\n' "${title}"
+                ;;
+            1password)
+                op item delete "${id}" --vault "${vault}" >/dev/null 2>&1
+                printf 'Removed 1Password item: %s\n' "${title}"
+                ;;
+            *) die "delete_remote_matches: unknown service: ${service}" ;;
+        esac
+    done <<< "${matches}"
 }
 
 delete_github_matches() {
-    local blob="$1"
-    local fallback_title="$2"
-    local matches=""
-    local match_count=0
-    local entry=""
-    local id=""
-    local title=""
-
-    gh_ready || {
-        printf 'GitHub CLI is not ready; skipping GitHub removal.\n' >&2
-        return 1
-    }
-
-    matches="$(find_github_matches_by_blob "${blob}")"
-    if [[ -z "${matches}" ]]; then
-        matches="$(find_github_matches_by_title "${fallback_title}")"
-        if [[ -n "${matches}" ]]; then
-            match_count="$(printf '%s\n' "${matches}" | sed '/^$/d' | wc -l | tr -d ' ')"
-            if [[ "${match_count}" != "1" ]]; then
-                printf 'Skipped GitHub deletion because title match was not unique: %s\n' "${fallback_title}" >&2
-                return 1
-            fi
-        fi
-    fi
-
-    [[ -n "${matches}" ]] || return 0
-
-    while IFS= read -r entry; do
-        [[ -n "${entry}" ]] || continue
-        id="${entry%%$'\t'*}"
-        title="${entry#*$'\t'}"
-        gh ssh-key delete "${id}" --yes >/dev/null 2>&1
-        printf 'Removed GitHub key: %s\n' "${title}"
-    done <<< "${matches}"
-}
-
-find_op_matches_by_blob() {
-    local blob="$1"
-    local id=""
-    local title=""
-    local item_blob=""
-
-    [[ -n "${blob}" ]] || return 0
-
-    while IFS=$'\t' read -r id title item_blob; do
-        [[ -n "${id}" ]] || continue
-        if [[ "${item_blob}" == "${blob}" ]]; then
-            printf '%s\t%s\n' "${id}" "${title}"
-        fi
-    done < <(op_list_keys)
-}
-
-find_op_matches_by_title() {
-    local target_title="$1"
-    local id=""
-    local title=""
-    local item_blob=""
-
-    [[ -n "${target_title}" ]] || return 0
-
-    while IFS=$'\t' read -r id title item_blob; do
-        [[ -n "${id}" ]] || continue
-        if [[ "${title}" == "${target_title}" ]]; then
-            printf '%s\t%s\n' "${id}" "${title}"
-        fi
-    done < <(op_list_keys)
+    delete_remote_matches "github" "$1" "$2"
 }
 
 delete_onepassword_matches() {
-    local blob="$1"
-    local fallback_title="$2"
-    local matches=""
-    local match_count=0
-    local entry=""
-    local id=""
-    local title=""
-    local vault=""
-
-    op_ready || {
-        printf '1Password CLI is not ready; skipping 1Password removal.\n' >&2
-        return 1
-    }
-
-    vault="$(resolve_onepassword_vault)"
-
-    matches="$(find_op_matches_by_blob "${blob}")"
-    if [[ -z "${matches}" ]]; then
-        matches="$(find_op_matches_by_title "${fallback_title}")"
-        if [[ -n "${matches}" ]]; then
-            match_count="$(printf '%s\n' "${matches}" | sed '/^$/d' | wc -l | tr -d ' ')"
-            if [[ "${match_count}" != "1" ]]; then
-                printf 'Skipped 1Password deletion because title match was not unique: %s\n' "${fallback_title}" >&2
-                return 1
-            fi
-        fi
-    fi
-
-    [[ -n "${matches}" ]] || return 0
-
-    while IFS= read -r entry; do
-        [[ -n "${entry}" ]] || continue
-        id="${entry%%$'\t'*}"
-        title="${entry#*$'\t'}"
-        op item delete "${id}" --vault "${vault}" >/dev/null 2>&1
-        printf 'Removed 1Password item: %s\n' "${title}"
-    done <<< "${matches}"
+    delete_remote_matches "1password" "$1" "$2"
 }
 
 render_public_key() {
@@ -690,14 +563,10 @@ generate_onepassword_key() {
 }
 
 should_use_1password() {
-    if [[ "${USE_OP_FLAG}" == true ]]; then
-        return 0
-    fi
-
+    [[ "${USE_OP_FLAG}" == true ]] && return 0
     case "${USE_1PASSWORD_DEFAULT}" in
         true|TRUE|True|1|yes|YES|on|ON) return 0 ;;
     esac
-
     return 1
 }
 
@@ -706,17 +575,15 @@ create_key_material() {
     local name="$2"
     local key_path="$3"
     local title=""
-    local comment=""
 
     ensure_ssh_dir
     title="$(key_comment "${key_kind}" "${name}")"
-    comment="${title}"
 
     if should_use_1password; then
         generate_onepassword_key "${key_path}" "${title}"
         printf 'Generated key in 1Password and saved public key to %s.pub\n' "${key_path}"
     else
-        generate_local_key "${key_path}" "${comment}"
+        generate_local_key "${key_path}" "${title}"
         printf 'Generated local key at %s\n' "${key_path}"
     fi
 }
@@ -781,10 +648,6 @@ create_key_command() {
                 delete_onepassword_matches "${existing_blob}" "" || true
             fi
         fi
-
-        if [[ "${key_kind}" == "github" || "${USE_GH_FLAG}" == true ]]; then
-            test_github_ssh
-        fi
     fi
 }
 
@@ -797,7 +660,7 @@ delete_key_command() {
 
     validate_key_name "${name}"
     ensure_mutable_key_name "${name}"
-    key_path="$(custom_key_path "${name}")"
+    key_path="$(ssh_key_path "${name}")"
     title="$(custom_github_title "${name}")"
 
     [[ -f "${key_path}" || -f "${key_path}.pub" ]] && had_any=true
@@ -834,7 +697,6 @@ list_command() {
     local entry=""
     local id=""
     local title=""
-    local key=""
     local key_blob=""
     local local_name=""
     local op_backed_count=0
@@ -883,10 +745,9 @@ list_command() {
         printf '\nGitHub\n'
         if gh_ready; then
             found=false
-            while IFS=$'\t' read -r id title key; do
+            while IFS=$'\t' read -r id title key_blob; do
                 [[ -n "${id}" ]] || continue
                 found=true
-                key_blob="$(public_key_blob "${key}")"
                 if local_name="$(find_local_match_by_blob "${key_blob}")"; then
                     printf '  %s (ID: %s) <- %s\n' "${title}" "${id}" "${local_name}"
                 else
@@ -932,7 +793,7 @@ doctor_default_key_permissions() {
     local issues=0
 
     if [[ -f "${key_path}" ]]; then
-        perms="$(stat -f '%Lp' "${key_path}" 2>/dev/null || stat -c '%a' "${key_path}" 2>/dev/null)"
+        perms="$(get_perms "${key_path}")"
         if [[ "${perms}" != "600" ]]; then
             printf '  Bad private key permissions for %s: %s\n' "${key_path}" "${perms}"
             issues=1
@@ -940,7 +801,7 @@ doctor_default_key_permissions() {
     fi
 
     if [[ -f "${key_path}.pub" ]]; then
-        perms="$(stat -f '%Lp' "${key_path}.pub" 2>/dev/null || stat -c '%a' "${key_path}.pub" 2>/dev/null)"
+        perms="$(get_perms "${key_path}.pub")"
         if [[ "${perms}" != "644" && "${perms}" != "600" ]]; then
             printf '  Bad public key permissions for %s.pub: %s\n' "${key_path}" "${perms}"
             issues=1
@@ -956,7 +817,7 @@ doctor_github_key() {
     local issues=0
     local github_match=false
 
-    key_path="$(github_key_path)"
+    key_path="$(ssh_key_path "${GITHUB_KEY_NAME}")"
     printf 'GitHub key checks\n'
 
     if [[ -f "${key_path}.pub" ]]; then
@@ -975,9 +836,9 @@ doctor_github_key() {
     fi
 
     if gh_ready; then
-        while IFS=$'\t' read -r id title key; do
+        while IFS=$'\t' read -r id title key_blob; do
             [[ -n "${id}" ]] || continue
-            if [[ "$(public_key_blob "${key}")" == "${blob}" ]]; then
+            if [[ "${key_blob}" == "${blob}" ]]; then
                 github_match=true
                 printf '  GitHub has matching key: %s\n' "${title}"
                 break
@@ -1016,7 +877,7 @@ doctor_command() {
 
     printf 'Local checks\n'
     if [[ -d "${HOME}/.ssh" ]]; then
-        dir_perms="$(stat -f '%Lp' "${HOME}/.ssh" 2>/dev/null || stat -c '%a' "${HOME}/.ssh" 2>/dev/null)"
+        dir_perms="$(get_perms "${HOME}/.ssh")"
         if [[ "${dir_perms}" == "700" ]]; then
             printf '  ~/.ssh permissions OK\n'
         else
@@ -1060,7 +921,7 @@ doctor_command() {
         printf '  known_hosts missing\n'
     fi
 
-    key_path="$(github_key_path)"
+    key_path="$(ssh_key_path "${GITHUB_KEY_NAME}")"
     if [[ -f "${key_path}.pub" ]]; then
         if ! doctor_github_key; then
             issues=$((issues + 1))
@@ -1144,45 +1005,32 @@ cleanup_command() {
     chmod 700 "${HOME}/.ssh"
     for key_path in "${HOME}"/.ssh/id_* "${HOME}"/.ssh/*.key; do
         [[ -f "${key_path}" && "${key_path}" != *.pub ]] || continue
-        if is_protected_key_path "${key_path}"; then
-            continue
-        fi
-        perms="$(stat -f '%Lp' "${key_path}" 2>/dev/null || stat -c '%a' "${key_path}" 2>/dev/null)"
+        is_protected_key_path "${key_path}" && continue
+        perms="$(get_perms "${key_path}")"
         if [[ "${perms}" != "600" ]]; then
             chmod 600 "${key_path}"
             printf 'Fixed permissions on %s\n' "${key_path}"
             cleaned=$((cleaned + 1))
         fi
     done
-    for pub in "${HOME}"/.ssh/*.pub; do
-        [[ -f "${pub}" ]] || continue
-        if is_protected_key_path "${pub%.pub}"; then
-            continue
-        fi
-        perms="$(stat -f '%Lp' "${pub}" 2>/dev/null || stat -c '%a' "${pub}" 2>/dev/null)"
+    for key_path in "${HOME}"/.ssh/*.pub "${known_hosts_path}"; do
+        [[ -f "${key_path}" ]] || continue
+        is_protected_key_path "${key_path%.pub}" && continue
+        perms="$(get_perms "${key_path}")"
         if [[ "${perms}" != "644" && "${perms}" != "600" ]]; then
-            chmod 644 "${pub}"
-            printf 'Fixed permissions on %s\n' "${pub}"
+            chmod 644 "${key_path}"
+            printf 'Fixed permissions on %s\n' "${key_path}"
             cleaned=$((cleaned + 1))
         fi
     done
 
     if [[ -f "${known_hosts_path}" ]]; then
-        perms="$(stat -f '%Lp' "${known_hosts_path}" 2>/dev/null || stat -c '%a' "${known_hosts_path}" 2>/dev/null)"
-        if [[ "${perms}" != "644" && "${perms}" != "600" ]]; then
-            chmod 644 "${known_hosts_path}"
-            printf 'Fixed permissions on %s\n' "${known_hosts_path}"
-            cleaned=$((cleaned + 1))
-        fi
-
         known_hosts_filtered_tmp="$(mktemp "${TMPDIR:-/tmp}/sshkey-known-hosts-filtered.XXXXXX")"
         while IFS= read -r line || [[ -n "${line}" ]]; do
             [[ -n "${line//[[:space:]]/}" ]] || continue
 
-            host_field="$(printf '%s\n' "${line}" | awk '{print $1}')"
+            read -r host_field key_type key_blob _rest <<< "${line}"
             if [[ "${host_field}" == "github.com" ]]; then
-                key_type="$(printf '%s\n' "${line}" | awk '{print $2}')"
-                key_blob="$(printf '%s\n' "${line}" | awk '{print $3}')"
                 if ! github_known_host_key_allowed "${key_type}" "${key_blob}"; then
                     github_removed=$((github_removed + 1))
                     continue
@@ -1230,11 +1078,7 @@ parse_args() {
     }
 
     case "$1" in
-        gh)
-            COMMAND="gh"
-            shift
-            ;;
-        create|delete|list|doctor|cleanup)
+        gh|create|delete|list|doctor|cleanup)
             COMMAND="$1"
             shift
             ;;
@@ -1316,11 +1160,11 @@ main() {
 
     case "${COMMAND}" in
         gh)
-            key_path="$(github_key_path)"
+            key_path="$(ssh_key_path "${GITHUB_KEY_NAME}")"
             create_key_command "github" "github" "${key_path}"
             ;;
         create)
-            key_path="$(custom_key_path "${KEY_NAME}")"
+            key_path="$(ssh_key_path "${KEY_NAME}")"
             create_key_command "custom" "${KEY_NAME}" "${key_path}"
             ;;
         delete)
