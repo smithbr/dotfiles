@@ -84,6 +84,15 @@ _key_display() {
     fi
 }
 
+_box() {
+    local content="$1"
+    if [[ "${HAS_GUM}" == true ]]; then
+        printf '%s' "${content}" | gum style --border rounded --border-foreground 240 --margin "0 0" --padding "0 1"
+    else
+        printf '%s\n' "${content}" | sed 's/^/  /'
+    fi
+}
+
 _spin() {
     local title="$1"
     shift
@@ -187,7 +196,9 @@ is_protected_key_path() {
 
 ensure_mutable_key_name() {
     if is_protected_key_name "$1"; then
-        die "Refusing to modify protected local key: ${_PROTECTED_LOCAL_KEY_PATH}"
+        _warn "Refusing to modify protected key '${PROTECTED_LOCAL_KEY_NAME}' at ${_PROTECTED_LOCAL_KEY_PATH}"
+        _warn "Tip: override with SSHKEY_PROTECTED_LOCAL_KEY_NAME='' to unprotect"
+        exit 1
     fi
 }
 
@@ -373,7 +384,11 @@ default_onepassword_vault() {
 resolve_onepassword_vault() {
     local requested_vault=""
 
-    op_ready || die "1Password CLI is not ready"
+    if ! op_ready; then
+        _warn "1Password CLI is not available or not signed in"
+        _warn "Tip: install with 'brew install 1password-cli', then run 'op signin'"
+        exit 1
+    fi
 
     if [[ -n "${ONEPASSWORD_VAULT}" ]]; then
         requested_vault="${ONEPASSWORD_VAULT}"
@@ -387,11 +402,9 @@ resolve_onepassword_vault() {
         return 0
     fi
 
-    if [[ "${ONEPASSWORD_VAULT_EXPLICIT}" == true ]]; then
-        die "Configured 1Password vault not found: ${requested_vault}"
-    fi
-
-    die "Default 1Password vault not found for machine_type=${MACHINE_TYPE}: ${requested_vault}"
+    _warn "Cannot access 1Password vault '${requested_vault}'${ONEPASSWORD_VAULT_EXPLICIT:+" (explicitly configured)"}${MACHINE_TYPE:+" for ${MACHINE_TYPE} machine type"}"
+    _warn "Tip: run 'op account list' to see signed-in accounts, or 'op signin' to authenticate"
+    exit 1
 }
 
 op_agent_socket() {
@@ -483,7 +496,7 @@ if not raw:
 for item in json.loads(raw):
     detail = json.loads(subprocess.check_output([
         'op', 'item', 'get', item['id'], '--vault', '${vault}', '--format=json'
-    ]))
+    ], stderr=subprocess.DEVNULL))
     blob = ''
     for field in detail.get('fields', []):
         if field.get('id') == 'public_key':
@@ -532,11 +545,19 @@ delete_remote_matches() {
 
     case "${service}" in
         github)
-            gh_ready || { _warn "GitHub CLI is not ready; skipping GitHub removal."; return 1; }
+            if ! gh_ready; then
+                _warn "GitHub CLI is not available or not authenticated — skipping GitHub removal"
+                _warn "Tip: run 'gh auth status' to check, or 'gh auth login' to authenticate"
+                return 1
+            fi
             list_data="$(gh_list_keys)"
             ;;
         1password)
-            op_ready || { _warn "1Password CLI is not ready; skipping 1Password removal."; return 1; }
+            if ! op_ready; then
+                _warn "1Password CLI is not available or not signed in — skipping 1Password removal"
+                _warn "Tip: run 'op signin' to authenticate"
+                return 1
+            fi
             vault="$(resolve_onepassword_vault)"
             list_data="$(op_list_keys)"
             ;;
@@ -615,7 +636,9 @@ upload_key_to_github() {
     _warn "Add this key on GitHub: https://github.com/settings/keys"
 
     if [[ "${FORCE}" == true ]]; then
-        die "Unable to upload to GitHub automatically while -y is enabled"
+        _warn "Could not upload key to GitHub automatically"
+        _warn "Tip: run without -y to be prompted for manual upload, or check 'gh auth status'"
+        exit 1
     fi
 
     read -r -p "Press enter after adding the key to GitHub..."
@@ -662,7 +685,9 @@ generate_onepassword_key() {
             "machine[text]=${USER_NAME}@${HOSTNAME_SHORT}" \
             --format=json
     )"; then
-        die "Failed to create SSH key in 1Password vault '${vault}'"
+        _warn "Failed to create SSH key in 1Password vault '${vault}'"
+        _warn "Tip: check that you have write access to this vault and that 'op' is signed in"
+        exit 1
     fi
 
     if ! public_key="$(
@@ -782,7 +807,9 @@ delete_key_command() {
     blob="$(public_key_blob "${key_path}.pub" 2>/dev/null || true)"
 
     if [[ "${had_any}" == false && "${USE_GH_FLAG}" == false && "${USE_OP_FLAG}" == false ]]; then
-        die "No key files found for ${name}"
+        _warn "No key files found for '${name}'"
+        _warn "Tip: run 'sshkey list' to see available keys"
+        exit 1
     fi
 
     if [[ "${had_any}" == true ]]; then
@@ -824,12 +851,12 @@ list_command() {
         [[ -n "${name}" ]] || continue
         found=true
         if [[ -f "${private_path}" ]]; then
-            section+="  ${name}"$'\n'
+            section+="${name}"$'\n'
         elif blob_in_public_key_stream "${blob}" "${op_agent_keys}"; then
             op_backed_count=$((op_backed_count + 1))
-            section+="  ${name} (1Password-backed)"$'\n'
+            section+="${name} (1Password-backed)"$'\n'
         else
-            section+="  ${name} (orphaned public key)"$'\n'
+            section+="${name} (orphaned public key)"$'\n'
         fi
     done < <(local_key_records)
 
@@ -837,43 +864,35 @@ list_command() {
         [[ -f "${private_path}" && "${private_path}" != *.pub ]] || continue
         if [[ ! -f "${private_path}.pub" ]]; then
             found=true
-            section+="  $(basename "${private_path}") (orphaned private key)"$'\n'
+            section+="$(basename "${private_path}") (orphaned private key)"$'\n'
         fi
     done
 
     if [[ "${found}" == false ]]; then
-        section+="  (none)"$'\n'
+        section+="(none)"$'\n'
     fi
 
-    _header "Local keys (~/.ssh)"
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --border rounded --border-foreground 240 --padding "0 1" "${section%$'\n'}"
-    else
-        printf '%s' "${section}"
-    fi
+    _header "Local Keys: ~/.ssh"
+    _box "${section%$'\n'}"
 
     if [[ "${op_backed_count}" -eq 0 ]]; then
         section=""
         if ssh-add -l >/dev/null 2>&1; then
             while IFS= read -r entry; do
                 [[ -n "${entry}" ]] || continue
-                section+="  ${entry}"$'\n'
+                section+="${entry}"$'\n'
             done < <(ssh-add -l 2>/dev/null)
         else
-            section+="  (agent unavailable or no identities)"$'\n'
+            section+="(agent unavailable or no identities)"$'\n'
         fi
         printf '\n'
         _header "ssh-agent"
-        if [[ "${HAS_GUM}" == true ]]; then
-            gum style --border rounded --border-foreground 240 --padding "0 1" "${section%$'\n'}"
-        else
-            printf '%s' "${section}"
-        fi
+        _box "${section%$'\n'}"
     fi
 
     if [[ "${USE_GH_FLAG}" == true ]]; then
         printf '\n'
-        _header "GitHub"
+        _header "GitHub: all keys, regardless of machine type"
         if gh_ready; then
             section=""
             found=false
@@ -881,21 +900,18 @@ list_command() {
                 [[ -n "${id}" ]] || continue
                 found=true
                 if local_name="$(find_local_match_by_blob "${key_blob}")"; then
-                    section+="  ${title} (ID: ${id}) <- ${local_name}"$'\n'
+                    section+="${title} (ID: ${id}) <- ${local_name}"$'\n'
                 else
-                    section+="  ${title} (ID: ${id})"$'\n'
+                    section+="${title} (ID: ${id})"$'\n'
                 fi
             done < <(gh_list_keys)
             if [[ "${found}" == false ]]; then
-                section+="  (none)"$'\n'
+                section+="(none)"$'\n'
             fi
-            if [[ "${HAS_GUM}" == true ]]; then
-                gum style --border rounded --border-foreground 240 --padding "0 1" "${section%$'\n'}"
-            else
-                printf '%s' "${section}"
-            fi
+            _box "${section%$'\n'}"
         else
-            _warn "gh CLI not ready"
+            _warn "GitHub CLI is not available or not authenticated"
+            _warn "Tip: run 'gh auth login' to authenticate"
         fi
     fi
 
@@ -903,30 +919,27 @@ list_command() {
         if op_ready; then
             ONEPASSWORD_VAULT="$(resolve_onepassword_vault)"
             printf '\n'
-            _header "1Password (${ONEPASSWORD_VAULT})"
+            _header "1Password: ${ONEPASSWORD_VAULT} vault (${MACHINE_TYPE})"
             section=""
             found=false
             while IFS=$'\t' read -r id title key_blob; do
                 [[ -n "${id}" ]] || continue
                 found=true
                 if local_name="$(find_local_match_by_blob "${key_blob}")"; then
-                    section+="  ${title} <- ${local_name}"$'\n'
+                    section+="${title} <- ${local_name}"$'\n'
                 else
-                    section+="  ${title}"$'\n'
+                    section+="${title}"$'\n'
                 fi
             done < <(op_list_keys)
             if [[ "${found}" == false ]]; then
-                section+="  (none)"$'\n'
+                section+="(none)"$'\n'
             fi
-            if [[ "${HAS_GUM}" == true ]]; then
-                gum style --border rounded --border-foreground 240 --padding "0 1" "${section%$'\n'}"
-            else
-                printf '%s' "${section}"
-            fi
+            _box "${section%$'\n'}"
         else
             printf '\n'
             _header "1Password"
-            _warn "op CLI not ready"
+            _warn "1Password CLI is not available or not signed in"
+            _warn "Tip: run 'op signin' to authenticate"
         fi
     fi
 }
@@ -995,7 +1008,7 @@ doctor_github_key() {
             issues=$((issues + 1))
         fi
     else
-        _cross "gh CLI not ready; skipped GitHub inventory check"
+        _cross "GitHub CLI not available — run 'gh auth login' to enable"
         issues=$((issues + 1))
     fi
 
@@ -1282,7 +1295,9 @@ parse_args() {
             exit 0
             ;;
         *)
-            die "Unknown command: $1"
+            _warn "Unknown command: $1"
+            _warn "Tip: run 'sshkey --help' for available commands"
+            exit 1
             ;;
     esac
 
@@ -1305,7 +1320,9 @@ parse_args() {
                 exit 0
                 ;;
             -*)
-                die "Unknown option: ${arg}"
+                _warn "Unknown option: ${arg}"
+                _warn "Tip: run 'sshkey --help' for available options"
+                exit 1
                 ;;
             *)
                 if [[ -z "${KEY_NAME}" ]]; then
