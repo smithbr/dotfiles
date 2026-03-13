@@ -107,14 +107,15 @@ ln -sfn "${BASEDIR}" "${HOME}/.dotfiles"
 
 ensure_local_install_ssh_key
 
-# Resolve conflicting chezmoi config files — the script manages chezmoi.json,
-# so remove any stale chezmoi.toml that may have been created by `chezmoi init`.
-if [[ -f "${CHEZMOI_CONFIG_DIR}/chezmoi.toml" && -f "${CHEZMOI_CONFIG_FILE}" ]]; then
-    log_warn "Removing stale ${CHEZMOI_CONFIG_DIR}/chezmoi.toml (conflicts with chezmoi.json)"
-    rm -f "${CHEZMOI_CONFIG_DIR}/chezmoi.toml"
-elif [[ -f "${CHEZMOI_CONFIG_DIR}/chezmoi.toml" && ! -f "${CHEZMOI_CONFIG_FILE}" ]]; then
-    log_info "Migrating chezmoi.toml to chezmoi.json"
-    mv "${CHEZMOI_CONFIG_DIR}/chezmoi.toml" "${CHEZMOI_CONFIG_FILE}"
+# Ensure chezmoi config exists and points at this repo BEFORE the first apply.
+# This prevents chezmoi from creating a default .toml that later conflicts.
+mkdir -p "${CHEZMOI_CONFIG_DIR}"
+if [[ -f "${CHEZMOI_CONFIG_FILE}" ]]; then
+    if ! grep -qE '^[[:space:]]*sourceDir[[:space:]]*=' "${CHEZMOI_CONFIG_FILE}"; then
+        printf "\nsourceDir = \"%s\"\n" "${CHEZMOI_DEFAULT_SOURCE}" >> "${CHEZMOI_CONFIG_FILE}"
+    fi
+else
+    printf "sourceDir = \"%s\"\n" "${CHEZMOI_DEFAULT_SOURCE}" > "${CHEZMOI_CONFIG_FILE}"
 fi
 
 log_info "Applying dotfiles with chezmoi source ${CHEZMOI_SOURCE}"
@@ -122,24 +123,6 @@ if [[ "${#chezmoi_args[@]}" -gt 0 ]]; then
     chezmoi --source "${CHEZMOI_SOURCE}" apply "${chezmoi_args[@]}"
 else
     chezmoi --source "${CHEZMOI_SOURCE}" apply
-fi
-
-# Ensure plain `chezmoi` commands use this repo on new machines.
-current_source="$(chezmoi source-path 2>/dev/null || true)"
-if [[ "${current_source}" != "${CHEZMOI_DEFAULT_SOURCE}" ]]; then
-    mkdir -p "${CHEZMOI_CONFIG_DIR}"
-    if [[ -f "${CHEZMOI_CONFIG_FILE}" ]]; then
-        if grep -qE '^[[:space:]]*sourceDir[[:space:]]*=' "${CHEZMOI_CONFIG_FILE}"; then
-            tmp_config="$(mktemp)"
-            sed -E "s|^[[:space:]]*sourceDir[[:space:]]*=.*$|sourceDir = \"${CHEZMOI_DEFAULT_SOURCE}\"|" \
-                "${CHEZMOI_CONFIG_FILE}" > "${tmp_config}"
-            mv "${tmp_config}" "${CHEZMOI_CONFIG_FILE}"
-        else
-            printf "\nsourceDir = \"%s\"\n" "${CHEZMOI_DEFAULT_SOURCE}" >> "${CHEZMOI_CONFIG_FILE}"
-        fi
-    else
-        printf "sourceDir = \"%s\"\n" "${CHEZMOI_DEFAULT_SOURCE}" > "${CHEZMOI_CONFIG_FILE}"
-    fi
 fi
 
 if [[ "$(chezmoi source-path 2>/dev/null || true)" != "${CHEZMOI_DEFAULT_SOURCE}" ]]; then
