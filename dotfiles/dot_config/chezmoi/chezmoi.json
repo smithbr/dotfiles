@@ -1,0 +1,10 @@
+{
+    "sourceDir": "{{ .chezmoi.homeDir }}/.dotfiles",
+    "color": true,
+    "git": {
+        "autoPush": true
+    },
+    "diff": {
+        "cmd": "delta --color-only"
+    }
+}
