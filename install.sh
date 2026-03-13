@@ -90,36 +90,9 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-if ! command -v chezmoi >/dev/null 2>&1; then
-    if command -v brew >/dev/null 2>&1; then
-        spin "Installing chezmoi..." brew install chezmoi
-    else
-        bin_dir="${HOME}/.local/bin"
-        mkdir -p "${bin_dir}"
-        spin "Installing chezmoi..." sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "${bin_dir}"
-        export PATH="${bin_dir}:${PATH}"
-    fi
-fi
-
 spin "Linking dotfiles repo..." ln -sfn "${BASEDIR}" "${HOME}/.dotfiles"
 
 spin "Ensuring SSH key exists..." ensure_local_install_ssh_key
-
-# Remove invalid config so chezmoi apply can regenerate it from the template
-if [[ -f "${CHEZMOI_CONFIG_FILE}" ]] && ! chezmoi --source "${CHEZMOI_SOURCE}" dump-config &>/dev/null; then
-    log_warn "Removing invalid ${CHEZMOI_CONFIG_FILE}"
-    rm -f "${CHEZMOI_CONFIG_FILE}"
-fi
-
-if [[ "${#chezmoi_args[@]}" -gt 0 ]]; then
-    spin "Applying dotfiles..." chezmoi --source "${CHEZMOI_SOURCE}" apply "${chezmoi_args[@]}"
-else
-    spin "Applying dotfiles..." chezmoi --source "${CHEZMOI_SOURCE}" apply
-fi
-
-if [[ "$(chezmoi source-path 2>/dev/null || true)" != "${CHEZMOI_DEFAULT_SOURCE}" ]]; then
-    log_warn "chezmoi sourceDir is not set to ${CHEZMOI_DEFAULT_SOURCE}"
-fi
 
 if [[ "${run_system_bootstrap}" -eq 1 ]]; then
     case "${OSTYPE}" in
@@ -136,6 +109,33 @@ fi
 
 if [[ "${run_brew}" -eq 1 ]]; then
     chmod +x homebrew/brew.sh && ./homebrew/brew.sh
+fi
+
+if ! command -v chezmoi >/dev/null 2>&1; then
+    if command -v brew >/dev/null 2>&1; then
+        spin "Installing chezmoi..." brew install chezmoi
+    else
+        bin_dir="${HOME}/.local/bin"
+        mkdir -p "${bin_dir}"
+        spin "Installing chezmoi..." sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "${bin_dir}"
+        export PATH="${bin_dir}:${PATH}"
+    fi
+fi
+
+# Remove invalid config so chezmoi apply can regenerate it from the template
+if [[ -f "${CHEZMOI_CONFIG_FILE}" ]] && ! chezmoi --source "${CHEZMOI_SOURCE}" dump-config &>/dev/null; then
+    log_warn "Removing invalid ${CHEZMOI_CONFIG_FILE}"
+    rm -f "${CHEZMOI_CONFIG_FILE}"
+fi
+
+if [[ "${#chezmoi_args[@]}" -gt 0 ]]; then
+    spin "Applying dotfiles..." chezmoi --source "${CHEZMOI_SOURCE}" apply "${chezmoi_args[@]}"
+else
+    spin "Applying dotfiles..." chezmoi --source "${CHEZMOI_SOURCE}" apply
+fi
+
+if [[ "$(chezmoi source-path 2>/dev/null || true)" != "${CHEZMOI_DEFAULT_SOURCE}" ]]; then
+    log_warn "chezmoi sourceDir is not set to ${CHEZMOI_DEFAULT_SOURCE}"
 fi
 
 zsh_path="$(command -v zsh || true)"
