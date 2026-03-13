@@ -6,9 +6,10 @@ cask "1password-cli"
 brew "bottom"
 brew "btop"
 brew "curl"
-brew "difftastic"
+brew "git-delta"
 brew "docker"
 brew "domain-check"
+brew "fail2ban"
 brew "fresh-editor"
 brew "gh"
 brew "git"
@@ -29,7 +30,20 @@ brew "zsh"
 brew "antidote"
 brew "asciiquarium"
 brew "bat"
+brew "fastfetch"
 brew "nerdfetch"
 brew "onefetch"
 brew "starship"
 brew "tree"
+
+# Fonts
+font-0xproto-nerd-font
+font-caskaydia-cove-nerd-font
+font-fantasque-sans-mono-nerd-font
+font-fira-code-nerd-font
+font-hack-nerd-font
+font-iosevka-nerd-font
+font-jetbrains-mono-nerd-font
+font-meslo-lg-nerd-font
+font-mononoki-nerd-font
+font-sauce-code-pro-nerd-font

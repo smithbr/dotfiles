@@ -6,9 +6,11 @@ alias cdd="cd ~/.dotfiles"
 # shell
 alias rl="exec $SHELL -l"
 alias fish="asciiquarium"
+alias fastfetch="fastfetch -c all"
 alias cz="chezmoi"
 alias cza="chezmoi apply"
 alias czs="chezmoi status"
+alias czui="chezit"
 
 # system
 alias top="btm"
@@ -48,8 +50,6 @@ alias urldecode='python3 -c "import sys, urllib.parse; print(urllib.parse.unquot
 
 # domain lookup
 alias tld="domain-check --preset startup --pretty"
-
-# git
 
 # brew
 alias brewls="brew list --formula -t"

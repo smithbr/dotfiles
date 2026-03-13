@@ -12,11 +12,11 @@ if ! command -v apt-get >/dev/null 2>&1; then
     exit 0
 fi
 
-log_info "Updating apt package index"
+log_info "Updating apt package index and packages"
 sudo_cmd apt-get update
 
 log_info "Upgrading installed apt packages"
 sudo_cmd apt-get -y upgrade
 
 log_info "Installing base Linux packages"
-sudo_cmd apt-get install -y curl build-essential fonts-powerline zsh
+sudo_cmd apt-get install -y build-essential curl zsh
