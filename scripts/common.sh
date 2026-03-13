@@ -60,7 +60,10 @@ spin() {
     local title="$1"
     shift
     if command -v gum >/dev/null 2>&1 && [[ "$(type -t "$1" 2>/dev/null)" != "function" ]]; then
-        gum spin --spinner dot --title "${title}" -- "$@"
+        if ! gum spin --spinner dot --title "${title}" -- "$@"; then
+            log_error "${title} failed"
+            return 1
+        fi
     else
         log_info "${title}"
         "$@"

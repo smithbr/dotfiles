@@ -121,23 +121,15 @@ if [[ "$(chezmoi source-path 2>/dev/null || true)" != "${CHEZMOI_DEFAULT_SOURCE}
     log_warn "chezmoi sourceDir is not set to ${CHEZMOI_DEFAULT_SOURCE}"
 fi
 
-# Symlinks
-CLAUDE_SOURCE="${HOME}/.config/agents/tools/claude/CLAUDE.md"
-CLAUDE_TARGET="${HOME}/.claude/CLAUDE.md"
-if [[ -f "${CLAUDE_SOURCE}" ]]; then
-    mkdir -p "${HOME}/.claude"
-    spin "Linking managed configs..." ln -sfn "${CLAUDE_SOURCE}" "${CLAUDE_TARGET}"
-fi
-
 if [[ "${run_system_bootstrap}" -eq 1 ]]; then
     case "${OSTYPE}" in
         darwin*)
-            chmod +x scripts/bootstrap/macos.sh
-            spin "Bootstrapping macOS..." ./scripts/bootstrap/macos.sh
+            chmod +x scripts/bootstrap/macos/setup.sh
+            ./scripts/bootstrap/macos/setup.sh
             ;;
         linux*)
-            chmod +x scripts/bootstrap/linux.sh
-            spin "Bootstrapping Linux..." ./scripts/bootstrap/linux.sh
+            chmod +x scripts/bootstrap/linux/setup.sh
+            spin "Bootstrapping Linux..." ./scripts/bootstrap/linux/setup.sh
             ;;
     esac
 fi
