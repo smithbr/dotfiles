@@ -107,6 +107,12 @@ ln -sfn "${BASEDIR}" "${HOME}/.dotfiles"
 
 ensure_local_install_ssh_key
 
+# Remove invalid config so chezmoi apply can regenerate it from the template
+if [[ -f "${CHEZMOI_CONFIG_FILE}" ]] && ! chezmoi --source "${CHEZMOI_SOURCE}" dump-config &>/dev/null; then
+    log_warn "Removing invalid ${CHEZMOI_CONFIG_FILE}"
+    rm -f "${CHEZMOI_CONFIG_FILE}"
+fi
+
 log_info "Applying dotfiles with chezmoi source ${CHEZMOI_SOURCE}"
 if [[ "${#chezmoi_args[@]}" -gt 0 ]]; then
     chezmoi --source "${CHEZMOI_SOURCE}" apply "${chezmoi_args[@]}"
