@@ -382,6 +382,11 @@ install_filtered_brewfile() {
             continue
         fi
 
+        # Casks are not supported on Linux.
+        if [[ "${os_name}" == "Linux" && "${pkg_type}" == "cask" ]]; then
+            continue
+        fi
+
         printf '%s "%s"\n' "${pkg_type}" "${pkg_name}" >> "${tmp_brewfile}"
         selected_count=$((selected_count + 1))
     done < "${source_brewfile}"
@@ -527,6 +532,11 @@ prompt_optional_brewfile() {
             pkg_name="${BASH_REMATCH[2]}"
         else
             log_warn "Skipping unsupported optional line: ${line}"
+            continue
+        fi
+
+        # Casks are not supported on Linux.
+        if [[ "${os_name}" == "Linux" && "${pkg_type}" == "cask" ]]; then
             continue
         fi
 
