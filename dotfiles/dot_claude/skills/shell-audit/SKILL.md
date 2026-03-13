@@ -16,7 +16,7 @@ compatibility: Requires shellcheck, prefer `brew install shellcheck` for latest 
 
 ## Prerequisites
 
-- Read `~/.config/agents/rules/06-shell.md` for the established standards.
+- Read `~/.claude/rules/06-shell.md` for the established standards.
 
 ## Audit Checklist
 

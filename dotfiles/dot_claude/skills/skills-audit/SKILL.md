@@ -6,7 +6,7 @@ allowed-tools: Read Grep Glob WebFetch Edit
 
 # Agent Skills Audit
 
-Audit all skills in `~/.config/agents/skills/` against the AgentSkills open standard.
+Audit all skills in `~/.claude/skills/` against the AgentSkills open standard.
 
 ## Reference
 
