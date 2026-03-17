@@ -6,7 +6,7 @@ tap "daptify14/tap"
 # Core Tools
 cask "1password-cli"
 brew "bottom"
-cask "chezit"
+brew "chezit"
 brew "curl"
 brew "git-delta"
 brew "domain-check"
