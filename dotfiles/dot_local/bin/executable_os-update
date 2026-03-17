@@ -1,0 +1,256 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+COMMON_SH="${BASEDIR}/scripts/common.sh"
+
+if [[ -f "${COMMON_SH}" ]]; then
+    # shellcheck disable=SC1090,SC1091
+    source "${COMMON_SH}"
+else
+    _has_gum=""
+    _has_gum_checked=0
+
+    _check_gum() {
+        if [[ "${_has_gum_checked}" -eq 0 ]]; then
+            _has_gum_checked=1
+            command -v gum >/dev/null 2>&1 && _has_gum=1 || _has_gum=0
+        fi
+    }
+
+    log_info() {
+        _check_gum
+        if [[ "${_has_gum}" -eq 1 ]]; then
+            gum log --level info "$*"
+        else
+            printf 'info: %s\n' "$*"
+        fi
+    }
+
+    log_warn() {
+        _check_gum
+        if [[ "${_has_gum}" -eq 1 ]]; then
+            gum log --level warn "$*" >&2
+        else
+            printf 'warning: %s\n' "$*" >&2
+        fi
+    }
+
+    log_error() {
+        _check_gum
+        if [[ "${_has_gum}" -eq 1 ]]; then
+            gum log --level error "$*" >&2
+        else
+            printf 'error: %s\n' "$*" >&2
+        fi
+    }
+
+    require_non_root() {
+        if [[ "${EUID}" -eq 0 ]]; then
+            log_error "Do not run this script as root."
+            exit 1
+        fi
+    }
+
+    sudo_cmd() {
+        if [[ "${EUID}" -eq 0 ]]; then
+            "$@"
+        elif command -v sudo >/dev/null 2>&1; then
+            sudo "$@"
+        else
+            log_error "sudo is required for: $*"
+            exit 1
+        fi
+    }
+fi
+
+APT_GET_BIN="${APT_GET_BIN:-apt-get}"
+BREW_BIN="${BREW_BIN:-brew}"
+SOFTWAREUPDATE_BIN="${SOFTWAREUPDATE_BIN:-softwareupdate}"
+MAS_BIN="${MAS_BIN:-mas}"
+XCODEBUILD_BIN="${XCODEBUILD_BIN:-xcodebuild}"
+XCODE_APP_PATH="${XCODE_APP_PATH:-/Applications/Xcode.app}"
+
+append_path_dir() {
+    local dir="${1}"
+
+    if [[ -n "${dir}" && -d "${dir}" && ":${PATH}:" != *":${dir}:"* ]]; then
+        PATH="${dir}:${PATH}"
+    fi
+}
+
+has_command() {
+    local cmd="${1}"
+
+    command -v "${cmd}" >/dev/null 2>&1
+}
+
+usage() {
+    printf 'Usage: %s [--help]\n' "$(basename "${0}")"
+    printf '\n'
+    printf 'Update operating system packages and Homebrew packages.\n'
+    printf '\n'
+    printf 'Linux:\n'
+    printf '  - apt-get update/full-upgrade/autoremove/autoclean\n'
+    printf '  - Homebrew update/upgrade/cleanup when brew is installed\n'
+    printf '\n'
+    printf 'macOS:\n'
+    printf '  - softwareupdate --install --all\n'
+    printf '  - mas upgrade when App Store updates are available via mas\n'
+    printf '  - Accept Xcode license if a newly updated Xcode requires it\n'
+    printf '  - Homebrew update/upgrade/cleanup when brew is installed\n'
+}
+
+ensure_brew_in_path() {
+    if has_command "${BREW_BIN}"; then
+        return
+    fi
+
+    case "${OSTYPE}" in
+        darwin*)
+            case "$(uname -m)" in
+                arm64)
+                    append_path_dir "/opt/homebrew/bin"
+                    append_path_dir "/opt/homebrew/sbin"
+                    ;;
+                *)
+                    append_path_dir "/usr/local/bin"
+                    append_path_dir "/usr/local/sbin"
+                    ;;
+            esac
+            ;;
+        linux*)
+            append_path_dir "/home/linuxbrew/.linuxbrew/bin"
+            append_path_dir "/home/linuxbrew/.linuxbrew/sbin"
+            ;;
+    esac
+}
+
+run_brew_updates() {
+    local brew_cache=""
+
+    ensure_brew_in_path
+
+    if ! has_command "${BREW_BIN}"; then
+        log_info "Homebrew not found; skipping Homebrew updates"
+        return
+    fi
+
+    log_info "Updating Homebrew packages"
+    "${BREW_BIN}" update
+    "${BREW_BIN}" upgrade
+    "${BREW_BIN}" cleanup --prune=all
+
+    brew_cache="$("${BREW_BIN}" --cache)"
+    log_info "Removing Homebrew cache at ${brew_cache}"
+    rm -rf "${brew_cache}"
+}
+
+run_linux_updates() {
+    if ! has_command "${APT_GET_BIN}"; then
+        log_warn "apt-get not found; skipping apt updates"
+        run_brew_updates
+        return
+    fi
+
+    log_info "Updating apt package index"
+    sudo_cmd "${APT_GET_BIN}" update
+
+    log_info "Upgrading apt packages"
+    sudo_cmd "${APT_GET_BIN}" full-upgrade -y
+
+    log_info "Removing unused apt packages"
+    sudo_cmd "${APT_GET_BIN}" autoremove --purge -y
+
+    log_info "Cleaning apt caches"
+    sudo_cmd "${APT_GET_BIN}" autoclean -y
+
+    run_brew_updates
+}
+
+run_app_store_updates() {
+    local outdated_output=""
+
+    if ! has_command "${MAS_BIN}"; then
+        log_info "mas not found; skipping App Store updates"
+        return
+    fi
+
+    if ! outdated_output="$("${MAS_BIN}" outdated 2>&1)"; then
+        log_warn "mas could not check App Store updates; skipping"
+        return
+    fi
+
+    if [[ -z "${outdated_output}" ]]; then
+        log_info "No App Store updates available"
+        return
+    fi
+
+    log_info "Updating App Store apps"
+    "${MAS_BIN}" upgrade
+}
+
+accept_xcode_license_if_needed() {
+    if [[ ! -d "${XCODE_APP_PATH}" ]]; then
+        return
+    fi
+
+    if ! has_command "${XCODEBUILD_BIN}"; then
+        log_warn "xcodebuild not found; skipping Xcode license check"
+        return
+    fi
+
+    if ! "${XCODEBUILD_BIN}" -license check >/dev/null 2>&1; then
+        log_info "Accepting Xcode license"
+        sudo_cmd "${XCODEBUILD_BIN}" -license accept
+    fi
+}
+
+run_macos_updates() {
+    if has_command "${SOFTWAREUPDATE_BIN}"; then
+        log_info "Installing macOS software updates"
+        sudo_cmd "${SOFTWAREUPDATE_BIN}" --install --all
+    else
+        log_warn "softwareupdate not found; skipping macOS software updates"
+    fi
+
+    run_app_store_updates
+    accept_xcode_license_if_needed
+    run_brew_updates
+}
+
+main() {
+    case "${1:-}" in
+        "")
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            log_error "Unknown argument: ${1}"
+            usage
+            exit 1
+            ;;
+    esac
+
+    require_non_root
+
+    case "${OSTYPE}" in
+        darwin*)
+            run_macos_updates
+            ;;
+        linux*)
+            run_linux_updates
+            ;;
+        *)
+            log_error "Unsupported OS: ${OSTYPE}"
+            exit 1
+            ;;
+    esac
+
+    log_info "OS update run finished"
+}
+
+main "$@"

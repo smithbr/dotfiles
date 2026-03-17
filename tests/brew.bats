@@ -291,6 +291,27 @@ _parse_brewfile_line() {
     assert_output "MISSING"
 }
 
+@test "optional_prompt_mode skips when no interactive terminal is available" {
+    run bash -c '
+        optional_prompt_mode() {
+            if [[ ! -t 0 || ! -t 1 || ! -r /dev/tty || ! -w /dev/tty ]]; then
+                printf "skip\n"
+                return
+            fi
+
+            if command -v gum >/dev/null 2>&1; then
+                printf "gum\n"
+            else
+                printf "read\n"
+            fi
+        }
+
+        optional_prompt_mode
+    '
+    assert_success
+    assert_output "skip"
+}
+
 # ---------------------------------------------------------------------------
 # Linux cask filtering — non-font casks should be skipped on Linux
 # ---------------------------------------------------------------------------
@@ -390,6 +411,11 @@ _parse_brewfile_line() {
 
 @test "Brewfile.macos tracks mactop as a formula" {
     run grep -qx 'brew "mactop"' "${PROJECT_ROOT}/homebrew/Brewfile.macos"
+    assert_success
+}
+
+@test "Brewfile.macos tracks mas as a formula" {
+    run grep -qx 'brew "mas"' "${PROJECT_ROOT}/homebrew/Brewfile.macos"
     assert_success
 }
 

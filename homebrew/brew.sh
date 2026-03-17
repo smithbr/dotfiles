@@ -135,6 +135,19 @@ optional_entry_is_installed() {
     return 1
 }
 
+optional_prompt_mode() {
+    if [[ ! -e /dev/tty ]]; then
+        printf 'skip\n'
+        return
+    fi
+
+    if command -v gum >/dev/null 2>&1; then
+        printf 'gum\n'
+    else
+        printf 'read\n'
+    fi
+}
+
 install_filtered_brewfile() {
     local source_brewfile="$1"
     local prompt_label="$2"
@@ -224,6 +237,8 @@ prompt_optional_brewfile() {
     local optional_brewfile="$1"
     local prompt_label="$2"
     local tmp_optional_brewfile
+    local tmp_scan_output
+    local scan_pid
     local selected_optional=0
     local -a optional_entries=()
     local -a optional_names=()
@@ -237,37 +252,59 @@ prompt_optional_brewfile() {
     local display_entry
     local pending_count=0
     local selected_name
+    local prompt_mode=""
     tmp_optional_brewfile="$(mktemp "${TMPDIR:-/tmp}/brewfile-optional.XXXXXX")"
+    tmp_scan_output="$(mktemp "${TMPDIR:-/tmp}/brewfile-optional-scan.XXXXXX")"
 
-    while IFS= read -r raw_line || [[ -n "${raw_line}" ]]; do
-        line="${raw_line#"${raw_line%%[![:space:]]*}"}"
-        line="${line%"${line##*[![:space:]]}"}"
+    collect_pending_optional_entries() {
+        while IFS= read -r raw_line || [[ -n "${raw_line}" ]]; do
+            line="${raw_line#"${raw_line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
 
-        [[ -z "${line}" ]] && continue
-        if [[ "${line}" == \#* ]]; then
-            continue
-        fi
+            [[ -z "${line}" ]] && continue
+            if [[ "${line}" == \#* ]]; then
+                continue
+            fi
 
-        if [[ "${line}" =~ ^(brew|cask|tap|mas)[[:space:]]+\"([^\"]+)\" ]]; then
-            pkg_type="${BASH_REMATCH[1]}"
-            pkg_name="${BASH_REMATCH[2]}"
-        elif [[ "${line}" =~ ^(brew|cask|tap|mas)[[:space:]]+\'([^\']+)\' ]]; then
-            pkg_type="${BASH_REMATCH[1]}"
-            pkg_name="${BASH_REMATCH[2]}"
-        else
-            log_warn "Skipping unsupported optional line: ${line}"
-            continue
-        fi
+            if [[ "${line}" =~ ^(brew|cask|tap|mas)[[:space:]]+\"([^\"]+)\" ]]; then
+                pkg_type="${BASH_REMATCH[1]}"
+                pkg_name="${BASH_REMATCH[2]}"
+            elif [[ "${line}" =~ ^(brew|cask|tap|mas)[[:space:]]+\'([^\']+)\' ]]; then
+                pkg_type="${BASH_REMATCH[1]}"
+                pkg_name="${BASH_REMATCH[2]}"
+            else
+                log_warn "Skipping unsupported optional line: ${line}"
+                continue
+            fi
 
-        # Skip packages already managed by brew or already present as app bundles.
-        if optional_entry_is_installed "${pkg_type}" "${pkg_name}"; then
-            continue
-        fi
+            if optional_entry_is_installed "${pkg_type}" "${pkg_name}"; then
+                continue
+            fi
 
+            printf '%s\t%s\n' "${pkg_type}" "${pkg_name}" >> "${tmp_scan_output}"
+        done < "${optional_brewfile}"
+    }
+
+    collect_pending_optional_entries &
+    scan_pid=$!
+
+    if command -v gum >/dev/null 2>&1 && [[ -e /dev/tty ]]; then
+        spin "Checking already installed optional packages..." \
+            bash -c "while kill -0 \"\$1\" 2>/dev/null; do sleep 0.1; done" _ "${scan_pid}"
+    else
+        log_info "Checking already installed optional packages..."
+    fi
+
+    wait "${scan_pid}"
+
+    while IFS=$'\t' read -r pkg_type pkg_name || [[ -n "${pkg_type:-}" ]]; do
+        [[ -z "${pkg_type:-}" || -z "${pkg_name:-}" ]] && continue
         optional_entries+=("${pkg_type} \"${pkg_name}\"")
         optional_names+=("${pkg_name}")
         pending_count=$((pending_count + 1))
-    done < "${optional_brewfile}"
+    done < "${tmp_scan_output}"
+
+    rm -f "${tmp_scan_output}"
 
     if [[ "${pending_count}" -eq 0 ]]; then
         log_info "All ${prompt_label}s already installed"
@@ -275,55 +312,73 @@ prompt_optional_brewfile() {
         return
     fi
 
-    # Single gum picker with all optional packages
-    if command -v gum >/dev/null 2>&1 && [[ -t 0 && -t 1 ]]; then
-        local height="${pending_count}"
-        if [[ "${height}" -gt 15 ]]; then
-            height=15
-        fi
-        if [[ "${height}" -lt 3 ]]; then
-            height=3
-        fi
+    prompt_mode="$(optional_prompt_mode)"
 
-        local tmp_gum_output
-        tmp_gum_output="$(mktemp "${TMPDIR:-/tmp}/gum-output.XXXXXX")"
+    case "${prompt_mode}" in
+        skip)
+            log_info "Skipping optional Homebrew package selection because no interactive terminal was detected"
+            rm -f "${tmp_optional_brewfile}"
+            return
+            ;;
+        gum)
+            log_info "Optional Homebrew packages available. Use space to select, enter to continue, or esc to skip."
 
-        gum choose \
-            --no-limit \
-            --ordered \
-            --height="${height}" \
-            --cursor="> " \
-            --header="Select optional packages to install" \
-            --selected-prefix="* " \
-            --unselected-prefix="  " \
-            "${optional_names[@]}" > "${tmp_gum_output}" 2>/dev/null || true
+            local height="${pending_count}"
+            if [[ "${height}" -gt 15 ]]; then
+                height=15
+            fi
+            if [[ "${height}" -lt 3 ]]; then
+                height=3
+            fi
 
-        while IFS= read -r selected_name || [[ -n "${selected_name}" ]]; do
-            [[ -z "${selected_name}" ]] && continue
-            for idx in "${!optional_names[@]}"; do
-                if [[ "${optional_names[${idx}]}" == "${selected_name}" ]]; then
-                    printf '%s\n' "${optional_entries[${idx}]}" >> "${tmp_optional_brewfile}"
+            local tmp_gum_output
+            tmp_gum_output="$(mktemp "${TMPDIR:-/tmp}/gum-output.XXXXXX")"
+
+            gum choose \
+                --no-limit \
+                --ordered \
+                --height="${height}" \
+                --cursor="> " \
+                --header="Select optional packages to install" \
+                --selected-prefix="* " \
+                --unselected-prefix="  " \
+                "${optional_names[@]}" \
+                < /dev/tty \
+                > "${tmp_gum_output}" \
+                2> >(perl -pe 's/nothing selected\r?\n//g' > /dev/tty) || true
+
+            while IFS= read -r selected_name || [[ -n "${selected_name}" ]]; do
+                [[ -z "${selected_name}" ]] && continue
+                for idx in "${!optional_names[@]}"; do
+                    if [[ "${optional_names[${idx}]}" == "${selected_name}" ]]; then
+                        printf '%s\n' "${optional_entries[${idx}]}" >> "${tmp_optional_brewfile}"
+                        selected_optional=$((selected_optional + 1))
+                        break
+                    fi
+                done
+            done < "${tmp_gum_output}"
+            rm -f "${tmp_gum_output}"
+            ;;
+        read)
+            log_info "Optional Homebrew packages available. Press Enter to install a package, or n to skip."
+
+            for idx in "${!optional_entries[@]}"; do
+                entry="${optional_entries[${idx}]}"
+                display_entry="${optional_names[${idx}]}"
+                printf "Install %s %s? [Y/n] " "${prompt_label}" "${display_entry}" > /dev/tty
+                read -r reply < /dev/tty
+                if [[ -z "${reply}" || "${reply}" =~ ^[Yy]$ ]]; then
+                    printf '%s\n' "${entry}" >> "${tmp_optional_brewfile}"
                     selected_optional=$((selected_optional + 1))
-                    break
                 fi
             done
-        done < "${tmp_gum_output}"
-        rm -f "${tmp_gum_output}"
-    else
-        for idx in "${!optional_entries[@]}"; do
-            entry="${optional_entries[${idx}]}"
-            display_entry="${optional_names[${idx}]}"
-            read -r -p "Install ${prompt_label} ${display_entry}? [Y/n] " reply
-            if [[ -z "${reply}" || "${reply}" =~ ^[Yy]$ ]]; then
-                printf '%s\n' "${entry}" >> "${tmp_optional_brewfile}"
-                selected_optional=$((selected_optional + 1))
-            fi
-        done
-    fi
+            ;;
+    esac
 
     if [[ "${selected_optional}" -gt 0 ]]; then
         spin "Installing ${prompt_label}s..." brew bundle install --file="${tmp_optional_brewfile}"
         refresh_brew_state
+        log_info "Installed ${selected_optional} ${prompt_label}(s)"
     else
         log_info "No ${prompt_label}s selected"
     fi
@@ -335,3 +390,7 @@ if [[ "${os_name}" == "Darwin" && -f "${OPTIONAL_BREWFILE}" ]]; then
 fi
 
 ensure_1password_agent_symlink
+
+spin "Cleaning up Homebrew..." brew cleanup --prune=all
+log_info "Removing Homebrew cache"
+rm -rf "$(brew --cache)"
