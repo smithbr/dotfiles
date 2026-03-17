@@ -5,5 +5,5 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "${REPO_ROOT}"
 
-printf 'pre-push: running test suite\n'
+printf 'pre-push: running shellcheck and test suite\n'
 ./tests/run_tests.sh

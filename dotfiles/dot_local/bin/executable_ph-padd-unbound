@@ -906,7 +906,7 @@ GetUnboundStats() {
 
   unbound_status="online"
 
-  local total queries cachehits cachemiss uptime_sec avg_recursion
+  local total cachehits cachemiss uptime_sec avg_recursion
 
   total=$(echo "$raw"      | awk -F= '/^total\.num\.queries=/{print $2}')
   cachehits=$(echo "$raw"  | awk -F= '/^total\.num\.cachehits=/{print $2}')

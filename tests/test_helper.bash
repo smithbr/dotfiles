@@ -3,6 +3,7 @@
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${TESTS_DIR}/.." && pwd)"
+export PROJECT_ROOT
 
 if [[ -z "${BATS_LIB_PATH:-}" ]]; then
     echo "error: BATS_LIB_PATH is not set. Run tests via tests/run_tests.sh." >&2

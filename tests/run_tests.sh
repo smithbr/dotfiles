@@ -15,6 +15,13 @@ formula_installed() {
     brew list --versions "${formula}" >/dev/null 2>&1
 }
 
+ensure_shellcheck() {
+    if ! formula_installed "shellcheck"; then
+        printf 'Installing test dependency: shellcheck\n'
+        brew install shellcheck
+    fi
+}
+
 ensure_bats_dependencies() {
     local -a missing_formulae=()
 
@@ -29,6 +36,24 @@ ensure_bats_dependencies() {
     fi
 }
 
+run_shellcheck() {
+    local file
+    local -a shellcheck_files=()
+
+    while IFS= read -r file; do
+        shellcheck_files+=("${file}")
+    done < <(git ls-files -- '*.sh' '*.bash' 'dotfiles/dot_local/bin/*')
+
+    if [[ "${#shellcheck_files[@]}" -eq 0 ]]; then
+        printf 'No shell scripts found for shellcheck\n'
+        return
+    fi
+
+    printf 'Running shellcheck\n'
+    shellcheck "${shellcheck_files[@]}"
+}
+
+ensure_shellcheck
 ensure_bats_dependencies
 
 BREW_PREFIX="$(brew --prefix)"
@@ -50,5 +75,7 @@ if [[ ! -f "${BREW_PREFIX}/lib/bats-assert/load.bash" ]]; then
 fi
 
 export BATS_LIB_PATH="${BREW_PREFIX}/lib"
+
+run_shellcheck
 
 "${BATS}" "${TESTS_DIR}"/*.bats "$@"
