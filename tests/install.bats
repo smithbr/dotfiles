@@ -562,3 +562,132 @@ MOCK
     assert_success
     assert_output --partial "Dotfiles repo already linked at"
 }
+
+@test "install.sh does not warn when chezmoi source-path resolves through the dotfiles symlink" {
+    run bash -c '
+        set -euo pipefail
+
+        export HOME="'"${TEST_TMPDIR}"'/sandbox-home"
+        export TEST_BIN="'"${TEST_TMPDIR}"'/bin"
+        export TEST_LOG="'"${TEST_TMPDIR}"'/actions.log"
+        export TEST_CHEZMOI_STUB="'"${TEST_TMPDIR}"'/chezmoi.stub"
+        export USER="sandbox-user"
+        export SHELL="${TEST_BIN}/zsh"
+
+        mkdir -p "${HOME}" "${TEST_BIN}"
+        : > "${TEST_LOG}"
+        export PATH="${TEST_BIN}:/usr/bin:/bin"
+
+        cat > "${TEST_BIN}/hostname" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "sandbox-host"
+MOCK
+
+        cat > "${TEST_BIN}/find" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+        cat > "${TEST_BIN}/zsh" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+        cat > "${TEST_BIN}/grep" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+if [[ "${*: -1}" == "/etc/shells" ]]; then
+    exit 0
+fi
+exec /usr/bin/grep "$@"
+MOCK
+
+        cat > "${TEST_BIN}/ssh-keygen" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+set -euo pipefail
+
+file=""
+if [[ "${1:-}" == "-y" ]]; then
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -f)
+                file="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+    cat "${file}.pub"
+    exit 0
+fi
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -f)
+            file="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+printf "PRIVATE KEY\n" > "${file}"
+printf "ssh-rsa sandbox-public\n" > "${file}.pub"
+MOCK
+
+        cat > "${TEST_CHEZMOI_STUB}" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "--source" ]]; then
+    source_dir="$2"
+    shift 2
+    case "${1:-}" in
+        status)
+            exit 0
+            ;;
+        apply)
+            shift
+            printf "chezmoi apply --source %s %s\n" "${source_dir}" "$*" >> "${TEST_LOG}"
+            exit 0
+            ;;
+        dump-config)
+            exit 0
+            ;;
+    esac
+fi
+
+case "${1:-}" in
+    source-path)
+        printf "%s\n" "'"${PROJECT_ROOT}"'/dotfiles"
+        ;;
+    *)
+        printf "chezmoi %s\n" "$*" >> "${TEST_LOG}"
+        ;;
+esac
+MOCK
+
+        cat > "${TEST_BIN}/brew" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "install" && "${2:-}" == "chezmoi" ]]; then
+    cp "${TEST_CHEZMOI_STUB}" "${TEST_BIN}/chezmoi"
+    chmod +x "${TEST_BIN}/chezmoi"
+    exit 0
+fi
+
+exit 0
+MOCK
+
+        chmod +x "${TEST_BIN}/hostname" "${TEST_BIN}/find" "${TEST_BIN}/zsh" "${TEST_BIN}/grep" "${TEST_BIN}/ssh-keygen" "${TEST_BIN}/brew" "${TEST_CHEZMOI_STUB}"
+
+        cd "'"${PROJECT_ROOT}"'"
+        ./install.sh --skip-system --skip-brew --force
+    '
+    assert_success
+    refute_output --partial "WARN chezmoi sourceDir is not set to"
+}
