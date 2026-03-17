@@ -56,7 +56,7 @@ copy_and_list_local_example_files() {
 
         if [[ ! -e "${local_path}" && ! -L "${local_path}" ]]; then
             cp "${target_path}" "${local_path}"
-            log_info "Created local config from example: ${local_path}"
+            log_info " Local config ${local_path} doesn't exist yet, creating one from example: ${local_path}"
         fi
 
         local_paths+=("${local_path}")
