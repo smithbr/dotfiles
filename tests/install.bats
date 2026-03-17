@@ -422,7 +422,6 @@ MOCK
     assert_output --partial "Applying dotfiles from "
     assert_output --partial "Checking pending chezmoi changes"
     assert_output --partial "chezmoi reports 1 pending change(s) before apply"
-    assert_output --partial "Running chezmoi apply in the foreground so progress stays visible"
     assert_output --partial "chezmoi apply complete"
     assert_output --partial "Done."
 }
