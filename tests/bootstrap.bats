@@ -89,7 +89,12 @@ teardown() {
         return 1
     }
 
-    grep -qF -- '--header="Select optional packages to install"' "${setup_script}" || {
+    grep -qF 'gum_choose_multiselect \' "${setup_script}" || {
+        echo "MISSING gum chooser helper"
+        return 1
+    }
+
+    grep -qF '"Select optional packages to install"' "${setup_script}" || {
         echo "MISSING gum chooser header"
         return 1
     }

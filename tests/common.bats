@@ -95,6 +95,24 @@ MOCK
     assert_output --partial "gum log --level error err via gum"
 }
 
+@test "gum_choose_multiselect delegates to gum choose with shared styling" {
+    cat > "${TEST_TMPDIR}/bin/gum" <<'MOCK'
+#!/usr/bin/env bash
+echo "gum $*"
+MOCK
+    chmod +x "${TEST_TMPDIR}/bin/gum"
+
+    run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"':${PATH}"
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        gum_choose_multiselect "Pick packages" 4 "foo" "bar"
+    '
+    assert_success
+    assert_output --partial "gum choose --no-limit --ordered --height=4 --header=Pick packages"
+    assert_output --partial "--cursor-prefix=> "
+    assert_output --partial "--selected.foreground=213"
+}
+
 # ---------------------------------------------------------------------------
 # require_non_root
 # EUID is readonly in bash, so we test the logic by inlining the conditional.
@@ -232,4 +250,20 @@ MOCK
     '
     assert_success
     assert_output --partial "from function"
+}
+
+@test "spin delegates to gum with shared padding" {
+    cat > "${TEST_TMPDIR}/bin/gum" <<'MOCK'
+#!/usr/bin/env bash
+echo "gum $*"
+MOCK
+    chmod +x "${TEST_TMPDIR}/bin/gum"
+
+    run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"':${PATH}"
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        spin "Loading..." echo "payload"
+    '
+    assert_success
+    assert_output --partial "gum spin --spinner dot --title Loading... --padding=0 1 -- echo payload"
 }

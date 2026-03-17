@@ -376,14 +376,9 @@ prompt_optional_brewfile() {
             local tmp_gum_output
             tmp_gum_output="$(mktemp "${TMPDIR:-/tmp}/gum-output.XXXXXX")"
 
-            gum choose \
-                --no-limit \
-                --ordered \
-                --height="${height}" \
-                --cursor="> " \
-                --header="Select optional packages to install" \
-                --selected-prefix="* " \
-                --unselected-prefix="  " \
+            gum_choose_multiselect \
+                "Select optional packages to install" \
+                "${height}" \
                 "${optional_names[@]}" \
                 < /dev/tty \
                 > "${tmp_gum_output}" \
