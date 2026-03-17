@@ -182,81 +182,26 @@ ensure_1password_agent_symlink() {
 
 install_filtered_brewfile "${BREWFILE}" "core Homebrew package"
 
-gum_choose_optional_category() {
-    local prompt_label="$1"
-    local category_name="$2"
-    shift 2
-
-    local option_count="$#"
-    local height=8
-
-    if [[ "${option_count}" -lt "${height}" ]]; then
-        height="${option_count}"
-    fi
-    if [[ "${height}" -lt 3 ]]; then
-        height=3
-    fi
-
-    gum choose \
-        --no-limit \
-        --ordered \
-        --height="${height}" \
-        --cursor="> " \
-        --show-help=false \
-        --header="Select ${prompt_label}s from ${category_name}" \
-        --selected-prefix="* " \
-        --unselected-prefix="  " \
-        "$@" || true
-}
-
-append_gum_optional_selection() {
-    local category_name="$1"
-    local selected_names
-    local selected_name
-    local idx
-
-    [[ "${#gum_category_names[@]}" -eq 0 ]] && return
-
-    selected_names="$(gum_choose_optional_category "${prompt_label}" "${category_name}" "${gum_category_names[@]}")"
-
-    while IFS= read -r selected_name || [[ -n "${selected_name}" ]]; do
-        [[ -z "${selected_name}" ]] && continue
-        [[ "${selected_name}" == "nothing selected" ]] && continue
-
-        for idx in "${!gum_category_names[@]}"; do
-            if [[ "${gum_category_names[${idx}]}" == "${selected_name}" ]]; then
-                printf '%s\n' "${gum_category_entries[${idx}]}" >> "${tmp_optional_brewfile}"
-                selected_optional=$((selected_optional + 1))
-                break
-            fi
-        done
-    done <<< "${selected_names}"
-}
-
 prompt_optional_brewfile() {
     local optional_brewfile="$1"
     local prompt_label="$2"
     local tmp_optional_brewfile
     local selected_optional=0
     local -a optional_entries=()
-    local -a optional_categories=()
     local -a optional_names=()
     local raw_line
     local line
     local pkg_type
     local pkg_name
-    local current_category="Other"
-    local entry_category
+    local current_category=""
     local category_text
-    local prompt_last_category=""
     local idx
     local entry
     local reply
     local display_entry
     local pending_count=0
-    local gum_category_name=""
-    local -a gum_category_entries=()
-    local -a gum_category_names=()
+    local selected_names
+    local selected_name
     tmp_optional_brewfile="$(mktemp "${TMPDIR:-/tmp}/brewfile-optional.XXXXXX")"
 
     while IFS= read -r raw_line || [[ -n "${raw_line}" ]]; do
@@ -289,9 +234,7 @@ prompt_optional_brewfile() {
             continue
         fi
 
-        entry_category="${current_category}"
         optional_entries+=("${pkg_type} \"${pkg_name}\"")
-        optional_categories+=("${entry_category}")
         optional_names+=("${pkg_name}")
         pending_count=$((pending_count + 1))
     done < "${optional_brewfile}"
@@ -302,33 +245,45 @@ prompt_optional_brewfile() {
         return
     fi
 
-    log_info "Select optional packages to install (Enter to confirm, Esc to skip)"
-
-    # Prefer a compact gum picker when interactive.
+    # Single gum picker with all optional packages
     if command -v gum >/dev/null 2>&1 && [[ -t 0 && -t 1 ]]; then
-        for idx in "${!optional_entries[@]}"; do
-            entry_category="${optional_categories[${idx}]}"
-            if [[ -n "${gum_category_name}" ]] && [[ "${entry_category}" != "${gum_category_name}" ]]; then
-                append_gum_optional_selection "${gum_category_name}"
-                gum_category_entries=()
-                gum_category_names=()
-            fi
+        local height="${pending_count}"
+        if [[ "${height}" -gt 15 ]]; then
+            height=15
+        fi
+        if [[ "${height}" -lt 3 ]]; then
+            height=3
+        fi
 
-            gum_category_name="${entry_category}"
-            gum_category_entries+=("${optional_entries[${idx}]}")
-            gum_category_names+=("${optional_names[${idx}]}")
-        done
+        local tmp_gum_output
+        tmp_gum_output="$(mktemp "${TMPDIR:-/tmp}/gum-output.XXXXXX")"
 
-        append_gum_optional_selection "${gum_category_name}"
+        gum choose \
+            --no-limit \
+            --ordered \
+            --height="${height}" \
+            --cursor="> " \
+            --header="Select optional packages to install" \
+            --selected-prefix="* " \
+            --unselected-prefix="  " \
+            "${optional_names[@]}" > "${tmp_gum_output}" || true
+
+        while IFS= read -r selected_name || [[ -n "${selected_name}" ]]; do
+            [[ -z "${selected_name}" ]] && continue
+            for idx in "${!optional_names[@]}"; do
+                if [[ "${optional_names[${idx}]}" == "${selected_name}" ]]; then
+                    printf '%s\n' "${optional_entries[${idx}]}" >> "${tmp_optional_brewfile}"
+                    selected_optional=$((selected_optional + 1))
+                    break
+                fi
+            done
+        done < "${tmp_gum_output}"
+        rm -f "${tmp_gum_output}"
     else
+        local prompt_last_category=""
         for idx in "${!optional_entries[@]}"; do
             entry="${optional_entries[${idx}]}"
             display_entry="${optional_names[${idx}]}"
-            entry_category="${optional_categories[${idx}]}"
-            if [[ "${entry_category}" != "${prompt_last_category}" ]]; then
-                log_info "${entry_category}"
-                prompt_last_category="${entry_category}"
-            fi
             read -r -p "Install ${prompt_label} ${display_entry}? [Y/n] " reply
             if [[ -z "${reply}" || "${reply}" =~ ^[Yy]$ ]]; then
                 printf '%s\n' "${entry}" >> "${tmp_optional_brewfile}"
@@ -339,7 +294,7 @@ prompt_optional_brewfile() {
 
     if [[ "${selected_optional}" -gt 0 ]]; then
         local -a opt_names=()
-        local opt_line opt_name
+        local opt_line
         while IFS= read -r opt_line || [[ -n "${opt_line}" ]]; do
             if [[ "${opt_line}" =~ ^[a-z]+[[:space:]]+\"([^\"]+)\" ]]; then
                 opt_names+=("${BASH_REMATCH[1]}")
