@@ -126,6 +126,14 @@ teardown() {
         source "'"${PROJECT_ROOT}"'/scripts/common.sh"
         LOCAL_INSTALL_SSH_KEY_PATH="${HOME}/.ssh/id_rsa"
 
+        stat_mode() {
+            if stat -f %Lp "$1" >/dev/null 2>&1; then
+                stat -f %Lp "$1"
+            else
+                stat -c %a "$1"
+            fi
+        }
+
         ssh_key_comment() {
             printf "%s@%s\n" "${USER:-$(id -un)}" "$(hostname -s 2>/dev/null || hostname)"
         }
@@ -153,9 +161,9 @@ teardown() {
         [[ -f "${LOCAL_INSTALL_SSH_KEY_PATH}" ]]     || { echo "FAIL: private key missing"; exit 1; }
         [[ -f "${LOCAL_INSTALL_SSH_KEY_PATH}.pub" ]] || { echo "FAIL: public key missing"; exit 1; }
 
-        priv_perms="$(stat -c %a "${LOCAL_INSTALL_SSH_KEY_PATH}")"
-        pub_perms="$(stat -c %a "${LOCAL_INSTALL_SSH_KEY_PATH}.pub")"
-        dir_perms="$(stat -c %a "${HOME}/.ssh")"
+        priv_perms="$(stat_mode "${LOCAL_INSTALL_SSH_KEY_PATH}")"
+        pub_perms="$(stat_mode "${LOCAL_INSTALL_SSH_KEY_PATH}.pub")"
+        dir_perms="$(stat_mode "${HOME}/.ssh")"
 
         [[ "${priv_perms}" == "600" ]] || { echo "FAIL: private key perms ${priv_perms}"; exit 1; }
         [[ "${pub_perms}" == "644" ]]  || { echo "FAIL: public key perms ${pub_perms}"; exit 1; }
@@ -263,4 +271,281 @@ teardown() {
     '
     assert_failure
     assert_output --partial "homeless"
+}
+
+# ---------------------------------------------------------------------------
+# End-to-end install flow in an isolated sandbox
+# ---------------------------------------------------------------------------
+
+@test "install.sh performs setup actions inside an isolated home" {
+    run bash -c '
+        set -euo pipefail
+
+        export HOME="'"${TEST_TMPDIR}"'/sandbox-home"
+        export TEST_BIN="'"${TEST_TMPDIR}"'/bin"
+        export TEST_LOG="'"${TEST_TMPDIR}"'/actions.log"
+        export TEST_CHEZMOI_STUB="'"${TEST_TMPDIR}"'/chezmoi.stub"
+        export USER="sandbox-user"
+        export SHELL="${TEST_BIN}/zsh"
+
+        mkdir -p "${HOME}" "${TEST_BIN}"
+        : > "${TEST_LOG}"
+        export PATH="${TEST_BIN}:/usr/bin:/bin"
+
+        cat > "${TEST_BIN}/hostname" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "sandbox-host"
+MOCK
+
+        cat > "${TEST_BIN}/find" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+        cat > "${TEST_BIN}/zsh" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+        cat > "${TEST_BIN}/grep" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+if [[ "${*: -1}" == "/etc/shells" ]]; then
+    exit 0
+fi
+exec /usr/bin/grep "$@"
+MOCK
+
+        cat > "${TEST_BIN}/ssh-keygen" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+set -euo pipefail
+
+file=""
+if [[ "${1:-}" == "-y" ]]; then
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -f)
+                file="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+    cat "${file}.pub"
+    exit 0
+fi
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -f)
+            file="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+printf "PRIVATE KEY\n" > "${file}"
+printf "ssh-rsa sandbox-public\n" > "${file}.pub"
+MOCK
+
+        cat > "${TEST_CHEZMOI_STUB}" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "--source" ]]; then
+    source_dir="$2"
+    shift 2
+    case "${1:-}" in
+        apply)
+            shift
+            printf "chezmoi apply --source %s %s\n" "${source_dir}" "$*" >> "${TEST_LOG}"
+            exit 0
+            ;;
+        dump-config)
+            exit 0
+            ;;
+    esac
+fi
+
+case "${1:-}" in
+    source-path)
+        printf "%s\n" "${HOME}/.dotfiles/dotfiles"
+        ;;
+    *)
+        printf "chezmoi %s\n" "$*" >> "${TEST_LOG}"
+        ;;
+esac
+MOCK
+
+        cat > "${TEST_BIN}/brew" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf "brew %s\n" "$*" >> "${TEST_LOG}"
+
+if [[ "${1:-}" == "install" && "${2:-}" == "chezmoi" ]]; then
+    cp "${TEST_CHEZMOI_STUB}" "${TEST_BIN}/chezmoi"
+    chmod +x "${TEST_BIN}/chezmoi"
+    exit 0
+fi
+
+exit 0
+MOCK
+
+        chmod +x "${TEST_BIN}/hostname" "${TEST_BIN}/find" "${TEST_BIN}/zsh" "${TEST_BIN}/grep" "${TEST_BIN}/ssh-keygen" "${TEST_BIN}/brew" "${TEST_CHEZMOI_STUB}"
+
+        cd "'"${PROJECT_ROOT}"'"
+        ./install.sh --skip-system --skip-brew --force
+
+        [[ -L "${HOME}/.dotfiles" ]] || { echo "missing dotfiles symlink"; exit 1; }
+        [[ "$(readlink "${HOME}/.dotfiles")" == "'"${PROJECT_ROOT}"'" ]] || { echo "bad dotfiles symlink"; exit 1; }
+        [[ -f "${HOME}/.ssh/id_rsa" ]] || { echo "missing private key"; exit 1; }
+        [[ -f "${HOME}/.ssh/id_rsa.pub" ]] || { echo "missing public key"; exit 1; }
+        grep -qx "brew install chezmoi" "${TEST_LOG}" || { echo "missing brew install chezmoi"; exit 1; }
+        grep -qx "chezmoi apply --source '"${PROJECT_ROOT}"'/dotfiles --force" "${TEST_LOG}" || {
+            echo "missing chezmoi apply"
+            cat "${TEST_LOG}"
+            exit 1
+        }
+        [[ ! -e "${HOME}/.local/bin/chezmoi" ]] || { echo "unexpected curl install path used"; exit 1; }
+    '
+    assert_success
+    assert_output --partial "Done."
+}
+
+@test "install.sh does not create a nested self-link when repo already lives at HOME/.dotfiles" {
+    run bash -c '
+        set -euo pipefail
+
+        export HOME="'"${TEST_TMPDIR}"'/sandbox-home"
+        export TEST_BIN="'"${TEST_TMPDIR}"'/bin"
+        export TEST_LOG="'"${TEST_TMPDIR}"'/actions.log"
+        export TEST_CHEZMOI_STUB="'"${TEST_TMPDIR}"'/chezmoi.stub"
+        export USER="sandbox-user"
+        export SHELL="${TEST_BIN}/zsh"
+        export REPO_COPY="${HOME}/.dotfiles"
+
+        mkdir -p "${HOME}" "${TEST_BIN}" "${REPO_COPY}/scripts" "${REPO_COPY}/dotfiles"
+        : > "${TEST_LOG}"
+        export PATH="${TEST_BIN}:/usr/bin:/bin"
+
+        cp "'"${PROJECT_ROOT}"'/install.sh" "${REPO_COPY}/install.sh"
+        cp "'"${PROJECT_ROOT}"'/scripts/common.sh" "${REPO_COPY}/scripts/common.sh"
+
+        cat > "${TEST_BIN}/hostname" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "sandbox-host"
+MOCK
+
+        cat > "${TEST_BIN}/find" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+        cat > "${TEST_BIN}/zsh" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+        cat > "${TEST_BIN}/grep" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+if [[ "${*: -1}" == "/etc/shells" ]]; then
+    exit 0
+fi
+exec /usr/bin/grep "$@"
+MOCK
+
+        cat > "${TEST_BIN}/ssh-keygen" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+set -euo pipefail
+
+file=""
+if [[ "${1:-}" == "-y" ]]; then
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -f)
+                file="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+    cat "${file}.pub"
+    exit 0
+fi
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -f)
+            file="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+printf "PRIVATE KEY\n" > "${file}"
+printf "ssh-rsa sandbox-public\n" > "${file}.pub"
+MOCK
+
+        cat > "${TEST_CHEZMOI_STUB}" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "--source" ]]; then
+    source_dir="$2"
+    shift 2
+    case "${1:-}" in
+        apply)
+            shift
+            printf "chezmoi apply --source %s %s\n" "${source_dir}" "$*" >> "${TEST_LOG}"
+            exit 0
+            ;;
+        dump-config)
+            exit 0
+            ;;
+    esac
+fi
+
+case "${1:-}" in
+    source-path)
+        printf "%s\n" "${HOME}/.dotfiles/dotfiles"
+        ;;
+    *)
+        printf "chezmoi %s\n" "$*" >> "${TEST_LOG}"
+        ;;
+esac
+MOCK
+
+        cat > "${TEST_BIN}/brew" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "install" && "${2:-}" == "chezmoi" ]]; then
+    cp "${TEST_CHEZMOI_STUB}" "${TEST_BIN}/chezmoi"
+    chmod +x "${TEST_BIN}/chezmoi"
+    exit 0
+fi
+
+exit 0
+MOCK
+
+        chmod +x "${TEST_BIN}/hostname" "${TEST_BIN}/find" "${TEST_BIN}/zsh" "${TEST_BIN}/grep" "${TEST_BIN}/ssh-keygen" "${TEST_BIN}/brew" "${TEST_CHEZMOI_STUB}"
+
+        cd "${REPO_COPY}"
+        ./install.sh --skip-system --skip-brew --force
+
+        [[ -d "${REPO_COPY}" ]] || { echo "repo copy missing"; exit 1; }
+        [[ ! -e "${REPO_COPY}/.dotfiles" ]] || { echo "nested self-link created"; exit 1; }
+    '
+    assert_success
+    assert_output --partial "Dotfiles repo already linked at"
 }

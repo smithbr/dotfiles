@@ -19,6 +19,7 @@ teardown() {
 
 @test "log_info outputs to stdout with info prefix when gum is absent" {
     run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"'"
         source "'"${PROJECT_ROOT}"'/scripts/common.sh"
         log_info "hello world"
     '
@@ -28,6 +29,7 @@ teardown() {
 
 @test "log_warn outputs to stderr with warning prefix when gum is absent" {
     run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"'"
         source "'"${PROJECT_ROOT}"'/scripts/common.sh"
         log_warn "caution" 2>&1
     '
@@ -37,6 +39,7 @@ teardown() {
 
 @test "log_error outputs to stderr with error prefix when gum is absent" {
     run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"'"
         source "'"${PROJECT_ROOT}"'/scripts/common.sh"
         log_error "something broke" 2>&1
     '
@@ -197,6 +200,7 @@ MOCK
 
 @test "spin runs command and prints title when gum is absent" {
     run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"'"
         source "'"${PROJECT_ROOT}"'/scripts/common.sh"
         spin "Testing..." echo "payload"
     '

@@ -40,16 +40,18 @@ teardown() {
 
 @test "apt-packages.txt has no duplicate packages" {
     run bash -c '
-        declare -A seen
+        filtered_packages="$(mktemp)"
         while IFS= read -r pkg || [[ -n "${pkg}" ]]; do
             [[ -z "${pkg}" ]] && continue
             [[ "${pkg}" == \#* ]] && continue
-            if [[ -n "${seen[${pkg}]:-}" ]]; then
-                echo "DUPLICATE: ${pkg}"
-                exit 1
-            fi
-            seen["${pkg}"]=1
+            printf "%s\n" "${pkg}" >> "${filtered_packages}"
         done < "'"${PROJECT_ROOT}/scripts/bootstrap/linux/apt-packages.txt"'"
+        duplicate="$(sort "${filtered_packages}" | uniq -d | head -n 1)"
+        rm -f "${filtered_packages}"
+        if [[ -n "${duplicate}" ]]; then
+            echo "DUPLICATE: ${duplicate}"
+            exit 1
+        fi
         echo "NO_DUPLICATES"
     '
     assert_success

@@ -259,21 +259,22 @@ _parse_brewfile_line() {
 @test "Brewfile.core has no duplicate entries" {
     local brewfile="${PROJECT_ROOT}/homebrew/Brewfile.core"
     run bash -c '
-        declare -A seen
+        entries_file="$(mktemp)"
         while IFS= read -r raw_line; do
             line="${raw_line#"${raw_line%%[![:space:]]*}"}"
             line="${line%"${line##*[![:space:]]}"}"
             [[ -z "${line}" ]] && continue
             [[ "${line}" == \#* ]] && continue
             if [[ "${line}" =~ ^(brew|cask|tap|mas)[[:space:]]+\"([^\"]+)\" ]]; then
-                key="${BASH_REMATCH[1]}:${BASH_REMATCH[2]}"
-                if [[ -n "${seen[${key}]:-}" ]]; then
-                    echo "DUPLICATE: ${key}"
-                    exit 1
-                fi
-                seen["${key}"]=1
+                printf "%s:%s\n" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" >> "${entries_file}"
             fi
         done < "'"${brewfile}"'"
+        duplicate="$(sort "${entries_file}" | uniq -d | head -n 1)"
+        rm -f "${entries_file}"
+        if [[ -n "${duplicate}" ]]; then
+            echo "DUPLICATE: ${duplicate}"
+            exit 1
+        fi
         echo "NO_DUPLICATES"
     '
     assert_success
@@ -321,4 +322,80 @@ _parse_brewfile_line() {
     '
     assert_failure
     assert_output "Unsupported"
+}
+
+# ---------------------------------------------------------------------------
+# End-to-end brew flow in an isolated sandbox
+# ---------------------------------------------------------------------------
+
+@test "brew.sh installs only pending entries inside an isolated brew sandbox" {
+    run bash -c '
+        set -euo pipefail
+
+        export HOME="'"${TEST_TMPDIR}"'/sandbox-home"
+        export TEST_ROOT="'"${TEST_TMPDIR}"'/brew-sandbox"
+        export TEST_BIN="${TEST_ROOT}/bin"
+        export TEST_LOG="${TEST_TMPDIR}/brew-actions.log"
+        export TEST_BUNDLE="${TEST_TMPDIR}/bundle.txt"
+        export PATH="${TEST_BIN}:/usr/bin:/bin"
+        export OSTYPE="linux-gnu"
+
+        mkdir -p "${HOME}" "${TEST_BIN}"
+        : > "${TEST_LOG}"
+
+        cat > "${TEST_BIN}/brew" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf "brew %s\n" "$*" >> "${TEST_LOG}"
+
+case "${1:-}" in
+    --prefix)
+        printf "%s\n" "${TEST_ROOT}"
+        ;;
+    list)
+        case "${2:-}" in
+            --formula)
+                printf "git\n"
+                ;;
+            --cask)
+                exit 0
+                ;;
+        esac
+        ;;
+    tap)
+        exit 0
+        ;;
+    bundle)
+        if [[ "${2:-}" == "install" ]]; then
+            bundle_file="${3#--file=}"
+            cp "${bundle_file}" "${TEST_BUNDLE}"
+            exit 0
+        fi
+        ;;
+esac
+
+exit 0
+MOCK
+
+        chmod +x "${TEST_BIN}/brew"
+
+        cd "'"${PROJECT_ROOT}"'"
+        ./homebrew/brew.sh
+
+        [[ -f "${TEST_BUNDLE}" ]] || { echo "missing bundle file"; exit 1; }
+        grep -qx '"'"'brew "curl"'"'"' "${TEST_BUNDLE}" || { echo "missing curl"; exit 1; }
+        grep -qx '"'"'brew "gum"'"'"' "${TEST_BUNDLE}" || { echo "missing gum"; exit 1; }
+        grep -qx '"'"'cask "font-hack-nerd-font"'"'"' "${TEST_BUNDLE}" || { echo "missing font cask"; exit 1; }
+        if grep -qx '"'"'brew "git"'"'"' "${TEST_BUNDLE}"; then
+            echo "installed formula was not filtered"
+            exit 1
+        fi
+        if grep -qx '"'"'cask "1password-cli"'"'"' "${TEST_BUNDLE}"; then
+            echo "linux should skip non-font casks"
+            exit 1
+        fi
+    '
+    assert_success
+    assert_output --partial "Installing core Homebrew packages:"
 }
