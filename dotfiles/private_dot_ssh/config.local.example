@@ -6,7 +6,7 @@
 #
 # Include ~/.ssh/1Password/config
 #
-# Match exec "test -z \"$SSH_TTY\""
+# Host *
 #   IdentityAgent ~/.1password/agent.sock
 
 # Host entries for other servers
