@@ -2,17 +2,36 @@
 
 set -euo pipefail
 
-# Preserve user's PATH through sudo for ~/.local/bin commands
-if [[ "${EUID}" -ne 0 ]]; then
-    exec sudo PATH="${PATH}" "${0}" "${@+"${@}"}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OS_UPDATE_SCRIPT="${SCRIPT_DIR}/os-update"
+
+if [[ ! -x "${OS_UPDATE_SCRIPT}" ]]; then
+    OS_UPDATE_SCRIPT="${SCRIPT_DIR}/executable_os-update"
 fi
 
-# Update packages
-apt-get update --fix-missing
-apt-get full-upgrade -y
-apt-get autoremove --purge -y
-apt-get autoclean -y
-apt-get clean
+run_os_update() {
+    if [[ "${EUID}" -eq 0 ]]; then
+        if [[ -z "${SUDO_USER:-}" ]]; then
+            printf 'error: ph-update needs SUDO_USER set to run os-update as the calling user.\n' >&2
+            exit 1
+        fi
+
+        sudo -u "${SUDO_USER}" env PATH="${PATH}" "${OS_UPDATE_SCRIPT}"
+        return
+    fi
+
+    "${OS_UPDATE_SCRIPT}"
+}
+
+# Preserve user's PATH through sudo for ~/.local/bin commands
+if [[ "${EUID}" -ne 0 ]]; then
+    run_os_update
+    exec sudo PATH="${PATH}" PH_UPDATE_SKIP_OS_UPDATE=1 "${0}" "${@+"${@}"}"
+fi
+
+if [[ "${PH_UPDATE_SKIP_OS_UPDATE:-0}" -eq 0 ]]; then
+    run_os_update
+fi
 
 # Update Pi-hole
 pihole -up
