@@ -81,6 +81,25 @@ teardown() {
     assert_output "SKIPPED"
 }
 
+@test "linux setup.sh announces each bootstrap phase" {
+    run bash -c '
+        for phase in \
+            "Step 1/4: Checking base Linux packages" \
+            "Step 2/4: Running Docker bootstrap" \
+            "Step 3/4: Running Tailscale bootstrap" \
+            "Step 4/4: Running OpenCode bootstrap" \
+            "Linux bootstrap finished"; do
+            grep -qF "${phase}" "'"${PROJECT_ROOT}/scripts/bootstrap/linux/setup.sh"'" || {
+                echo "MISSING: ${phase}"
+                exit 1
+            }
+        done
+        echo "ALL_OK"
+    '
+    assert_success
+    assert_output "ALL_OK"
+}
+
 # ---------------------------------------------------------------------------
 # linux/docker.sh — idempotency guard
 # ---------------------------------------------------------------------------

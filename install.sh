@@ -116,7 +116,7 @@ if [[ "${run_system_bootstrap}" -eq 1 ]]; then
             ;;
         linux*)
             chmod +x scripts/bootstrap/linux/setup.sh
-            spin "Bootstrapping Linux..." ./scripts/bootstrap/linux/setup.sh
+            ./scripts/bootstrap/linux/setup.sh
             ;;
     esac
 fi
