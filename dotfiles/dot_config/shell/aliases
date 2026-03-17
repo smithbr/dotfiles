@@ -12,7 +12,7 @@ alias cz="chezmoi"
 alias cza="chezmoi apply"
 alias czs="chezmoi status"
 alias czui="chezit"
-alias fastfetch="fastfetch -c all"
+alias ff="fastfetch -c all"
 alias fish="asciiquarium"
 alias rl="exec ${SHELL} -l"
 
