@@ -1,12 +1,10 @@
 # Install all dependencies with: brew bundle
 # Usage: brew bundle [--file=Brewfile.core]
 
-tap "daptify14/tap"
-
 # Core Tools
 cask "1password-cli"
 brew "bottom"
-brew "chezit"
+cask "daptify14/tap/chezit"
 brew "curl"
 brew "git-delta"
 brew "domain-check"
