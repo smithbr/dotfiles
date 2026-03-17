@@ -509,5 +509,5 @@ MOCK
         fi
     '
     assert_success
-    assert_output --partial "core Homebrew packages via brew bundle"
+    assert_output --partial "Installing core Homebrew packages..."
 }
