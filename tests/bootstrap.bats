@@ -83,13 +83,14 @@ teardown() {
 
 @test "linux setup.sh announces each bootstrap phase" {
     run bash -c '
+        setup_script="'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/setup.sh"
         for phase in \
             "Step 1/4: Checking base Linux packages" \
             "Step 2/4: Running Docker bootstrap" \
             "Step 3/4: Running Tailscale bootstrap" \
             "Step 4/4: Running OpenCode bootstrap" \
             "Linux bootstrap finished"; do
-            grep -qF "${phase}" "'"${PROJECT_ROOT}/scripts/bootstrap/linux/setup.sh"'" || {
+            grep -qF "${phase}" "${setup_script}" || {
                 echo "MISSING: ${phase}"
                 exit 1
             }
