@@ -86,10 +86,10 @@ teardown() {
     local phase
 
     for phase in \
-        "Step 1/4: Checking base Linux packages" \
-        "Step 2/4: Running Docker bootstrap" \
-        "Step 3/4: Running Tailscale bootstrap" \
-        "Step 4/4: Running OpenCode bootstrap" \
+        'run_bootstrap_step "1/4" "Checking base Linux packages"' \
+        'run_bootstrap_step "2/4" "Running Docker bootstrap"' \
+        'run_bootstrap_step "3/4" "Running Tailscale bootstrap"' \
+        'run_bootstrap_step "4/4" "Running OpenCode bootstrap"' \
         "Linux bootstrap finished"; do
         grep -qF "${phase}" "${setup_script}" || {
             echo "MISSING: ${phase}"
