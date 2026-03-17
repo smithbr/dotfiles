@@ -111,14 +111,38 @@ ensure_chezmoi() {
     fi
 }
 
-apply_dotfiles() {
-    log_info "Applying dotfiles from ${CHEZMOI_SOURCE}"
+log_pending_chezmoi_changes() {
+    local status_output=""
+    local pending_count=""
+
+    log_info "Checking pending chezmoi changes"
+    status_output="$(chezmoi --source "${CHEZMOI_SOURCE}" status 2>/dev/null || true)"
+
+    if [[ -z "${status_output}" ]]; then
+        log_info "chezmoi reports no pending changes before apply"
+        return 0
+    fi
+
+    pending_count="$(printf '%s\n' "${status_output}" | awk 'NF { count++ } END { print count + 0 }')"
+    log_info "chezmoi reports ${pending_count} pending change(s) before apply"
+}
+
+run_chezmoi_apply() {
+    local -a apply_cmd=(chezmoi --source "${CHEZMOI_SOURCE}" apply)
 
     if [[ "${#chezmoi_args[@]}" -gt 0 ]]; then
-        spin "Applying dotfiles..." chezmoi --source "${CHEZMOI_SOURCE}" apply "${chezmoi_args[@]}"
-    else
-        spin "Applying dotfiles..." chezmoi --source "${CHEZMOI_SOURCE}" apply
+        apply_cmd+=("${chezmoi_args[@]}")
     fi
+
+    log_info "Running chezmoi apply in the foreground so progress stays visible"
+    "${apply_cmd[@]}"
+}
+
+apply_dotfiles() {
+    log_info "Applying dotfiles from ${CHEZMOI_SOURCE}"
+    log_pending_chezmoi_changes
+
+    run_chezmoi_apply
 
     log_info "chezmoi apply complete"
 }
