@@ -139,17 +139,25 @@ MOCK
     [[ ! -d "${TEST_TMPDIR}/brew-cache-macos" ]]
 }
 
-@test "ph-update self-elevates through sudo when not root" {
+@test "ph-update runs os-update before self-elevating through sudo" {
     cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
 #!/usr/bin/env bash
 printf 'sudo %s\n' "$*"
 MOCK
-    chmod +x "${BIN_SANDBOX}/sudo"
 
-    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+    cat > "${BIN_SANDBOX}/apt-get" <<'MOCK'
+#!/usr/bin/env bash
+printf 'apt-get %s\n' "$*"
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/apt-get"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
         "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-update"
     assert_success
+    assert_output --partial "sudo apt-get update"
     assert_output --partial "sudo PATH=${BIN_SANDBOX}:/usr/bin:/bin"
+    assert_output --partial "PH_UPDATE_SKIP_OS_UPDATE=1"
     assert_output --partial "executable_ph-update"
 }
 
