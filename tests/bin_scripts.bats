@@ -27,6 +27,118 @@ teardown() {
     assert_output --partial "--json"
 }
 
+@test "os-update displays help" {
+    run "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_os-update" --help
+    assert_success
+    assert_output --partial "Usage: executable_os-update [--help]"
+    assert_output --partial "softwareupdate --install --all"
+}
+
+@test "os-update runs linux apt and Homebrew updates" {
+    mkdir -p "${TEST_TMPDIR}/brew-cache-linux"
+
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+printf 'sudo %s\n' "$*"
+MOCK
+
+    cat > "${BIN_SANDBOX}/apt-get" <<'MOCK'
+#!/usr/bin/env bash
+printf 'apt-get %s\n' "$*"
+MOCK
+
+    cat > "${BIN_SANDBOX}/brew" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--cache" ]]; then
+    printf '%s\n' "${TEST_TMPDIR}/brew-cache-linux"
+    exit 0
+fi
+
+printf 'brew %s\n' "$*"
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/apt-get" "${BIN_SANDBOX}/brew"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_os-update"
+    assert_success
+    assert_output --partial "sudo apt-get update"
+    assert_output --partial "sudo apt-get full-upgrade -y"
+    assert_output --partial "sudo apt-get autoremove --purge -y"
+    assert_output --partial "sudo apt-get autoclean -y"
+    assert_output --partial "brew update"
+    assert_output --partial "brew upgrade"
+    assert_output --partial "brew cleanup --prune=all"
+    [[ ! -d "${TEST_TMPDIR}/brew-cache-linux" ]]
+}
+
+@test "os-update runs macOS system and Homebrew updates" {
+    mkdir -p "${TEST_TMPDIR}/Applications/Xcode.app"
+    mkdir -p "${TEST_TMPDIR}/brew-cache-macos"
+
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+printf 'sudo %s\n' "$*"
+MOCK
+
+    cat > "${BIN_SANDBOX}/softwareupdate" <<'MOCK'
+#!/usr/bin/env bash
+printf 'softwareupdate %s\n' "$*"
+MOCK
+
+    cat > "${BIN_SANDBOX}/brew" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--cache" ]]; then
+    printf '%s\n' "${TEST_TMPDIR}/brew-cache-macos"
+    exit 0
+fi
+
+printf 'brew %s\n' "$*"
+MOCK
+
+    cat > "${BIN_SANDBOX}/mas" <<'MOCK'
+#!/usr/bin/env bash
+case "${1:-}" in
+    outdated)
+        printf '123456 Example App (1.0 -> 1.1)\n'
+        ;;
+    upgrade)
+        printf 'mas %s\n' "$*"
+        ;;
+esac
+MOCK
+
+    cat > "${BIN_SANDBOX}/xcodebuild" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-license" && "${2:-}" == "check" ]]; then
+    exit 1
+fi
+
+printf 'xcodebuild %s\n' "$*"
+MOCK
+
+    chmod +x \
+        "${BIN_SANDBOX}/sudo" \
+        "${BIN_SANDBOX}/softwareupdate" \
+        "${BIN_SANDBOX}/brew" \
+        "${BIN_SANDBOX}/mas" \
+        "${BIN_SANDBOX}/xcodebuild"
+
+    run env \
+        PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        OSTYPE="darwin24" \
+        XCODE_APP_PATH="${TEST_TMPDIR}/Applications/Xcode.app" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_os-update"
+    assert_success
+    assert_output --partial "sudo softwareupdate --install --all"
+    assert_output --partial "mas upgrade"
+    assert_output --partial "sudo xcodebuild -license accept"
+    assert_output --partial "brew update"
+    assert_output --partial "brew upgrade"
+    assert_output --partial "brew cleanup --prune=all"
+    [[ ! -d "${TEST_TMPDIR}/brew-cache-macos" ]]
+}
+
 @test "ph-update self-elevates through sudo when not root" {
     cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
 #!/usr/bin/env bash

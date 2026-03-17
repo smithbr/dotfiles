@@ -8,6 +8,7 @@ source "${BASEDIR}/scripts/common.sh"
 
 CHEZMOI_SOURCE="${HOME}/.dotfiles/dotfiles"
 SHOW_ALL=0
+MANAGED_PATHS_CACHE=""
 declare -a extra_roots=()
 
 usage() {
@@ -104,6 +105,28 @@ parse_args() {
 
 collect_managed_paths() {
     chezmoi --source "${CHEZMOI_SOURCE}" managed --include=files,dirs,symlinks --path-style=absolute
+}
+
+prime_managed_paths_cache() {
+    if [[ -n "${MANAGED_PATHS_CACHE}" ]]; then
+        return
+    fi
+
+    MANAGED_PATHS_CACHE="$(collect_managed_paths)"
+}
+
+is_expected_local_override() {
+    local path="$1"
+    local example_path=""
+
+    if [[ "${path}" != *.local ]]; then
+        return 1
+    fi
+
+    example_path="${path}.example"
+    prime_managed_paths_cache
+
+    grep -Fqx -- "${example_path}" <<< "${MANAGED_PATHS_CACHE}"
 }
 
 collect_audit_roots() {
@@ -258,6 +281,9 @@ print_candidate_section() {
 
         while IFS= read -r path; do
             [[ -n "${path}" ]] || continue
+            if is_expected_local_override "${path}"; then
+                continue
+            fi
             if is_hidden_local_state "${path}"; then
                 hidden_count=$((hidden_count + 1))
                 if [[ "${SHOW_ALL}" -eq 1 ]]; then
