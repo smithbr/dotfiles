@@ -711,3 +711,54 @@ MOCK
     refute_output --partial "Bad private key permissions"
     refute_output --partial "Bad public key permissions"
 }
+
+@test "sshkey doctor skips GitHub account checks when gh is installed but signed out" {
+    mkdir -p "${TEST_TMPDIR}/home/.ssh"
+    printf 'PRIVATE KEY\n' > "${TEST_TMPDIR}/home/.ssh/id_ed25519"
+    printf 'ssh-ed25519 MATCHED keep@test\n' > "${TEST_TMPDIR}/home/.ssh/id_ed25519.pub"
+    printf 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n' > "${TEST_TMPDIR}/home/.ssh/known_hosts"
+    chmod 700 "${TEST_TMPDIR}/home/.ssh"
+    chmod 600 "${TEST_TMPDIR}/home/.ssh/id_ed25519"
+    chmod 644 "${TEST_TMPDIR}/home/.ssh/id_ed25519.pub" "${TEST_TMPDIR}/home/.ssh/known_hosts"
+
+    cat > "${BIN_SANDBOX}/ssh-add" <<'MOCK'
+#!/usr/bin/env bash
+case "${1:-}" in
+    -l)
+        exit 0
+        ;;
+    -L)
+        printf 'ssh-ed25519 MATCHED keep@test\n'
+        exit 0
+        ;;
+esac
+
+exit 0
+MOCK
+
+    cat > "${BIN_SANDBOX}/ssh" <<'MOCK'
+#!/usr/bin/env bash
+printf "Hi keep@test! You've successfully authenticated, but GitHub does not provide shell access.\n" >&2
+exit 1
+MOCK
+
+    cat > "${BIN_SANDBOX}/gh" <<'MOCK'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+    "auth status")
+        exit 1
+        ;;
+esac
+
+exit 0
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/ssh-add" "${BIN_SANDBOX}/ssh" "${BIN_SANDBOX}/gh"
+
+    run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_sshkey" doctor
+    assert_success
+    assert_output --partial "GitHub CLI is not authenticated — skipping GitHub account checks"
+    assert_output --partial "SSH auth to github.com works"
+    refute_output --partial "GitHub does not have a matching key blob"
+}

@@ -1062,8 +1062,7 @@ doctor_github_key() {
             issues=$((issues + 1))
         fi
     elif gh_installed; then
-        _cross "GitHub CLI is not authenticated — run 'gh auth login' to enable"
-        issues=$((issues + 1))
+        _item "GitHub CLI is not authenticated — skipping GitHub account checks"
     else
         github_checks_fatal=false
         _item "GitHub CLI not installed — skipping GitHub account checks"
