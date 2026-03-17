@@ -61,6 +61,49 @@ _brew_has_formula() { [[ "${_installed_formulae}" == *" $1 "* ]]; }
 _brew_has_cask()    { [[ "${_installed_casks}" == *" $1 "* ]]; }
 _brew_has_tap()     { [[ "${_installed_taps}" == *" $1 "* ]]; }
 
+declare -a LINUX_SUPPORTED_CASKS=(
+    "chezit"
+)
+
+brew_entry_short_name() {
+    local pkg_name="$1"
+
+    printf '%s\n' "${pkg_name##*/}"
+}
+
+linux_cask_is_supported() {
+    local pkg_name="$1"
+    local short_name=""
+    local supported_cask=""
+
+    short_name="$(brew_entry_short_name "${pkg_name}")"
+
+    case "${short_name}" in
+        font-*)
+            return 0
+            ;;
+    esac
+
+    for supported_cask in "${LINUX_SUPPORTED_CASKS[@]}"; do
+        if [[ "${short_name}" == "${supported_cask}" ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+entry_is_supported_on_platform() {
+    local pkg_type="$1"
+    local pkg_name="$2"
+
+    if [[ "${os_name}" != "Linux" || "${pkg_type}" != "cask" ]]; then
+        return 0
+    fi
+
+    linux_cask_is_supported "${pkg_name}"
+}
+
 entry_is_brew_managed() {
     local pkg_type="$1"
     local pkg_name="$2"
@@ -72,7 +115,7 @@ entry_is_brew_managed() {
             fi
             ;;
         cask)
-            if _brew_has_cask "${pkg_name}"; then
+            if _brew_has_cask "$(brew_entry_short_name "${pkg_name}")"; then
                 return 0
             fi
             ;;
@@ -183,8 +226,7 @@ install_filtered_brewfile() {
             continue
         fi
 
-        # Casks are not supported on Linux.
-        if [[ "${os_name}" == "Linux" && "${pkg_type}" == "cask" && "${pkg_name}" != font-* ]]; then
+        if ! entry_is_supported_on_platform "${pkg_type}" "${pkg_name}"; then
             continue
         fi
 

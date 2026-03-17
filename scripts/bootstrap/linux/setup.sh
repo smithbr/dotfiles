@@ -150,7 +150,7 @@ prompt_optional_linux_bootstraps() {
             --header="Select optional packages to install" \
             --selected-prefix="* " \
             --unselected-prefix="  " \
-            "${pending_names[@]}" > "${tmp_gum_output}" 2>/dev/null || true
+            "${pending_names[@]}" > "${tmp_gum_output}" || true
 
         while IFS= read -r selected_name || [[ -n "${selected_name}" ]]; do
             [[ -z "${selected_name}" ]] && continue

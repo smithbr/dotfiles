@@ -158,6 +158,33 @@ _parse_brewfile_line() {
     assert_output "MANAGED"
 }
 
+@test "entry_is_brew_managed matches fully-qualified casks by short name" {
+    run bash -c '
+        _installed_formulae=""
+        _installed_casks=" chezit "
+        _installed_taps=""
+
+        _brew_has_formula() { [[ "${_installed_formulae}" == *" $1 "* ]]; }
+        _brew_has_cask()    { [[ "${_installed_casks}" == *" $1 "* ]]; }
+        _brew_has_tap()     { [[ "${_installed_taps}" == *" $1 "* ]]; }
+        brew_entry_short_name() { printf "%s\n" "${1##*/}"; }
+
+        entry_is_brew_managed() {
+            local pkg_type="$1" pkg_name="$2"
+            case "${pkg_type}" in
+                brew) _brew_has_formula "${pkg_name}" && return 0 ;;
+                cask) _brew_has_cask "$(brew_entry_short_name "${pkg_name}")" && return 0 ;;
+                tap)  _brew_has_tap "${pkg_name}" && return 0 ;;
+            esac
+            return 1
+        }
+
+        entry_is_brew_managed cask daptify14/tap/chezit && echo "MANAGED" || echo "NOT_MANAGED"
+    '
+    assert_success
+    assert_output "MANAGED"
+}
+
 @test "entry_is_brew_managed detects installed tap" {
     run bash -c '
         _installed_formulae=""
@@ -313,18 +340,34 @@ _parse_brewfile_line() {
 }
 
 # ---------------------------------------------------------------------------
-# Linux cask filtering — non-font casks should be skipped on Linux
+# Linux cask filtering
 # ---------------------------------------------------------------------------
 
 @test "Linux cask filtering skips non-font casks" {
     run bash -c '
+        brew_entry_short_name() { printf "%s\n" "${1##*/}"; }
+        linux_cask_is_supported() {
+            local pkg_name="$1"
+            local short_name=""
+            short_name="$(brew_entry_short_name "${pkg_name}")"
+            case "${short_name}" in
+                font-*|chezit) return 0 ;;
+                *) return 1 ;;
+            esac
+        }
+        entry_is_supported_on_platform() {
+            local pkg_type="$1" pkg_name="$2"
+            if [[ "${os_name}" != "Linux" || "${pkg_type}" != "cask" ]]; then
+                return 0
+            fi
+            linux_cask_is_supported "${pkg_name}"
+        }
+
         os_name="Linux"
-        pkg_type="cask"
-        pkg_name="1password-cli"
-        if [[ "${os_name}" == "Linux" && "${pkg_type}" == "cask" && "${pkg_name}" != font-* ]]; then
-            echo "SKIPPED"
-        else
+        if entry_is_supported_on_platform cask 1password-cli; then
             echo "INCLUDED"
+        else
+            echo "SKIPPED"
         fi
     '
     assert_success
@@ -333,13 +376,60 @@ _parse_brewfile_line() {
 
 @test "Linux cask filtering allows font casks" {
     run bash -c '
+        brew_entry_short_name() { printf "%s\n" "${1##*/}"; }
+        linux_cask_is_supported() {
+            local pkg_name="$1"
+            local short_name=""
+            short_name="$(brew_entry_short_name "${pkg_name}")"
+            case "${short_name}" in
+                font-*|chezit) return 0 ;;
+                *) return 1 ;;
+            esac
+        }
+        entry_is_supported_on_platform() {
+            local pkg_type="$1" pkg_name="$2"
+            if [[ "${os_name}" != "Linux" || "${pkg_type}" != "cask" ]]; then
+                return 0
+            fi
+            linux_cask_is_supported "${pkg_name}"
+        }
+
         os_name="Linux"
-        pkg_type="cask"
-        pkg_name="font-hack-nerd-font"
-        if [[ "${os_name}" == "Linux" && "${pkg_type}" == "cask" && "${pkg_name}" != font-* ]]; then
-            echo "SKIPPED"
-        else
+        if entry_is_supported_on_platform cask font-hack-nerd-font; then
             echo "INCLUDED"
+        else
+            echo "SKIPPED"
+        fi
+    '
+    assert_success
+    assert_output "INCLUDED"
+}
+
+@test "Linux cask filtering allows fully-qualified chezit cask" {
+    run bash -c '
+        brew_entry_short_name() { printf "%s\n" "${1##*/}"; }
+        linux_cask_is_supported() {
+            local pkg_name="$1"
+            local short_name=""
+            short_name="$(brew_entry_short_name "${pkg_name}")"
+            case "${short_name}" in
+                font-*|chezit) return 0 ;;
+                *) return 1 ;;
+            esac
+        }
+        entry_is_supported_on_platform() {
+            local pkg_type="$1" pkg_name="$2"
+            if [[ "${os_name}" != "Linux" || "${pkg_type}" != "cask" ]]; then
+                return 0
+            fi
+            linux_cask_is_supported "${pkg_name}"
+        }
+
+        os_name="Linux"
+        if entry_is_supported_on_platform cask daptify14/tap/chezit; then
+            echo "INCLUDED"
+        else
+            echo "SKIPPED"
         fi
     '
     assert_success
@@ -348,13 +438,29 @@ _parse_brewfile_line() {
 
 @test "Darwin cask filtering includes all casks" {
     run bash -c '
+        brew_entry_short_name() { printf "%s\n" "${1##*/}"; }
+        linux_cask_is_supported() {
+            local pkg_name="$1"
+            local short_name=""
+            short_name="$(brew_entry_short_name "${pkg_name}")"
+            case "${short_name}" in
+                font-*|chezit) return 0 ;;
+                *) return 1 ;;
+            esac
+        }
+        entry_is_supported_on_platform() {
+            local pkg_type="$1" pkg_name="$2"
+            if [[ "${os_name}" != "Linux" || "${pkg_type}" != "cask" ]]; then
+                return 0
+            fi
+            linux_cask_is_supported "${pkg_name}"
+        }
+
         os_name="Darwin"
-        pkg_type="cask"
-        pkg_name="1password-cli"
-        if [[ "${os_name}" == "Linux" && "${pkg_type}" == "cask" && "${pkg_name}" != font-* ]]; then
-            echo "SKIPPED"
-        else
+        if entry_is_supported_on_platform cask 1password-cli; then
             echo "INCLUDED"
+        else
+            echo "SKIPPED"
         fi
     '
     assert_success
@@ -414,8 +520,8 @@ _parse_brewfile_line() {
     assert_success
 }
 
-@test "Brewfile.core tracks chezit as a formula" {
-    run grep -qx 'brew "chezit"' "${PROJECT_ROOT}/homebrew/Brewfile.core"
+@test "Brewfile.core tracks chezit as a fully-qualified cask" {
+    run grep -qx 'cask "daptify14/tap/chezit"' "${PROJECT_ROOT}/homebrew/Brewfile.core"
     assert_success
 }
 
@@ -530,6 +636,7 @@ MOCK
         grep -qx '"'"'brew "curl"'"'"' "${TEST_BUNDLE}" || { echo "missing curl"; exit 1; }
         grep -qx '"'"'brew "gum"'"'"' "${TEST_BUNDLE}" || { echo "missing gum"; exit 1; }
         grep -qx '"'"'cask "font-hack-nerd-font"'"'"' "${TEST_BUNDLE}" || { echo "missing font cask"; exit 1; }
+        grep -qx '"'"'cask "daptify14/tap/chezit"'"'"' "${TEST_BUNDLE}" || { echo "missing chezit cask"; exit 1; }
         if grep -qx '"'"'brew "git"'"'"' "${TEST_BUNDLE}"; then
             echo "installed formula was not filtered"
             exit 1
