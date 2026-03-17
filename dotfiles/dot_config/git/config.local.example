@@ -5,6 +5,7 @@
 #     name = Your Name
 #     email = you@example.com
 #     username = your-github-username
+#     signingkey = ssh-ed25519 AAAA ...
 
 ############
 # --- macOS (1Password SSH agent) ---
