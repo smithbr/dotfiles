@@ -61,6 +61,18 @@ _brew_has_formula() { [[ "${_installed_formulae}" == *" $1 "* ]]; }
 _brew_has_cask()    { [[ "${_installed_casks}" == *" $1 "* ]]; }
 _brew_has_tap()     { [[ "${_installed_taps}" == *" $1 "* ]]; }
 
+log_brew_bundle_install() {
+    local prompt_label="$1"
+    shift
+    local package_count="$#"
+
+    if [[ "${package_count}" -eq 0 ]]; then
+        return 0
+    fi
+
+    log_info "Installing ${package_count} ${prompt_label}s via brew bundle: $*"
+}
+
 entry_is_brew_managed() {
     local pkg_type="$1"
     local pkg_name="$2"
@@ -181,12 +193,11 @@ install_filtered_brewfile() {
     done < "${source_brewfile}"
 
     if [[ "${selected_count}" -gt 0 ]]; then
+        log_brew_bundle_install "${prompt_label}" "${pending_names[@]}"
         if command -v gum >/dev/null 2>&1; then
-            printf '\033[2m  %s\033[0m\n' "${pending_names[*]}"
             gum spin --spinner dot --title "Installing ${prompt_label}s..." -- \
                 brew bundle install --file="${tmp_brewfile}"
         else
-            log_info "Installing ${prompt_label}s: ${pending_names[*]}"
             brew bundle install --file="${tmp_brewfile}"
         fi
         refresh_brew_state
@@ -336,12 +347,11 @@ prompt_optional_brewfile() {
                 opt_names+=("${BASH_REMATCH[1]}")
             fi
         done < "${tmp_optional_brewfile}"
+        log_brew_bundle_install "${prompt_label}" "${opt_names[@]}"
         if command -v gum >/dev/null 2>&1; then
-            printf '\033[2m  %s\033[0m\n' "${opt_names[*]}"
             gum spin --spinner dot --title "Installing optional packages..." -- \
                 brew bundle install --file="${tmp_optional_brewfile}"
         else
-            log_info "Installing optional Homebrew packages: ${opt_names[*]}"
             brew bundle install --file="${tmp_optional_brewfile}"
         fi
         refresh_brew_state
