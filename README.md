@@ -1,8 +1,8 @@
 ## 🗃 My dotfiles
 
 ```bash
-git clone https://github.com/smithbr/dotfiles.git dotfiles && cd dotfiles
-./install.sh
+git clone https://github.com/smithbr/dotfiles.git ~/.dotfiles
+./.dotfiles/install.sh
 ```
 
 Chezmoi docs: [https://www.chezmoi.io/](https://www.chezmoi.io/)
