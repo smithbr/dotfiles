@@ -414,6 +414,11 @@ _parse_brewfile_line() {
     assert_success
 }
 
+@test "Brewfile.core tracks chezit as a formula" {
+    run grep -qx 'brew "chezit"' "${PROJECT_ROOT}/homebrew/Brewfile.core"
+    assert_success
+}
+
 @test "Brewfile.macos tracks mas as a formula" {
     run grep -qx 'brew "mas"' "${PROJECT_ROOT}/homebrew/Brewfile.macos"
     assert_success
