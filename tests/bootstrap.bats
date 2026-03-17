@@ -81,21 +81,298 @@ teardown() {
     assert_output "SKIPPED"
 }
 
-@test "linux setup.sh announces each bootstrap phase" {
+@test "linux setup.sh defines optional install selection flow" {
     local setup_script="${PROJECT_ROOT}/scripts/bootstrap/linux/setup.sh"
-    local phase
 
-    for phase in \
-        'run_bootstrap_step "1/4" "Checking base Linux packages"' \
-        'run_bootstrap_step "2/4" "Running Docker bootstrap"' \
-        'run_bootstrap_step "3/4" "Running Tailscale bootstrap"' \
-        'run_bootstrap_step "4/4" "Running OpenCode bootstrap"' \
-        "Linux bootstrap finished"; do
-        grep -qF "${phase}" "${setup_script}" || {
-            echo "MISSING: ${phase}"
-            return 1
-        }
-    done
+    grep -qF 'prompt_optional_linux_bootstraps "optional Linux install"' "${setup_script}" || {
+        echo "MISSING optional prompt"
+        return 1
+    }
+
+    grep -qF -- '--header="Select optional packages to install"' "${setup_script}" || {
+        echo "MISSING gum chooser header"
+        return 1
+    }
+
+    grep -qF 'read -r -p "Install ${prompt_label} ${pending_names[${idx}]}? [Y/n] " reply' "${setup_script}" || {
+        echo "MISSING fallback prompt"
+        return 1
+    }
+
+    grep -qF 'run_bootstrap_step "1" "Checking base Linux packages"' "${setup_script}" || {
+        echo "MISSING base package step"
+        return 1
+    }
+
+    grep -qF 'run_optional_bootstrap_script' "${setup_script}" || {
+        echo "MISSING optional bootstrap runner"
+        return 1
+    }
+}
+
+@test "linux setup.sh runs only selected optional installs" {
+    run bash -c '
+        set -euo pipefail
+
+        export TEST_ROOT="'"${TEST_TMPDIR}"'/linux-bootstrap"
+        export TEST_BOOTSTRAP_DIR="${TEST_ROOT}/bootstrap"
+        export TEST_BIN="${TEST_ROOT}/bin"
+        export TEST_LOG="${TEST_ROOT}/optional.log"
+        export PATH="${TEST_BIN}:/usr/bin:/bin"
+        export BOOTSTRAP_DIR="${TEST_BOOTSTRAP_DIR}"
+
+        mkdir -p "${TEST_BOOTSTRAP_DIR}" "${TEST_BIN}"
+        : > "${TEST_LOG}"
+
+        printf "curl\n" > "${TEST_BOOTSTRAP_DIR}/apt-packages.txt"
+
+        cat > "${TEST_BOOTSTRAP_DIR}/docker.sh" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "OPTIONAL docker" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BOOTSTRAP_DIR}/tailscale.sh" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "OPTIONAL tailscale" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BOOTSTRAP_DIR}/opencode.sh" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "OPTIONAL opencode" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BIN}/apt-get" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "apt-get $*" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BIN}/dpkg-query" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+printf "curl\tinstall ok installed\n"
+MOCK
+
+        chmod +x "${TEST_BOOTSTRAP_DIR}/docker.sh" \
+            "${TEST_BOOTSTRAP_DIR}/tailscale.sh" \
+            "${TEST_BOOTSTRAP_DIR}/opencode.sh" \
+            "${TEST_BIN}/apt-get" \
+            "${TEST_BIN}/dpkg-query"
+
+        cd "'"${PROJECT_ROOT}"'"
+        printf "y\nn\ny\n" | ./scripts/bootstrap/linux/setup.sh
+
+        grep -qx "OPTIONAL docker" "${TEST_LOG}" || { echo "missing docker"; exit 1; }
+        grep -qx "OPTIONAL opencode" "${TEST_LOG}" || { echo "missing opencode"; exit 1; }
+        if grep -qx "OPTIONAL tailscale" "${TEST_LOG}"; then
+            echo "tailscale should not run"
+            exit 1
+        fi
+        if grep -q "^apt-get " "${TEST_LOG}"; then
+            echo "base apt packages should have been treated as already installed"
+            exit 1
+        fi
+    '
+    assert_success
+    assert_output --partial "Running optional Linux installs: Docker OpenCode"
+}
+
+@test "linux setup.sh installs only missing base packages" {
+    run bash -c '
+        set -euo pipefail
+
+        export TEST_ROOT="'"${TEST_TMPDIR}"'/linux-bootstrap-missing-apt"
+        export TEST_BOOTSTRAP_DIR="${TEST_ROOT}/bootstrap"
+        export TEST_BIN="${TEST_ROOT}/bin"
+        export TEST_LOG="${TEST_ROOT}/apt.log"
+        export PATH="${TEST_BIN}:/usr/bin:/bin"
+        export BOOTSTRAP_DIR="${TEST_BOOTSTRAP_DIR}"
+
+        mkdir -p "${TEST_BOOTSTRAP_DIR}" "${TEST_BIN}"
+        : > "${TEST_LOG}"
+
+        printf "curl\ngit\nzsh\n" > "${TEST_BOOTSTRAP_DIR}/apt-packages.txt"
+
+        cat > "${TEST_BOOTSTRAP_DIR}/docker.sh" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "OPTIONAL docker" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BOOTSTRAP_DIR}/tailscale.sh" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "OPTIONAL tailscale" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BOOTSTRAP_DIR}/opencode.sh" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "OPTIONAL opencode" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BIN}/apt-get" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "apt-get $*" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BIN}/sudo" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+"$@"
+MOCK
+
+        cat > "${TEST_BIN}/dpkg-query" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+shift 2
+for pkg in "$@"; do
+    case "${pkg}" in
+        curl|zsh)
+            printf "%s\tinstall ok installed\n" "${pkg}"
+            ;;
+    esac
+done
+MOCK
+
+        chmod +x "${TEST_BOOTSTRAP_DIR}/docker.sh" \
+            "${TEST_BOOTSTRAP_DIR}/tailscale.sh" \
+            "${TEST_BOOTSTRAP_DIR}/opencode.sh" \
+            "${TEST_BIN}/apt-get" \
+            "${TEST_BIN}/sudo" \
+            "${TEST_BIN}/dpkg-query"
+
+        cd "'"${PROJECT_ROOT}"'"
+        printf "n\nn\nn\n" | ./scripts/bootstrap/linux/setup.sh
+
+        grep -qx "apt-get update" "${TEST_LOG}" || { echo "missing apt update"; exit 1; }
+        grep -qx "apt-get install -y git" "${TEST_LOG}" || { echo "missing missing-only install"; exit 1; }
+        if grep -q "curl" "${TEST_LOG}" || grep -q "zsh" "${TEST_LOG}"; then
+            echo "installed packages should not be reinstalled"
+            exit 1
+        fi
+    '
+    assert_success
+    assert_output --partial "Installing base Linux packages: git"
+}
+
+@test "linux setup.sh excludes installed optional packages from selection" {
+    run bash -c '
+        set -euo pipefail
+
+        export TEST_ROOT="'"${TEST_TMPDIR}"'/linux-bootstrap-installed-optional"
+        export TEST_BOOTSTRAP_DIR="${TEST_ROOT}/bootstrap"
+        export TEST_BIN="${TEST_ROOT}/bin"
+        export TEST_LOG="${TEST_ROOT}/optional.log"
+        export PATH="${TEST_BIN}:/usr/bin:/bin"
+        export BOOTSTRAP_DIR="${TEST_BOOTSTRAP_DIR}"
+
+        mkdir -p "${TEST_BOOTSTRAP_DIR}" "${TEST_BIN}"
+        : > "${TEST_LOG}"
+
+        printf "curl\n" > "${TEST_BOOTSTRAP_DIR}/apt-packages.txt"
+
+        cat > "${TEST_BOOTSTRAP_DIR}/docker.sh" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "OPTIONAL docker" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BOOTSTRAP_DIR}/tailscale.sh" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "OPTIONAL tailscale" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BOOTSTRAP_DIR}/opencode.sh" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "OPTIONAL opencode" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BIN}/docker" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+        cat > "${TEST_BIN}/apt-get" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "apt-get $*" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BIN}/dpkg-query" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+printf "curl\tinstall ok installed\n"
+MOCK
+
+        chmod +x "${TEST_BOOTSTRAP_DIR}/docker.sh" \
+            "${TEST_BOOTSTRAP_DIR}/tailscale.sh" \
+            "${TEST_BOOTSTRAP_DIR}/opencode.sh" \
+            "${TEST_BIN}/docker" \
+            "${TEST_BIN}/apt-get" \
+            "${TEST_BIN}/dpkg-query"
+
+        cd "'"${PROJECT_ROOT}"'"
+        printf "y\ny\n" | ./scripts/bootstrap/linux/setup.sh
+
+        grep -qx "OPTIONAL tailscale" "${TEST_LOG}" || { echo "missing tailscale"; exit 1; }
+        grep -qx "OPTIONAL opencode" "${TEST_LOG}" || { echo "missing opencode"; exit 1; }
+        if grep -q "^OPTIONAL docker$" "${TEST_LOG}"; then
+            echo "docker should have been excluded from the picker"
+            exit 1
+        fi
+    '
+    assert_success
+    assert_output --partial "Running optional Linux installs: Tailscale OpenCode"
+}
+
+@test "linux setup.sh skips optional installs when none are selected" {
+    run bash -c '
+        set -euo pipefail
+
+        export TEST_ROOT="'"${TEST_TMPDIR}"'/linux-bootstrap-none"
+        export TEST_BOOTSTRAP_DIR="${TEST_ROOT}/bootstrap"
+        export TEST_BIN="${TEST_ROOT}/bin"
+        export TEST_LOG="${TEST_ROOT}/optional.log"
+        export PATH="${TEST_BIN}:/usr/bin:/bin"
+        export BOOTSTRAP_DIR="${TEST_BOOTSTRAP_DIR}"
+
+        mkdir -p "${TEST_BOOTSTRAP_DIR}" "${TEST_BIN}"
+        : > "${TEST_LOG}"
+
+        printf "curl\n" > "${TEST_BOOTSTRAP_DIR}/apt-packages.txt"
+
+        cat > "${TEST_BOOTSTRAP_DIR}/docker.sh" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "OPTIONAL docker" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BOOTSTRAP_DIR}/tailscale.sh" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "OPTIONAL tailscale" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BOOTSTRAP_DIR}/opencode.sh" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "OPTIONAL opencode" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BIN}/apt-get" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "apt-get $*" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BIN}/dpkg-query" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+printf "curl\tinstall ok installed\n"
+MOCK
+
+        chmod +x "${TEST_BOOTSTRAP_DIR}/docker.sh" \
+            "${TEST_BOOTSTRAP_DIR}/tailscale.sh" \
+            "${TEST_BOOTSTRAP_DIR}/opencode.sh" \
+            "${TEST_BIN}/apt-get" \
+            "${TEST_BIN}/dpkg-query"
+
+        cd "'"${PROJECT_ROOT}"'"
+        printf "n\nn\nn\n" | ./scripts/bootstrap/linux/setup.sh
+
+        if grep -q "^OPTIONAL " "${TEST_LOG}"; then
+            echo "optional installers should not run"
+            exit 1
+        fi
+    '
+    assert_success
+    assert_output --partial "No optional Linux installs selected"
 }
 
 # ---------------------------------------------------------------------------
