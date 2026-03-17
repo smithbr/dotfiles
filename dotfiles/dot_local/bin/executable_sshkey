@@ -183,7 +183,19 @@ command_exists() {
 }
 
 get_perms() {
-    stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
+    local path="$1"
+
+    case "${OSTYPE}" in
+        darwin*)
+            stat -f '%Lp' "${path}" 2>/dev/null
+            ;;
+        linux*)
+            stat -c '%a' "${path}" 2>/dev/null
+            ;;
+        *)
+            stat -c '%a' "${path}" 2>/dev/null || stat -f '%Lp' "${path}" 2>/dev/null
+            ;;
+    esac
 }
 
 is_protected_key_name() {
@@ -967,7 +979,7 @@ doctor_default_key_permissions() {
         perms="$(get_perms "${key_path}")"
         if [[ "${perms}" != "600" ]]; then
             _cross "Bad private key permissions for ${key_path}: ${perms}"
-            issues=1
+            issues=$((issues + 1))
         fi
     fi
 
@@ -975,7 +987,7 @@ doctor_default_key_permissions() {
         perms="$(get_perms "${key_path}.pub")"
         if [[ "${perms}" != "644" && "${perms}" != "600" ]]; then
             _cross "Bad public key permissions for ${key_path}.pub: ${perms}"
-            issues=1
+            issues=$((issues + 1))
         fi
     fi
 
@@ -983,6 +995,7 @@ doctor_default_key_permissions() {
 }
 
 doctor_github_key() {
+    local issues_ref="${1:-}"
     local key_path
     local blob=""
     local issues=0
@@ -1032,6 +1045,10 @@ doctor_github_key() {
         issues=$((issues + 1))
     fi
 
+    if [[ -n "${issues_ref}" ]]; then
+        printf -v "${issues_ref}" '%s' "${issues}"
+    fi
+
     return "${issues}"
 }
 
@@ -1046,6 +1063,7 @@ doctor_command() {
     local key_path=""
     local entry=""
     local permission_issue=0
+    local github_issue_count=0
 
     _header "Local checks"
     if [[ -d "${HOME}/.ssh" ]]; then
@@ -1094,13 +1112,13 @@ doctor_command() {
         _check "known_hosts present"
     else
         _cross "known_hosts missing"
+        issues=$((issues + 1))
     fi
 
     key_path="$(ssh_key_path "${GITHUB_KEY_NAME}")"
     if [[ -f "${key_path}.pub" ]]; then
-        if ! doctor_github_key; then
-            issues=$((issues + 1))
-        fi
+        doctor_github_key github_issue_count || true
+        issues=$((issues + github_issue_count))
     fi
 
     printf '\n'
