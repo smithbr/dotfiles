@@ -61,18 +61,6 @@ _brew_has_formula() { [[ "${_installed_formulae}" == *" $1 "* ]]; }
 _brew_has_cask()    { [[ "${_installed_casks}" == *" $1 "* ]]; }
 _brew_has_tap()     { [[ "${_installed_taps}" == *" $1 "* ]]; }
 
-log_brew_bundle_install() {
-    local prompt_label="$1"
-    shift
-    local package_count="$#"
-
-    if [[ "${package_count}" -eq 0 ]]; then
-        return 0
-    fi
-
-    log_info "Installing ${package_count} ${prompt_label}s via brew bundle: $*"
-}
-
 entry_is_brew_managed() {
     local pkg_type="$1"
     local pkg_name="$2"
@@ -193,13 +181,7 @@ install_filtered_brewfile() {
     done < "${source_brewfile}"
 
     if [[ "${selected_count}" -gt 0 ]]; then
-        log_brew_bundle_install "${prompt_label}" "${pending_names[@]}"
-        if command -v gum >/dev/null 2>&1; then
-            gum spin --spinner dot --title "Installing ${prompt_label}s..." -- \
-                brew bundle install --file="${tmp_brewfile}"
-        else
-            brew bundle install --file="${tmp_brewfile}"
-        fi
+        spin "Installing ${prompt_label}s..." brew bundle install --file="${tmp_brewfile}"
         refresh_brew_state
     else
         log_info "All ${prompt_label}s already installed"
@@ -314,7 +296,7 @@ prompt_optional_brewfile() {
             --header="Select optional packages to install" \
             --selected-prefix="* " \
             --unselected-prefix="  " \
-            "${optional_names[@]}" > "${tmp_gum_output}" || true
+            "${optional_names[@]}" > "${tmp_gum_output}" 2>/dev/null || true
 
         while IFS= read -r selected_name || [[ -n "${selected_name}" ]]; do
             [[ -z "${selected_name}" ]] && continue
@@ -340,20 +322,7 @@ prompt_optional_brewfile() {
     fi
 
     if [[ "${selected_optional}" -gt 0 ]]; then
-        local -a opt_names=()
-        local opt_line
-        while IFS= read -r opt_line || [[ -n "${opt_line}" ]]; do
-            if [[ "${opt_line}" =~ ^[a-z]+[[:space:]]+\"([^\"]+)\" ]]; then
-                opt_names+=("${BASH_REMATCH[1]}")
-            fi
-        done < "${tmp_optional_brewfile}"
-        log_brew_bundle_install "${prompt_label}" "${opt_names[@]}"
-        if command -v gum >/dev/null 2>&1; then
-            gum spin --spinner dot --title "Installing optional packages..." -- \
-                brew bundle install --file="${tmp_optional_brewfile}"
-        else
-            brew bundle install --file="${tmp_optional_brewfile}"
-        fi
+        spin "Installing ${prompt_label}s..." brew bundle install --file="${tmp_optional_brewfile}"
         refresh_brew_state
     else
         log_info "No ${prompt_label}s selected"

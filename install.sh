@@ -90,7 +90,6 @@ ensure_chezmoi() {
 
     chezmoi_path="$(command -v chezmoi || true)"
     if [[ -n "${chezmoi_path}" ]]; then
-        log_info "chezmoi already installed at ${chezmoi_path}"
         return 0
     fi
 
@@ -144,7 +143,6 @@ run_chezmoi_apply() {
         apply_cmd+=("${chezmoi_args[@]}")
     fi
 
-    log_info "Running chezmoi apply in the foreground so progress stays visible"
     "${apply_cmd[@]}"
 }
 
