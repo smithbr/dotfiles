@@ -5,6 +5,20 @@
 
 set -euo pipefail
 
+append_path_dir() {
+    local dir="${1}"
+    if [[ -n "${dir}" && ":${PATH}:" != *":${dir}:"* ]]; then
+        PATH="${PATH}:${dir}"
+    fi
+}
+
+# Add standard admin binary locations so Debian/Raspberry Pi installs remain
+# discoverable even when the invoking user's PATH omits sbin directories.
+IFS=':' read -r -a supplemental_path_dirs <<< "${PH_TEST_SBIN_PATHS:-/usr/local/sbin:/usr/sbin:/sbin}"
+for dir in "${supplemental_path_dirs[@]}"; do
+    append_path_dir "${dir}"
+done
+
 # Self-elevate if not root (preserve PATH for ~/.local/bin commands)
 if [[ "${EUID}" -ne 0 ]]; then
     exec sudo PATH="${PATH}" "${0}" "${@+"${@}"}"
