@@ -197,6 +197,42 @@ probe_perms() {
     normalize_perms "${output}"
 }
 
+symbolic_perms_to_octal() {
+    local symbolic="$1"
+    local index=0
+    local octal=""
+    local triad=""
+    local value=0
+
+    while [[ "${index}" -lt 9 ]]; do
+        triad="${symbolic:${index}:3}"
+        value=0
+
+        [[ "${triad:0:1}" != "-" ]] && value=$((value + 4))
+        [[ "${triad:1:1}" != "-" ]] && value=$((value + 2))
+        case "${triad:2:1}" in
+            x|s|t) value=$((value + 1)) ;;
+        esac
+
+        octal+="${value}"
+        index=$((index + 3))
+    done
+
+    printf '%s\n' "${octal}"
+}
+
+probe_ls_perms() {
+    local path="$1"
+    local output=""
+    local field=""
+
+    output="$(ls -ld "${path}" 2>/dev/null || true)"
+    field="$(printf '%s\n' "${output}" | awk 'NR == 1 { print $1 }')"
+    if [[ "${field}" =~ ^[-dlcbps][-rwxStTs]{9}$ ]]; then
+        symbolic_perms_to_octal "${field:1:9}"
+    fi
+}
+
 get_perms() {
     local path="$1"
     local perms=""
@@ -204,17 +240,20 @@ get_perms() {
     case "${OSTYPE}" in
         darwin*)
             perms="$(probe_perms stat -f '%Lp' "${path}")"
+            [[ -n "${perms}" ]] || perms="$(probe_ls_perms "${path}")"
             ;;
         linux*)
             perms="$(probe_perms stat -c '%a' "${path}")"
             [[ -n "${perms}" ]] || perms="$(probe_perms stat --printf '%a\n' "${path}")"
             [[ -n "${perms}" ]] || perms="$(probe_perms find "${path}" -prune -printf '%m\n')"
+            [[ -n "${perms}" ]] || perms="$(probe_ls_perms "${path}")"
             ;;
         *)
             perms="$(probe_perms stat -c '%a' "${path}")"
             [[ -n "${perms}" ]] || perms="$(probe_perms stat --printf '%a\n' "${path}")"
             [[ -n "${perms}" ]] || perms="$(probe_perms stat -f '%Lp' "${path}")"
             [[ -n "${perms}" ]] || perms="$(probe_perms find "${path}" -prune -printf '%m\n')"
+            [[ -n "${perms}" ]] || perms="$(probe_ls_perms "${path}")"
             ;;
     esac
 
