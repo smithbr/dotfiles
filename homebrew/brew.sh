@@ -387,7 +387,7 @@ prompt_optional_brewfile() {
                 "${optional_names[@]}" \
                 < /dev/tty \
                 > "${tmp_gum_output}" \
-                2> >(perl -pe 's/nothing selected\r?\n//g' > /dev/tty) || true
+                2> /dev/tty || true
 
             while IFS= read -r selected_name || [[ -n "${selected_name}" ]]; do
                 [[ -z "${selected_name}" ]] && continue
