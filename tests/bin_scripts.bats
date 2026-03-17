@@ -13,18 +13,55 @@ teardown() {
     teardown_tmpdir
 }
 
+run_padd_api_probe() {
+    local source_script="${1}"
+    local probe_script="${TEST_TMPDIR}/$(basename "${source_script}")"
+
+    awk '
+        /^main\(\)\{$/ {
+            print "main(){"
+            print "    xOffset=0"
+            print "    TestAPIAvailability"
+            print "}"
+            skip=1
+            next
+        }
+        skip && /^}$/ {
+            skip=0
+            next
+        }
+        { print }
+    ' "${source_script}" > "${probe_script}"
+
+    chmod +x "${probe_script}"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" "${probe_script}"
+}
+
 @test "ph-padd displays help" {
     run sh "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-padd" --help
     assert_success
     assert_output --partial "PADD displays stats about your Pi-hole"
-    assert_output --partial "--json"
+    assert_output --partial "--api"
+    assert_output --partial "--runonce"
 }
 
-@test "ph-padd-unbound displays help" {
-    run sh "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-padd-unbound" --help
+@test "ph-padd startup probe fails fast when no API URLs are discovered" {
+    cat > "${BIN_SANDBOX}/dig" <<MOCK
+#!/usr/bin/env bash
+printf '%s\n' "\$*" > "${TEST_TMPDIR}/ph-padd-dig-args"
+exit 0
+MOCK
+    chmod +x "${BIN_SANDBOX}/dig"
+
+    run_padd_api_probe "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-padd"
+    assert_failure
+    assert_output --partial "API not available at: localhost"
+
+    run cat "${TEST_TMPDIR}/ph-padd-dig-args"
     assert_success
-    assert_output --partial "PADD displays stats about your Pi-hole"
-    assert_output --partial "--json"
+    assert_output --partial "+time=2"
+    assert_output --partial "+tries=1"
 }
 
 @test "os-update displays help" {
