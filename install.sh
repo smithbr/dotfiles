@@ -70,6 +70,20 @@ copy_and_list_local_example_files() {
     fi
 }
 
+ensure_dotfiles_repo_link() {
+    local current_target=""
+
+    if [[ -e "${HOME}/.dotfiles" || -L "${HOME}/.dotfiles" ]]; then
+        current_target="$(cd "${HOME}/.dotfiles" 2>/dev/null && pwd -P || true)"
+        if [[ "${current_target}" == "${BASEDIR}" ]]; then
+            log_info "Dotfiles repo already linked at ${HOME}/.dotfiles"
+            return 0
+        fi
+    fi
+
+    spin "Linking dotfiles repo..." ln -sfn "${BASEDIR}" "${HOME}/.dotfiles"
+}
+
 cd "${BASEDIR}"
 
 run_system_bootstrap=1
@@ -90,7 +104,7 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-spin "Linking dotfiles repo..." ln -sfn "${BASEDIR}" "${HOME}/.dotfiles"
+ensure_dotfiles_repo_link
 
 spin "Ensuring SSH key exists..." ensure_local_install_ssh_key
 
