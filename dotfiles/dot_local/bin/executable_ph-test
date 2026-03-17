@@ -32,6 +32,7 @@ UNBOUND_MAIN_CONF="${PH_TEST_UNBOUND_MAIN_CONF:-$(unbound-checkconf -o config-fi
 UNBOUND_DIR=$(dirname "${UNBOUND_MAIN_CONF}")
 UNBOUND_CONF="${PH_TEST_UNBOUND_CONF:-${UNBOUND_DIR}/unbound.conf.d/pi-hole.conf}"
 PIHOLE_SETUPVARS=""
+PIHOLE_TOML=""
 
 # ── Colours ─────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -197,9 +198,10 @@ test_dnssec() {
     header "DNSSEC validation"
 
     # Should SERVFAIL for a deliberately broken domain
-    local status
+    local status dnssec_validated=false
     status=$(dig @"${DNS_SERVER}" "${DNSSEC_FAIL_DOMAIN}" 2>/dev/null | awk '/status:/ {print $6}' | tr -d ',')
     if [[ "${status}" == "SERVFAIL" ]]; then
+        dnssec_validated=true
         pass "DNSSEC working — ${DNSSEC_FAIL_DOMAIN} correctly returned SERVFAIL"
     else
         fail "Expected SERVFAIL for ${DNSSEC_FAIL_DOMAIN}, got: ${status:-no response}"
@@ -211,21 +213,47 @@ test_dnssec() {
     fi
 
     # Good domain should carry the AD (Authenticated Data) flag
-    # Pi-hole (dnsmasq/FTL) strips the AD flag, so query Unbound directly
-    local ad_target="${DNS_SERVER}"
-    local -a ad_port_args=()
+    # Pi-hole (dnsmasq/FTL) strips the AD flag, so query Unbound directly when possible.
+    local ad_target="${DNS_SERVER}" ad_port="" unbound_interface="" unbound_port=""
+    local -a ad_port_args=() dig_args=()
     if has_pihole; then
-        ad_target="127.0.0.1"
-        ad_port_args=(-p 5335)
+        unbound_interface=$(get_unbound_setting "interface" || true)
+        unbound_port=$(get_unbound_setting "port" || true)
+
+        case "${unbound_interface}" in
+            ""|"0.0.0.0"|"::"|"::0")
+                ad_target="127.0.0.1"
+                ;;
+            *)
+                ad_target="${unbound_interface}"
+                ;;
+        esac
+
+        ad_port="${unbound_port:-5335}"
     fi
-    local ad_flag
-    ad_flag=$(dig @"${ad_target}" "${ad_port_args[@]}" "${GOOD_DOMAIN}" +dnssec 2>/dev/null | awk '/flags:/ {print}')
+    if [[ -n "${ad_port}" ]]; then
+        ad_port_args=(-p "${ad_port}")
+    fi
+
+    dig_args=(@"${ad_target}" "${GOOD_DOMAIN}" +dnssec)
+    if [[ "${#ad_port_args[@]}" -gt 0 ]]; then
+        dig_args+=("${ad_port_args[@]}")
+    fi
+
+    local ad_flag ad_status
+    ad_flag=$(dig "${dig_args[@]}" 2>/dev/null | awk '/flags:/ {print}')
+    ad_status=$(dig "${dig_args[@]}" 2>/dev/null | awk '/status:/ {print $6}' | tr -d ',')
+
     if printf '%s' "${ad_flag}" | grep -q " ad"; then
         pass "AD flag present on ${GOOD_DOMAIN} — DNSSEC authenticated"
+    elif [[ "${dnssec_validated}" == "true" ]]; then
+        info "AD flag not exposed on direct query to ${ad_target}${ad_port:+:${ad_port}}"
+        info "DNSSEC validation is still confirmed by ${DNSSEC_FAIL_DOMAIN} returning SERVFAIL"
     else
         fail "AD flag not set for ${GOOD_DOMAIN}"
         fix "Verify trust anchor: sudo unbound-anchor -a ${UNBOUND_DIR}/root.key"
         fix "Ensure ${UNBOUND_CONF} or ${UNBOUND_MAIN_CONF} has: val-permissive-mode: no"
+        [[ -n "${ad_status}" ]] && fix "Direct Unbound query status from ${ad_target}${ad_port:+:${ad_port}}: ${ad_status}"
         fix "Restart after changes: sudo systemctl restart unbound"
     fi
 }
@@ -236,10 +264,100 @@ has_pihole() {
     [[ "${HAS_PIHOLE}" == "true" ]]
 }
 
+get_pihole_toml_setting() {
+    local section="${1}" key="${2}" value=""
+    [[ -n "${PIHOLE_TOML}" && -f "${PIHOLE_TOML}" ]] || return 1
+
+    value=$(awk -v target_section="${section}" -v target_key="${key}" '
+        function trim(str) {
+            sub(/^[[:space:]]+/, "", str)
+            sub(/[[:space:]]+$/, "", str)
+            return str
+        }
+
+        {
+            line = $0
+            sub(/[[:space:]]*[#;].*$/, "", line)
+            line = trim(line)
+            if (line == "") {
+                next
+            }
+
+            if (line ~ /^\[/) {
+                current_section = tolower(line)
+                gsub(/^\[|\]$/, "", current_section)
+                in_target_section = (current_section == tolower(target_section))
+                next
+            }
+
+            split(line, parts, "=")
+            if (length(parts) < 2) {
+                next
+            }
+
+            key_name = trim(parts[1])
+            value_raw = trim(substr(line, index(line, "=") + 1))
+            gsub(/^"|"$/, "", value_raw)
+
+            if (tolower(key_name) == tolower(target_section "." target_key) || (in_target_section && tolower(key_name) == tolower(target_key))) {
+                print tolower(value_raw)
+                exit
+            }
+        }
+    ' "${PIHOLE_TOML}" 2>/dev/null || true)
+
+    case "${value}" in
+        true|false)
+            printf '%s\n' "${value}"
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
+get_pihole_dnssec_setting() {
+    local value=""
+
+    value=$(get_pihole_toml_setting "dns" "dnssec" || true)
+    case "${value}" in
+        true|false)
+            printf '%s\n' "${value}"
+            return 0
+            ;;
+    esac
+
+    [[ -n "${PIHOLE_SETUPVARS}" && -f "${PIHOLE_SETUPVARS}" ]] || return 1
+    value=$(awk -F= '
+        function trim(str) {
+            sub(/^[[:space:]]+/, "", str)
+            sub(/[[:space:]]+$/, "", str)
+            return str
+        }
+
+        toupper($1) == "DNSSEC" {
+            print tolower(trim($2))
+            exit
+        }
+    ' "${PIHOLE_SETUPVARS}" 2>/dev/null || true)
+
+    case "${value}" in
+        true|false)
+            printf '%s\n' "${value}"
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
 init_pihole_vars() {
     if command -v pihole &>/dev/null || pgrep -x pihole-FTL &>/dev/null; then
         HAS_PIHOLE=true
         PIHOLE_SETUPVARS=$(find /etc -name "setupVars.conf" -path "*/pihole/*" 2>/dev/null | head -1)
+        if [[ -f "/etc/pihole/pihole.toml" ]]; then
+            PIHOLE_TOML="/etc/pihole/pihole.toml"
+        fi
     fi
 }
 
@@ -383,25 +501,30 @@ test_setup_security() {
             check_ownership "/var/log/pihole" "pihole:pihole" "/var/log/pihole"
         fi
 
-        if [[ -n "${PIHOLE_SETUPVARS}" ]]; then
+        if [[ -n "${PIHOLE_SETUPVARS}" || -n "${PIHOLE_TOML}" ]]; then
             # Pi-hole should NOT have its own DNSSEC enabled when Unbound handles it
             local pihole_dnssec
-            pihole_dnssec=$(grep -i 'DNSSEC' "${PIHOLE_SETUPVARS}" 2>/dev/null | grep -i 'true' || true)
-            if [[ -n "${pihole_dnssec}" ]]; then
+            pihole_dnssec=$(get_pihole_dnssec_setting || true)
+            if [[ "${pihole_dnssec}" == "true" ]]; then
                 fail "Pi-hole DNSSEC is enabled (Unbound already handles DNSSEC)"
                 fix "Disable DNSSEC in Pi-hole web UI: Settings > DNS > uncheck DNSSEC"
-            else
+            elif [[ "${pihole_dnssec}" == "false" ]]; then
                 pass "Pi-hole DNSSEC correctly deferred to Unbound"
+            else
+                info "Could not determine Pi-hole DNSSEC setting from live config"
+                fix "Check Pi-hole DNS setting in /etc/pihole/pihole.toml or the web UI"
             fi
 
             # Pi-hole upstream should point to Unbound
-            local upstream
-            upstream=$(grep -i 'PIHOLE_DNS' "${PIHOLE_SETUPVARS}" 2>/dev/null | head -1 | cut -d= -f2 || true)
-            if [[ "${upstream}" == *"127.0.0.1#5335"* ]]; then
-                pass "Pi-hole upstream points to Unbound (${upstream})"
-            elif [[ -n "${upstream}" ]]; then
-                info "Pi-hole upstream: ${upstream} (expected 127.0.0.1#5335)"
-                fix "Set Custom DNS in Pi-hole to 127.0.0.1#5335"
+            if [[ -n "${PIHOLE_SETUPVARS}" ]]; then
+                local upstream
+                upstream=$(grep -i 'PIHOLE_DNS' "${PIHOLE_SETUPVARS}" 2>/dev/null | head -1 | cut -d= -f2 || true)
+                if [[ "${upstream}" == *"127.0.0.1#5335"* ]]; then
+                    pass "Pi-hole upstream points to Unbound (${upstream})"
+                elif [[ -n "${upstream}" ]]; then
+                    info "Pi-hole upstream: ${upstream} (expected 127.0.0.1#5335)"
+                    fix "Set Custom DNS in Pi-hole to 127.0.0.1#5335"
+                fi
             fi
         fi
     fi
