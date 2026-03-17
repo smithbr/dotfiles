@@ -11,6 +11,7 @@ Run the full suite with:
 ```
 
 The runner uses Homebrew-installed `bats-core`, `bats-support`, and `bats-assert`. If they are missing, [`run_tests.sh`](/Users/bran/.dotfiles/tests/run_tests.sh) installs them first.
+It also ensures `shellcheck` is installed, then lints the repo's shell scripts before running Bats.
 
 ## Git Hooks
 

@@ -238,14 +238,11 @@ prompt_optional_brewfile() {
     local line
     local pkg_type
     local pkg_name
-    local current_category=""
-    local category_text
     local idx
     local entry
     local reply
     local display_entry
     local pending_count=0
-    local selected_names
     local selected_name
     tmp_optional_brewfile="$(mktemp "${TMPDIR:-/tmp}/brewfile-optional.XXXXXX")"
 
@@ -255,11 +252,6 @@ prompt_optional_brewfile() {
 
         [[ -z "${line}" ]] && continue
         if [[ "${line}" == \#* ]]; then
-            category_text="${line#\# }"
-            if [[ "${category_text}" != "Optional dependencies. \`homebrew/brew.sh\` prompts for each entry." ]] && \
-                [[ "${category_text}" != "Supported entry types: brew, cask, tap, mas." ]]; then
-                current_category="${category_text}"
-            fi
             continue
         fi
 
@@ -325,7 +317,6 @@ prompt_optional_brewfile() {
         done < "${tmp_gum_output}"
         rm -f "${tmp_gum_output}"
     else
-        local prompt_last_category=""
         for idx in "${!optional_entries[@]}"; do
             entry="${optional_entries[${idx}]}"
             display_entry="${optional_names[${idx}]}"
