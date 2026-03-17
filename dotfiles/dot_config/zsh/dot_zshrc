@@ -12,6 +12,7 @@ export HISTFILE="${XDG_STATE_HOME}/zsh/history"
 export PATH="${HOME}/.local/bin:${PATH}"
 if [[ -S "${HOME}/.1password/agent.sock" ]]; then
     export SSHKEY_IDENTITY_AGENT="${HOME}/.1password/agent.sock"
+    export SSH_AUTH_SOCK="${SSHKEY_IDENTITY_AGENT}"
 fi
 
 source "${XDG_CONFIG_HOME}/shell/aliases"

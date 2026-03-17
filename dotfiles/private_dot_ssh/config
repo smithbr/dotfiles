@@ -2,5 +2,7 @@ Include ~/.ssh/config.local
 
 Host github.com
   User git
+  AddKeysToAgent yes
+  UseKeychain yes
   IdentityFile ~/.ssh/id_ed25519
   IdentitiesOnly yes

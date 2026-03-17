@@ -3,6 +3,9 @@
 
 # On a local machine with 1Password, point IdentityAgent at your local agent.
 # Leave it unset on remote servers so forwarded SSH_AUTH_SOCK keeps working.
+#
+# Include ~/.ssh/1Password/config
+#
 # Match exec "test -z \"$SSH_TTY\""
 #   IdentityAgent ~/.1password/agent.sock
 
