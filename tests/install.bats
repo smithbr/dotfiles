@@ -414,6 +414,9 @@ MOCK
         [[ ! -e "${HOME}/.local/bin/chezmoi" ]] || { echo "unexpected curl install path used"; exit 1; }
     '
     assert_success
+    assert_output --partial "Installing chezmoi with Homebrew"
+    assert_output --partial "Applying dotfiles from "
+    assert_output --partial "chezmoi apply complete"
     assert_output --partial "Done."
 }
 

@@ -84,6 +84,45 @@ ensure_dotfiles_repo_link() {
     spin "Linking dotfiles repo..." ln -sfn "${BASEDIR}" "${HOME}/.dotfiles"
 }
 
+ensure_chezmoi() {
+    local chezmoi_path=""
+    local bin_dir=""
+
+    chezmoi_path="$(command -v chezmoi || true)"
+    if [[ -n "${chezmoi_path}" ]]; then
+        log_info "chezmoi already installed at ${chezmoi_path}"
+        return 0
+    fi
+
+    if command -v brew >/dev/null 2>&1; then
+        log_info "Installing chezmoi with Homebrew"
+        spin "Installing chezmoi..." brew install chezmoi
+    else
+        bin_dir="${HOME}/.local/bin"
+        mkdir -p "${bin_dir}"
+        log_info "Installing chezmoi to ${bin_dir}"
+        spin "Installing chezmoi..." sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "${bin_dir}"
+        export PATH="${bin_dir}:${PATH}"
+    fi
+
+    chezmoi_path="$(command -v chezmoi || true)"
+    if [[ -n "${chezmoi_path}" ]]; then
+        log_info "chezmoi available at ${chezmoi_path}"
+    fi
+}
+
+apply_dotfiles() {
+    log_info "Applying dotfiles from ${CHEZMOI_SOURCE}"
+
+    if [[ "${#chezmoi_args[@]}" -gt 0 ]]; then
+        spin "Applying dotfiles..." chezmoi --source "${CHEZMOI_SOURCE}" apply "${chezmoi_args[@]}"
+    else
+        spin "Applying dotfiles..." chezmoi --source "${CHEZMOI_SOURCE}" apply
+    fi
+
+    log_info "chezmoi apply complete"
+}
+
 cd "${BASEDIR}"
 
 run_system_bootstrap=1
@@ -125,16 +164,7 @@ if [[ "${run_brew}" -eq 1 ]]; then
     chmod +x homebrew/brew.sh && ./homebrew/brew.sh
 fi
 
-if ! command -v chezmoi >/dev/null 2>&1; then
-    if command -v brew >/dev/null 2>&1; then
-        spin "Installing chezmoi..." brew install chezmoi
-    else
-        bin_dir="${HOME}/.local/bin"
-        mkdir -p "${bin_dir}"
-        spin "Installing chezmoi..." sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "${bin_dir}"
-        export PATH="${bin_dir}:${PATH}"
-    fi
-fi
+ensure_chezmoi
 
 # Remove invalid config so chezmoi apply can regenerate it from the template
 if [[ -f "${CHEZMOI_CONFIG_FILE}" ]] && ! chezmoi --source "${CHEZMOI_SOURCE}" dump-config &>/dev/null; then
@@ -142,11 +172,7 @@ if [[ -f "${CHEZMOI_CONFIG_FILE}" ]] && ! chezmoi --source "${CHEZMOI_SOURCE}" d
     rm -f "${CHEZMOI_CONFIG_FILE}"
 fi
 
-if [[ "${#chezmoi_args[@]}" -gt 0 ]]; then
-    spin "Applying dotfiles..." chezmoi --source "${CHEZMOI_SOURCE}" apply "${chezmoi_args[@]}"
-else
-    spin "Applying dotfiles..." chezmoi --source "${CHEZMOI_SOURCE}" apply
-fi
+apply_dotfiles
 
 if [[ "$(chezmoi source-path 2>/dev/null || true)" != "${CHEZMOI_DEFAULT_SOURCE}" ]]; then
     log_warn "chezmoi sourceDir is not set to ${CHEZMOI_DEFAULT_SOURCE}"
