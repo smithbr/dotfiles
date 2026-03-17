@@ -60,7 +60,7 @@ spin() {
     local title="$1"
     shift
     if command -v gum >/dev/null 2>&1 && [[ "$(type -t "$1" 2>/dev/null)" != "function" ]]; then
-        if ! gum spin --spinner dot --title "${title}" -- "$@"; then
+        if ! gum spin --spinner dot --title "${title}" --padding="0 1" -- "$@"; then
             log_error "${title} failed"
             return 1
         fi
@@ -68,4 +68,27 @@ spin() {
         log_info "${title}"
         "$@"
     fi
+}
+
+gum_choose_multiselect() {
+    local header="$1"
+    local height="$2"
+    shift 2
+
+    gum choose \
+        --no-limit \
+        --ordered \
+        --height="${height}" \
+        --header="${header}" \
+        --cursor=" " \
+        --cursor-prefix="> " \
+        --selected-prefix="* " \
+        --unselected-prefix="  " \
+        --no-show-help \
+        --padding="0 1" \
+        --cursor.foreground="63" \
+        --header.foreground="245" \
+        --item.foreground="252" \
+        --selected.foreground="213" \
+        "$@"
 }
