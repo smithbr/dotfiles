@@ -51,8 +51,76 @@ MOCK
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
         "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-test" 192.0.2.53
     assert_success
-    assert_output --partial "sudo PATH=${BIN_SANDBOX}:/usr/bin:/bin"
+    assert_output --partial "sudo PATH=${BIN_SANDBOX}:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
     assert_output --partial "executable_ph-test 192.0.2.53"
+}
+
+@test "ph-test finds unbound commands through supplemental sbin paths" {
+    local unbound_sbin="${TEST_TMPDIR}/unbound-sbin"
+    mkdir -p "${unbound_sbin}"
+
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+
+path_assignment="${1}"
+script_path="${2}"
+shift 2
+
+export PATH="${path_assignment#PATH=}"
+
+tmp_script="$(mktemp)"
+awk '
+    /^# Self-elevate if not root \(preserve PATH for ~\/\.local\/bin commands\)$/ { skip=1; next }
+    skip && /^DNS_SERVER=/ { skip=0 }
+    !skip {
+        if ($0 == "main \"$@\"") {
+            print "check_deps"
+            exit
+        }
+        print
+    }
+' "${script_path}" > "${tmp_script}"
+
+chmod +x "${tmp_script}"
+exec "${tmp_script}" "$@"
+MOCK
+
+    cat > "${BIN_SANDBOX}/dig" <<'MOCK'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+    cat > "${BIN_SANDBOX}/ss" <<'MOCK'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+    cat > "${unbound_sbin}/unbound-checkconf" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-o" && "${2:-}" == "config-file" ]]; then
+    printf '/etc/unbound/unbound.conf\n'
+fi
+exit 0
+MOCK
+
+    cat > "${unbound_sbin}/unbound-control" <<'MOCK'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+    chmod +x \
+        "${BIN_SANDBOX}/sudo" \
+        "${BIN_SANDBOX}/dig" \
+        "${BIN_SANDBOX}/ss" \
+        "${unbound_sbin}/unbound-checkconf" \
+        "${unbound_sbin}/unbound-control"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" PH_TEST_SBIN_PATHS="${unbound_sbin}" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-test"
+    assert_success
+    [[ "${output}" != *"Missing dependency: unbound-control"* ]]
+    [[ "${output}" != *"Missing dependency: unbound-checkconf"* ]]
 }
 
 @test "ts-test completes successfully in an isolated mocked environment" {
