@@ -127,6 +127,16 @@ log_pending_chezmoi_changes() {
     log_info "chezmoi reports ${pending_count} pending change(s) before apply"
 }
 
+resolve_dir_path() {
+    local path="$1"
+
+    if [[ -z "${path}" ]]; then
+        return 1
+    fi
+
+    cd "${path}" 2>/dev/null && pwd -P
+}
+
 run_chezmoi_apply() {
     local -a apply_cmd=(chezmoi --source "${CHEZMOI_SOURCE}" apply)
 
@@ -197,8 +207,11 @@ if [[ -f "${CHEZMOI_CONFIG_FILE}" ]] && ! chezmoi --source "${CHEZMOI_SOURCE}" d
 fi
 
 apply_dotfiles
-
-if [[ "$(chezmoi source-path 2>/dev/null || true)" != "${CHEZMOI_DEFAULT_SOURCE}" ]]; then
+chezmoi_source_path="$(chezmoi source-path 2>/dev/null || true)"
+chezmoi_source_resolved="$(resolve_dir_path "${chezmoi_source_path}" || true)"
+chezmoi_default_resolved="$(resolve_dir_path "${CHEZMOI_DEFAULT_SOURCE}" || true)"
+if [[ "${chezmoi_source_path}" != "${CHEZMOI_DEFAULT_SOURCE}" ]] \
+    && [[ -z "${chezmoi_source_resolved}" || -z "${chezmoi_default_resolved}" || "${chezmoi_source_resolved}" != "${chezmoi_default_resolved}" ]]; then
     log_warn "chezmoi sourceDir is not set to ${CHEZMOI_DEFAULT_SOURCE}"
 fi
 
