@@ -90,6 +90,51 @@ entry_is_brew_managed() {
     return 1
 }
 
+cask_app_bundle_exists() {
+    local pkg_name="$1"
+    local cask_json=""
+    local app_candidate=""
+
+    if [[ "${os_name}" != "Darwin" ]]; then
+        return 1
+    fi
+
+    cask_json="$(brew info --cask --json=v2 "${pkg_name}" 2>/dev/null || true)"
+    if [[ -z "${cask_json}" ]]; then
+        return 1
+    fi
+
+    while IFS= read -r app_candidate; do
+        app_candidate="${app_candidate#\"}"
+        app_candidate="${app_candidate%\"}"
+        app_candidate="${app_candidate%%.app*}.app"
+        app_candidate="${app_candidate##*/}"
+
+        [[ -z "${app_candidate}" ]] && continue
+
+        if [[ -d "/Applications/${app_candidate}" ]] || [[ -d "${HOME}/Applications/${app_candidate}" ]]; then
+            return 0
+        fi
+    done < <(printf '%s\n' "${cask_json}" | grep -o '"[^"]*\.app[^"]*"')
+
+    return 1
+}
+
+optional_entry_is_installed() {
+    local pkg_type="$1"
+    local pkg_name="$2"
+
+    if entry_is_brew_managed "${pkg_type}" "${pkg_name}"; then
+        return 0
+    fi
+
+    if [[ "${pkg_type}" == "cask" ]] && cask_app_bundle_exists "${pkg_name}"; then
+        return 0
+    fi
+
+    return 1
+}
+
 install_filtered_brewfile() {
     local source_brewfile="$1"
     local prompt_label="$2"
@@ -229,8 +274,8 @@ prompt_optional_brewfile() {
             continue
         fi
 
-        # Skip packages already managed by brew
-        if entry_is_brew_managed "${pkg_type}" "${pkg_name}"; then
+        # Skip packages already managed by brew or already present as app bundles.
+        if optional_entry_is_installed "${pkg_type}" "${pkg_name}"; then
             continue
         fi
 

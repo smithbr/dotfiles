@@ -17,7 +17,7 @@ cask "firefox"
 cask "google-chrome"
 
 # Development Tools
-cask "mactop"
+brew "mactop"
 cask "cmux"
 cask "cursor"
 cask "docker-desktop"
