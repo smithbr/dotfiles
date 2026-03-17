@@ -15,6 +15,7 @@ USER_NAME="${USER:-$(id -un)}"
 PROTECTED_LOCAL_KEY_NAME="${SSHKEY_PROTECTED_LOCAL_KEY_NAME:-id_rsa}"
 _PROTECTED_LOCAL_KEY_PATH="${HOME}/.ssh/${PROTECTED_LOCAL_KEY_NAME}"
 FORCE=false
+DRY_RUN=false
 USE_OP_FLAG=false
 USE_GH_FLAG=false
 COMMAND=""
@@ -129,6 +130,7 @@ Manage SSH keys across local, GitHub, and 1Password.
 |--------|----------------------------------|
 | `-m`   | Machine type: home, work, server |
 | `-y`   | Skip confirmations               |
+| `-n`   | Dry run cleanup actions          |
 | `-1p`  | Include 1Password operations     |
 | `-gh`  | Include GitHub operations        |
 EOF
@@ -146,7 +148,7 @@ Usage:
   sshkey delete <name> [-m <home|work|server>] [-y] [-1p] [-gh]
   sshkey list [-m <home|work|server>] [-gh] [-1p]
   sshkey doctor [-m <home|work|server>]
-  sshkey cleanup [-m <home|work|server>] [-y]
+  sshkey cleanup [-m <home|work|server>] [-y] [-n]
 
 Config: ${CONFIG_PATH}
 EOF
@@ -184,18 +186,21 @@ command_exists() {
 
 get_perms() {
     local path="$1"
+    local perms=""
 
     case "${OSTYPE}" in
         darwin*)
-            stat -f '%Lp' "${path}" 2>/dev/null
+            perms="$(stat -f '%Lp' "${path}" 2>/dev/null || true)"
             ;;
         linux*)
-            stat -c '%a' "${path}" 2>/dev/null
+            perms="$(stat -c '%a' "${path}" 2>/dev/null || true)"
             ;;
         *)
-            stat -c '%a' "${path}" 2>/dev/null || stat -f '%Lp' "${path}" 2>/dev/null
+            perms="$(stat -c '%a' "${path}" 2>/dev/null || stat -f '%Lp' "${path}" 2>/dev/null || true)"
             ;;
     esac
+
+    printf '%s\n' "${perms}" | awk '/^[0-7]{3,4}$/ { perms=$0 } END { if (perms != "") print perms }'
 }
 
 is_protected_key_name() {
@@ -222,7 +227,7 @@ skip_protected_key_path() {
 confirm() {
     local prompt="$1"
 
-    if [[ "${FORCE}" == true ]]; then
+    if [[ "${FORCE}" == true || "${DRY_RUN}" == true ]]; then
         return 0
     fi
 
@@ -379,6 +384,10 @@ gh_list_keys() {
 
 gh_ready() {
     command_exists gh && gh auth status >/dev/null 2>&1
+}
+
+gh_installed() {
+    command_exists gh
 }
 
 op_ready() {
@@ -1000,6 +1009,7 @@ doctor_github_key() {
     local blob=""
     local issues=0
     local github_match=false
+    local github_checks_fatal=true
 
     key_path="$(ssh_key_path "${GITHUB_KEY_NAME}")"
     printf '\n'
@@ -1033,16 +1043,23 @@ doctor_github_key() {
             _cross "GitHub does not have a matching key blob"
             issues=$((issues + 1))
         fi
-    else
-        _cross "GitHub CLI not available — run 'gh auth login' to enable"
+    elif gh_installed; then
+        _cross "GitHub CLI is not authenticated — run 'gh auth login' to enable"
         issues=$((issues + 1))
+    else
+        github_checks_fatal=false
+        _item "GitHub CLI not installed — skipping GitHub account checks"
     fi
 
     if test_github_ssh >/dev/null 2>&1; then
         _check "SSH auth to github.com works"
     else
-        _cross "SSH auth to github.com failed"
-        issues=$((issues + 1))
+        if [[ "${github_checks_fatal}" == true ]]; then
+            _cross "SSH auth to github.com failed"
+            issues=$((issues + 1))
+        else
+            _item "SSH auth to github.com could not be verified"
+        fi
     fi
 
     if [[ -n "${issues_ref}" ]]; then
@@ -1155,8 +1172,13 @@ cleanup_command() {
     local host_field=""
     local key_type=""
     local key_blob=""
+    local dir_perms=""
 
-    ensure_ssh_dir
+    if [[ "${DRY_RUN}" == false ]]; then
+        ensure_ssh_dir
+    elif [[ ! -d "${HOME}/.ssh" ]]; then
+        _item "Would create ${HOME}/.ssh and set permissions to 700"
+    fi
 
     for pub in "${HOME}"/.ssh/*.pub; do
         [[ -f "${pub}" ]] || continue
@@ -1167,8 +1189,12 @@ cleanup_command() {
         blob="$(public_key_blob "${pub}")"
         if [[ ! -f "${priv}" ]] && ! blob_in_any_agent "${blob}"; then
             if confirm "Delete orphaned public key '${pub}'?"; then
-                rm -f "${pub}"
-                _success "Removed ${pub}"
+                if [[ "${DRY_RUN}" == true ]]; then
+                    _item "Would remove ${pub}"
+                else
+                    rm -f "${pub}"
+                    _success "Removed ${pub}"
+                fi
                 cleaned=$((cleaned + 1))
             fi
         fi
@@ -1181,9 +1207,13 @@ cleanup_command() {
         fi
         if [[ ! -f "${priv}.pub" ]]; then
             if confirm "Delete orphaned private key '${priv}'?"; then
-                ssh-add -d "${priv}" >/dev/null 2>&1 || true
-                rm -f "${priv}"
-                _success "Removed ${priv}"
+                if [[ "${DRY_RUN}" == true ]]; then
+                    _item "Would remove ${priv}"
+                else
+                    ssh-add -d "${priv}" >/dev/null 2>&1 || true
+                    rm -f "${priv}"
+                    _success "Removed ${priv}"
+                fi
                 cleaned=$((cleaned + 1))
             fi
         fi
@@ -1197,21 +1227,41 @@ cleanup_command() {
                 continue
             fi
             if confirm "Remove stale agent entry '${key_path}'?"; then
-                ssh-add -d "${key_path}" >/dev/null 2>&1 || true
-                _success "Removed stale agent entry: ${key_path}"
+                if [[ "${DRY_RUN}" == true ]]; then
+                    _item "Would remove stale agent entry: ${key_path}"
+                else
+                    ssh-add -d "${key_path}" >/dev/null 2>&1 || true
+                    _success "Removed stale agent entry: ${key_path}"
+                fi
                 cleaned=$((cleaned + 1))
             fi
         fi
     done < <(ssh-add -l 2>/dev/null || true)
 
-    chmod 700 "${HOME}/.ssh"
+    if [[ -d "${HOME}/.ssh" ]]; then
+        dir_perms="$(get_perms "${HOME}/.ssh")"
+        if [[ "${dir_perms}" != "700" ]]; then
+            if [[ "${DRY_RUN}" == true ]]; then
+                _item "Would fix permissions on ${HOME}/.ssh"
+            else
+                chmod 700 "${HOME}/.ssh"
+                _success "Fixed permissions on ${HOME}/.ssh"
+            fi
+            cleaned=$((cleaned + 1))
+        fi
+    fi
+
     for key_path in "${HOME}"/.ssh/id_* "${HOME}"/.ssh/*.key; do
         [[ -f "${key_path}" && "${key_path}" != *.pub ]] || continue
         is_protected_key_path "${key_path}" && continue
         perms="$(get_perms "${key_path}")"
         if [[ "${perms}" != "600" ]]; then
-            chmod 600 "${key_path}"
-            _success "Fixed permissions on ${key_path}"
+            if [[ "${DRY_RUN}" == true ]]; then
+                _item "Would fix permissions on ${key_path}"
+            else
+                chmod 600 "${key_path}"
+                _success "Fixed permissions on ${key_path}"
+            fi
             cleaned=$((cleaned + 1))
         fi
     done
@@ -1220,8 +1270,12 @@ cleanup_command() {
         is_protected_key_path "${key_path%.pub}" && continue
         perms="$(get_perms "${key_path}")"
         if [[ "${perms}" != "644" && "${perms}" != "600" ]]; then
-            chmod 644 "${key_path}"
-            _success "Fixed permissions on ${key_path}"
+            if [[ "${DRY_RUN}" == true ]]; then
+                _item "Would fix permissions on ${key_path}"
+            else
+                chmod 644 "${key_path}"
+                _success "Fixed permissions on ${key_path}"
+            fi
             cleaned=$((cleaned + 1))
         fi
     done
@@ -1247,18 +1301,31 @@ cleanup_command() {
         rm -f "${known_hosts_filtered_tmp}"
 
         if ! cmp -s "${known_hosts_path}" "${known_hosts_tmp}"; then
-            mv "${known_hosts_tmp}" "${known_hosts_path}"
-            chmod 644 "${known_hosts_path}"
-            if [[ "${github_removed}" -gt 0 ]]; then
-                _success "Groomed ${known_hosts_path} (removed blank/duplicate entries, pruned ${github_removed} stale github.com entries)"
+            if [[ "${DRY_RUN}" == true ]]; then
+                rm -f "${known_hosts_tmp}"
+                if [[ "${github_removed}" -gt 0 ]]; then
+                    _item "Would groom ${known_hosts_path} (remove blank/duplicate entries, prune ${github_removed} stale github.com entries)"
+                else
+                    _item "Would groom ${known_hosts_path} (remove blank/duplicate entries)"
+                fi
             else
-                _success "Groomed ${known_hosts_path} (removed blank/duplicate entries)"
+                mv "${known_hosts_tmp}" "${known_hosts_path}"
+                chmod 644 "${known_hosts_path}"
+                if [[ "${github_removed}" -gt 0 ]]; then
+                    _success "Groomed ${known_hosts_path} (removed blank/duplicate entries, pruned ${github_removed} stale github.com entries)"
+                else
+                    _success "Groomed ${known_hosts_path} (removed blank/duplicate entries)"
+                fi
             fi
             cleaned=$((cleaned + 1))
         else
             rm -f "${known_hosts_tmp}"
             if [[ "${github_removed}" -gt 0 ]]; then
-                _success "Pruned ${github_removed} stale github.com entries from ${known_hosts_path}"
+                if [[ "${DRY_RUN}" == true ]]; then
+                    _item "Would prune ${github_removed} stale github.com entries from ${known_hosts_path}"
+                else
+                    _success "Pruned ${github_removed} stale github.com entries from ${known_hosts_path}"
+                fi
                 cleaned=$((cleaned + 1))
             fi
         fi
@@ -1266,9 +1333,17 @@ cleanup_command() {
 
     printf '\n'
     if [[ "${cleaned}" -eq 0 ]]; then
-        _success "Nothing to clean up."
+        if [[ "${DRY_RUN}" == true ]]; then
+            _success "Dry run found nothing to clean up."
+        else
+            _success "Nothing to clean up."
+        fi
     else
-        _success "Cleaned ${cleaned} item(s)."
+        if [[ "${DRY_RUN}" == true ]]; then
+            _success "Dry run: would clean ${cleaned} item(s)."
+        else
+            _success "Cleaned ${cleaned} item(s)."
+        fi
     fi
 }
 
@@ -1336,6 +1411,7 @@ parse_args() {
         arg="$1"
         case "${arg}" in
             -y|-yes|--yes) FORCE=true ;;
+            -n|--dry-run) DRY_RUN=true ;;
             -m)
                 shift
                 [[ $# -gt 0 ]] || die "Missing value for -m"
@@ -1369,18 +1445,22 @@ parse_args() {
     case "${COMMAND}" in
         gh)
             [[ -z "${KEY_NAME}" ]] || die "gh commands do not take a key name"
+            [[ "${DRY_RUN}" == false ]] || die "--dry-run is only used with cleanup"
             [[ "${USE_GH_FLAG}" == false ]] || die "-gh is not used with gh commands"
             ;;
         create|delete)
             validate_key_name "${KEY_NAME}"
+            [[ "${DRY_RUN}" == false ]] || die "--dry-run is only used with cleanup"
             ;;
         list)
             [[ -z "${KEY_NAME}" ]] || die "sshkey list does not take a key name"
             [[ "${FORCE}" == false ]] || die "-y is not used with list"
+            [[ "${DRY_RUN}" == false ]] || die "--dry-run is only used with cleanup"
             ;;
         doctor)
             [[ -z "${KEY_NAME}" ]] || die "sshkey doctor does not take a key name"
             [[ "${FORCE}" == false ]] || die "-y is not used with doctor"
+            [[ "${DRY_RUN}" == false ]] || die "--dry-run is only used with cleanup"
             [[ "${USE_GH_FLAG}" == false ]] || die "-gh is not used with doctor"
             [[ "${USE_OP_FLAG}" == false ]] || die "-1p is not used with doctor"
             ;;

@@ -497,3 +497,161 @@ MOCK
     assert_success
     assert_output "0"
 }
+
+@test "sshkey cleanup dry run previews changes without modifying files" {
+    mkdir -p "${TEST_TMPDIR}/home/.ssh"
+    printf 'PRIVATE KEY\n' > "${TEST_TMPDIR}/home/.ssh/id_test"
+    printf 'ssh-ed25519 KEEP keep@test\n' > "${TEST_TMPDIR}/home/.ssh/id_test.pub"
+    printf 'ssh-ed25519 ORPHAN orphan@test\n' > "${TEST_TMPDIR}/home/.ssh/id_orphan.pub"
+    cat > "${TEST_TMPDIR}/home/.ssh/known_hosts" <<'EOF'
+example.com ssh-ed25519 AAAATEST
+
+example.com ssh-ed25519 AAAATEST
+github.com ssh-ed25519 BADKEY
+EOF
+    chmod 755 "${TEST_TMPDIR}/home/.ssh"
+    chmod 644 "${TEST_TMPDIR}/home/.ssh/id_test"
+    chmod 600 "${TEST_TMPDIR}/home/.ssh/id_test.pub"
+    chmod 600 "${TEST_TMPDIR}/home/.ssh/known_hosts"
+
+    cat > "${BIN_SANDBOX}/ssh-add" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1:-}" in
+    -l)
+        exit 0
+        ;;
+    -d)
+        exit 0
+        ;;
+esac
+
+exit 0
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/ssh-add"
+
+    run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_sshkey" cleanup --dry-run
+    assert_success
+    assert_output --partial "Would remove ${TEST_TMPDIR}/home/.ssh/id_orphan.pub"
+    assert_output --partial "Would fix permissions on ${TEST_TMPDIR}/home/.ssh"
+    assert_output --partial "Would groom ${TEST_TMPDIR}/home/.ssh/known_hosts"
+    assert_output --partial "Dry run: would clean 4 item(s)."
+    [[ -e "${TEST_TMPDIR}/home/.ssh/id_orphan.pub" ]]
+    run bash -c '
+        stat_mode() {
+            stat -f "%Lp" "$1" 2>/dev/null || stat -c "%a" "$1" 2>/dev/null
+        }
+        [[ "$(stat_mode "'"${TEST_TMPDIR}/home/.ssh"'")" == "755" ]]
+        [[ "$(stat_mode "'"${TEST_TMPDIR}/home/.ssh/id_test"'")" == "644" ]]
+        [[ "$(stat_mode "'"${TEST_TMPDIR}/home/.ssh/id_test.pub"'")" == "600" ]]
+        [[ "$(stat_mode "'"${TEST_TMPDIR}/home/.ssh/known_hosts"'")" == "600" ]]
+    '
+    assert_success
+    run bash -c 'grep -c "^example.com ssh-ed25519 AAAATEST$" "'"${TEST_TMPDIR}/home/.ssh/known_hosts"'" || true'
+    assert_success
+    assert_output "2"
+    run bash -c 'grep -c "^github.com " "'"${TEST_TMPDIR}/home/.ssh/known_hosts"'" || true'
+    assert_success
+    assert_output "1"
+}
+
+@test "sshkey doctor tolerates multiline stat output and reports correct permissions" {
+    mkdir -p "${TEST_TMPDIR}/home/.ssh"
+    printf 'PRIVATE KEY\n' > "${TEST_TMPDIR}/home/.ssh/id_ed25519"
+    printf 'ssh-ed25519 KEEP keep@test\n' > "${TEST_TMPDIR}/home/.ssh/id_ed25519.pub"
+    printf 'PRIVATE KEY\n' > "${TEST_TMPDIR}/home/.ssh/id_rsa"
+    printf 'ssh-rsa KEEP keep@test\n' > "${TEST_TMPDIR}/home/.ssh/id_rsa.pub"
+    printf 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n' > "${TEST_TMPDIR}/home/.ssh/known_hosts"
+    chmod 700 "${TEST_TMPDIR}/home/.ssh"
+    chmod 600 "${TEST_TMPDIR}/home/.ssh/id_ed25519" "${TEST_TMPDIR}/home/.ssh/id_rsa"
+    chmod 644 "${TEST_TMPDIR}/home/.ssh/id_ed25519.pub" "${TEST_TMPDIR}/home/.ssh/id_rsa.pub" "${TEST_TMPDIR}/home/.ssh/known_hosts"
+
+    cat > "${BIN_SANDBOX}/ssh-add" <<'MOCK'
+#!/usr/bin/env bash
+case "${1:-}" in
+    -l)
+        exit 1
+        ;;
+    -L)
+        exit 0
+        ;;
+esac
+
+exit 0
+MOCK
+
+    cat > "${BIN_SANDBOX}/ssh" <<'MOCK'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+    cat > "${BIN_SANDBOX}/stat" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-c" ]]; then
+    target="${3:-}"
+    if [[ -d "${target}" ]]; then
+        printf '  File: "%s"\n700\n' "${target}"
+    elif [[ "${target}" == *.pub || "${target}" == *known_hosts ]]; then
+        printf '  File: "%s"\n644\n' "${target}"
+    else
+        printf '  File: "%s"\n600\n' "${target}"
+    fi
+    exit 0
+fi
+
+exit 1
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/ssh-add" "${BIN_SANDBOX}/ssh" "${BIN_SANDBOX}/stat"
+
+    run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_sshkey" doctor
+    assert_failure
+    assert_output --partial "~/.ssh permissions OK"
+    refute_output --partial "Bad private key permissions"
+    refute_output --partial "Bad public key permissions"
+}
+
+@test "sshkey doctor skips GitHub account failures when gh is not installed" {
+    mkdir -p "${TEST_TMPDIR}/home/.ssh"
+    printf 'PRIVATE KEY\n' > "${TEST_TMPDIR}/home/.ssh/id_ed25519"
+    printf 'ssh-ed25519 MATCHED keep@test\n' > "${TEST_TMPDIR}/home/.ssh/id_ed25519.pub"
+    printf 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n' > "${TEST_TMPDIR}/home/.ssh/known_hosts"
+    chmod 700 "${TEST_TMPDIR}/home/.ssh"
+    chmod 600 "${TEST_TMPDIR}/home/.ssh/id_ed25519"
+    chmod 644 "${TEST_TMPDIR}/home/.ssh/id_ed25519.pub" "${TEST_TMPDIR}/home/.ssh/known_hosts"
+
+    cat > "${BIN_SANDBOX}/ssh-add" <<'MOCK'
+#!/usr/bin/env bash
+case "${1:-}" in
+    -l)
+        exit 0
+        ;;
+    -L)
+        printf 'ssh-ed25519 MATCHED keep@test\n'
+        exit 0
+        ;;
+esac
+
+exit 0
+MOCK
+
+    cat > "${BIN_SANDBOX}/ssh" <<'MOCK'
+#!/usr/bin/env bash
+printf "Hi keep@test! You've successfully authenticated, but GitHub does not provide shell access.\n" >&2
+exit 1
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/ssh-add" "${BIN_SANDBOX}/ssh"
+
+    run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_sshkey" doctor
+    assert_success
+    assert_output --partial "GitHub CLI not installed — skipping GitHub account checks"
+    assert_output --partial "SSH auth to github.com works"
+    refute_output --partial "GitHub CLI is not authenticated"
+    refute_output --partial "GitHub does not have a matching key blob"
+}
