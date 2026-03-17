@@ -35,6 +35,7 @@ fi
 
 # Update Pi-hole
 pihole -up
+pihole -f
 
 # Update PADD
 ph-padd -u
