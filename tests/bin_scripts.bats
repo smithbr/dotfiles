@@ -123,6 +123,63 @@ MOCK
     [[ "${output}" != *"Missing dependency: unbound-checkconf"* ]]
 }
 
+@test "ph-test prefers Pi-hole include settings and falls back to unbound.conf" {
+    local primary_conf="${TEST_TMPDIR}/pi-hole.conf"
+    local main_conf="${TEST_TMPDIR}/unbound.conf"
+
+    cat > "${primary_conf}" <<'CONF'
+server:
+    interface: 127.0.0.1
+CONF
+
+    cat > "${main_conf}" <<'CONF'
+server:
+    interface: 0.0.0.0
+    hide-version: yes
+CONF
+
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+
+path_assignment="${1}"
+script_path="${2}"
+shift 2
+
+export PATH="${path_assignment#PATH=}"
+
+tmp_script="$(mktemp)"
+awk '
+    /^# Self-elevate if not root \(preserve PATH for ~\/\.local\/bin commands\)$/ { skip=1; next }
+    skip && /^DNS_SERVER=/ { skip=0 }
+    !skip {
+        if ($0 == "main \"$@\"") {
+            print "printf '\''UNBOUND_CONF=%s\\n'\'' \"${UNBOUND_CONF}\""
+            print "printf '\''interface=%s\\n'\'' \"$(get_unbound_setting interface)\""
+            print "printf '\''hide-version=%s\\n'\'' \"$(get_unbound_setting hide-version)\""
+            exit
+        }
+        print
+    }
+' "${script_path}" > "${tmp_script}"
+
+chmod +x "${tmp_script}"
+exec "${tmp_script}" "$@"
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/sudo"
+
+    run env \
+        PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        PH_TEST_UNBOUND_CONF="${primary_conf}" \
+        PH_TEST_UNBOUND_MAIN_CONF="${main_conf}" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-test"
+    assert_success
+    assert_output --partial "UNBOUND_CONF=${primary_conf}"
+    assert_output --partial "interface=127.0.0.1"
+    assert_output --partial "hide-version=yes"
+}
+
 @test "ts-test completes successfully in an isolated mocked environment" {
     cat > "${BIN_SANDBOX}/tailscale" <<'MOCK'
 #!/usr/bin/env bash

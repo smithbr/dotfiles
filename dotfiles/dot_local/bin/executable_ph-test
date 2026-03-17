@@ -28,8 +28,9 @@ DNS_SERVER="${1:-127.0.0.1}"
 GOOD_DOMAIN="google.com"
 DNSSEC_FAIL_DOMAIN="dnssec-failed.org"
 BLOCKED_DOMAIN="doubleclick.net"
-UNBOUND_CONF=$(unbound-checkconf -o config-file 2>/dev/null || echo "/etc/unbound/unbound.conf")
-UNBOUND_DIR=$(dirname "${UNBOUND_CONF}")
+UNBOUND_MAIN_CONF="${PH_TEST_UNBOUND_MAIN_CONF:-$(unbound-checkconf -o config-file 2>/dev/null || echo "/etc/unbound/unbound.conf")}"
+UNBOUND_DIR=$(dirname "${UNBOUND_MAIN_CONF}")
+UNBOUND_CONF="${PH_TEST_UNBOUND_CONF:-${UNBOUND_DIR}/unbound.conf.d/pi-hole.conf}"
 PIHOLE_SETUPVARS=""
 
 # ── Colours ─────────────────────────────────────────────────
@@ -54,6 +55,29 @@ info() { printf '  %b→%b  %s\n' "${CYAN}" "${RESET}" "$*"; }
 fix()  { printf '  %b💡 Fix:%b %s\n' "${YELLOW}" "${RESET}" "$*"; }
 header() {
     printf '\n%b▶ %s%b\n' "${BOLD}${YELLOW}" "$*" "${RESET}"
+}
+
+unbound_config_paths() {
+    if [[ "${UNBOUND_CONF}" == "${UNBOUND_MAIN_CONF}" ]]; then
+        printf '%s\n' "${UNBOUND_CONF}"
+        return
+    fi
+
+    printf '%s\n%s\n' "${UNBOUND_CONF}" "${UNBOUND_MAIN_CONF}"
+}
+
+get_unbound_setting() {
+    local key="${1}" path value
+    while IFS= read -r path; do
+        [[ -f "${path}" ]] || continue
+        value=$(grep -E "^[[:space:]]*${key}:" "${path}" 2>/dev/null | tail -1 | awk '{print $2}' || true)
+        if [[ -n "${value}" ]]; then
+            printf '%s\n' "${value}"
+            return 0
+        fi
+    done < <(unbound_config_paths)
+
+    return 1
 }
 
 check_deps() {
@@ -90,9 +114,9 @@ test_config() {
     else
         fail "unbound-checkconf reported issues:"
         printf '%s\n' "${checkconf_out}"
-        fix "Review the errors above in ${UNBOUND_CONF} (or included files)"
+        fix "Review the errors above in ${UNBOUND_CONF} or ${UNBOUND_MAIN_CONF}"
         fix "Check for typos, duplicate keys, or incorrect indentation"
-        fix "Validate with: sudo unbound-checkconf ${UNBOUND_CONF}"
+        fix "Validate with: sudo unbound-checkconf ${UNBOUND_MAIN_CONF}"
     fi
 }
 
@@ -119,7 +143,7 @@ test_listening() {
         done
     else
         fail "Nothing detected on port 53 — Unbound may not be bound correctly"
-        fix "Ensure ${UNBOUND_CONF} has: interface: 0.0.0.0 (or 127.0.0.1) and port: 53"
+        fix "Ensure ${UNBOUND_CONF} or ${UNBOUND_MAIN_CONF} has: interface: 0.0.0.0 (or 127.0.0.1) and port: 53"
         fix "Check if another DNS service is blocking port 53: sudo ss -tulnp | grep :53"
         fix "If systemd-resolved is conflicting: sudo systemctl disable --now systemd-resolved"
         fix "After config changes: sudo systemctl restart unbound"
@@ -163,7 +187,7 @@ test_caching() {
         pass "Cache is working (second query faster)"
     else
         info "Cache result inconclusive (timing may vary on fast networks)"
-        fix "Check cache settings: grep -E 'msg-cache-size|rrset-cache-size' ${UNBOUND_CONF}"
+        fix "Check cache settings: grep -E 'msg-cache-size|rrset-cache-size' ${UNBOUND_CONF} ${UNBOUND_MAIN_CONF}"
         fix "Verify cache content: sudo unbound-control dump_cache | head -20"
     fi
 }
@@ -179,7 +203,7 @@ test_dnssec() {
         pass "DNSSEC working — ${DNSSEC_FAIL_DOMAIN} correctly returned SERVFAIL"
     else
         fail "Expected SERVFAIL for ${DNSSEC_FAIL_DOMAIN}, got: ${status:-no response}"
-        fix "Ensure ${UNBOUND_CONF} has: module-config: \"validator iterator\""
+        fix "Ensure ${UNBOUND_CONF} or ${UNBOUND_MAIN_CONF} has: module-config: \"validator iterator\""
         fix "Set val-permissive-mode: no  (strict DNSSEC enforcement)"
         fix "Verify trust anchor exists: ls -la ${UNBOUND_DIR}/root.key"
         fix "Regenerate trust anchor: sudo unbound-anchor -a ${UNBOUND_DIR}/root.key"
@@ -201,7 +225,7 @@ test_dnssec() {
     else
         fail "AD flag not set for ${GOOD_DOMAIN}"
         fix "Verify trust anchor: sudo unbound-anchor -a ${UNBOUND_DIR}/root.key"
-        fix "Ensure ${UNBOUND_CONF} has: val-permissive-mode: no"
+        fix "Ensure ${UNBOUND_CONF} or ${UNBOUND_MAIN_CONF} has: val-permissive-mode: no"
         fix "Restart after changes: sudo systemctl restart unbound"
     fi
 }
@@ -301,37 +325,34 @@ test_setup_security() {
     check_service_user "Unbound" "unbound" "unbound"
     check_systemd_enabled "Unbound" "unbound"
     check_ownership "${UNBOUND_CONF}" "root:root" "${UNBOUND_CONF}"
+    check_ownership "${UNBOUND_MAIN_CONF}" "root:root" "${UNBOUND_MAIN_CONF}"
     check_ownership "${UNBOUND_DIR}" "root:root" "${UNBOUND_DIR}"
-
-    # Read config once for all checks below
-    local ub_conf_contents
-    ub_conf_contents=$(cat "${UNBOUND_CONF}" 2>/dev/null) || true
 
     # Unbound should listen only on loopback
     local ub_iface
-    ub_iface=$(printf '%s\n' "${ub_conf_contents}" | grep -E '^\s*interface:' | head -1 | awk '{print $2}' || true)
+    ub_iface=$(get_unbound_setting "interface" || true)
     if [[ "${ub_iface}" == "127.0.0.1" || "${ub_iface}" == "::1" ]]; then
         pass "Unbound listens on loopback only (${ub_iface})"
     elif [[ -n "${ub_iface}" ]]; then
         fail "Unbound interface is ${ub_iface} (expected 127.0.0.1)"
-        fix "Set interface: 127.0.0.1 in ${UNBOUND_CONF}"
+        fix "Set interface: 127.0.0.1 in ${UNBOUND_CONF} or ${UNBOUND_MAIN_CONF}"
     else
-        info "Could not determine Unbound interface from ${UNBOUND_CONF}"
+        info "Could not determine Unbound interface from ${UNBOUND_CONF} or ${UNBOUND_MAIN_CONF}"
     fi
 
     # Unbound hardening flags
     local key val actual
     for setting in "harden-glue: yes" "harden-dnssec-stripped: yes" "hide-identity: yes" "hide-version: yes"; do
         key="${setting%%:*}" val="${setting#*: }"
-        actual=$(printf '%s\n' "${ub_conf_contents}" | grep -E "^\s*${key}:" | tail -1 | awk '{print $2}' || true)
+        actual=$(get_unbound_setting "${key}" || true)
         if [[ "${actual}" == "${val}" ]]; then
             pass "Unbound ${key}: ${actual}"
         elif [[ -z "${actual}" ]]; then
-            info "Unbound ${key} not set in ${UNBOUND_CONF}"
-            fix "Add to server: section in ${UNBOUND_CONF}: ${setting}"
+            info "Unbound ${key} not set in ${UNBOUND_CONF} or ${UNBOUND_MAIN_CONF}"
+            fix "Add to server: section in ${UNBOUND_CONF} or ${UNBOUND_MAIN_CONF}: ${setting}"
         else
             fail "Unbound ${key}: ${actual} (expected ${val})"
-            fix "Set ${setting} in ${UNBOUND_CONF}"
+            fix "Set ${setting} in ${UNBOUND_CONF} or ${UNBOUND_MAIN_CONF}"
         fi
     done
 
@@ -403,7 +424,7 @@ test_blocklist() {
             [[ -n "${PIHOLE_SETUPVARS}" ]] && fix "Verify Pi-hole upstream is Unbound: grep -i 'pihole_dns' ${PIHOLE_SETUPVARS}"
         else
             fix "Verify RPZ zone is loaded: sudo unbound-control list_local_zones | grep rpz"
-            fix "Check blocklist config: grep -E 'rpz|local-zone' ${UNBOUND_CONF}"
+            fix "Check blocklist config: grep -E 'rpz|local-zone' ${UNBOUND_CONF} ${UNBOUND_MAIN_CONF}"
             fix "Reload blocklist: sudo unbound-control reload"
         fi
     fi
@@ -423,7 +444,7 @@ test_stats() {
         done
     else
         fail "Could not retrieve stats (is unbound-control configured?)"
-        fix "Enable remote control in ${UNBOUND_CONF}:"
+        fix "Enable remote control in ${UNBOUND_CONF} or ${UNBOUND_MAIN_CONF}:"
         fix "  remote-control:"
         fix "    control-enable: yes"
         fix "    control-interface: 127.0.0.1"
