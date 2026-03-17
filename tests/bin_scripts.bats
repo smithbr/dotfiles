@@ -655,3 +655,59 @@ MOCK
     refute_output --partial "GitHub CLI is not authenticated"
     refute_output --partial "GitHub does not have a matching key blob"
 }
+
+@test "sshkey doctor falls back to find when stat does not report octal perms" {
+    mkdir -p "${TEST_TMPDIR}/home/.ssh"
+    printf 'PRIVATE KEY\n' > "${TEST_TMPDIR}/home/.ssh/id_ed25519"
+    printf 'ssh-ed25519 MATCHED keep@test\n' > "${TEST_TMPDIR}/home/.ssh/id_ed25519.pub"
+    printf 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n' > "${TEST_TMPDIR}/home/.ssh/known_hosts"
+    chmod 700 "${TEST_TMPDIR}/home/.ssh"
+    chmod 600 "${TEST_TMPDIR}/home/.ssh/id_ed25519"
+    chmod 644 "${TEST_TMPDIR}/home/.ssh/id_ed25519.pub" "${TEST_TMPDIR}/home/.ssh/known_hosts"
+
+    cat > "${BIN_SANDBOX}/ssh-add" <<'MOCK'
+#!/usr/bin/env bash
+case "${1:-}" in
+    -l)
+        exit 1
+        ;;
+    -L)
+        exit 0
+        ;;
+esac
+
+exit 0
+MOCK
+
+    cat > "${BIN_SANDBOX}/ssh" <<'MOCK'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+    cat > "${BIN_SANDBOX}/stat" <<'MOCK'
+#!/usr/bin/env bash
+printf 'unsupported\n'
+exit 1
+MOCK
+
+    cat > "${BIN_SANDBOX}/find" <<'MOCK'
+#!/usr/bin/env bash
+target="${1:-}"
+if [[ -d "${target}" ]]; then
+    printf '700\n'
+elif [[ "${target}" == *.pub || "${target}" == *known_hosts ]]; then
+    printf '644\n'
+else
+    printf '600\n'
+fi
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/ssh-add" "${BIN_SANDBOX}/ssh" "${BIN_SANDBOX}/stat" "${BIN_SANDBOX}/find"
+
+    run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_sshkey" doctor
+    assert_failure
+    assert_output --partial "~/.ssh permissions OK"
+    refute_output --partial "Bad private key permissions"
+    refute_output --partial "Bad public key permissions"
+}

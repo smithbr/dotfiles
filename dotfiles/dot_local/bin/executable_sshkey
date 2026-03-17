@@ -184,23 +184,41 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+normalize_perms() {
+    local output="$1"
+
+    printf '%s\n' "${output}" | awk '/^[0-7]{3,4}$/ { perms=$0 } END { if (perms != "") print perms }'
+}
+
+probe_perms() {
+    local output=""
+
+    output="$("$@" 2>/dev/null || true)"
+    normalize_perms "${output}"
+}
+
 get_perms() {
     local path="$1"
     local perms=""
 
     case "${OSTYPE}" in
         darwin*)
-            perms="$(stat -f '%Lp' "${path}" 2>/dev/null || true)"
+            perms="$(probe_perms stat -f '%Lp' "${path}")"
             ;;
         linux*)
-            perms="$(stat -c '%a' "${path}" 2>/dev/null || true)"
+            perms="$(probe_perms stat -c '%a' "${path}")"
+            [[ -n "${perms}" ]] || perms="$(probe_perms stat --printf '%a\n' "${path}")"
+            [[ -n "${perms}" ]] || perms="$(probe_perms find "${path}" -prune -printf '%m\n')"
             ;;
         *)
-            perms="$(stat -c '%a' "${path}" 2>/dev/null || stat -f '%Lp' "${path}" 2>/dev/null || true)"
+            perms="$(probe_perms stat -c '%a' "${path}")"
+            [[ -n "${perms}" ]] || perms="$(probe_perms stat --printf '%a\n' "${path}")"
+            [[ -n "${perms}" ]] || perms="$(probe_perms stat -f '%Lp' "${path}")"
+            [[ -n "${perms}" ]] || perms="$(probe_perms find "${path}" -prune -printf '%m\n')"
             ;;
     esac
 
-    printf '%s\n' "${perms}" | awk '/^[0-7]{3,4}$/ { perms=$0 } END { if (perms != "") print perms }'
+    printf '%s\n' "${perms}"
 }
 
 is_protected_key_name() {
