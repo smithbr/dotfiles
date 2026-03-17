@@ -83,20 +83,22 @@ teardown() {
 
 @test "linux setup.sh announces each bootstrap phase" {
     run bash -c '
-        setup_script="'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/setup.sh"
-        for phase in \
-            "Step 1/4: Checking base Linux packages" \
-            "Step 2/4: Running Docker bootstrap" \
-            "Step 3/4: Running Tailscale bootstrap" \
-            "Step 4/4: Running OpenCode bootstrap" \
-            "Linux bootstrap finished"; do
+        setup_script="$1"
+        shift
+        for phase in "$@"; do
             grep -qF "${phase}" "${setup_script}" || {
                 echo "MISSING: ${phase}"
                 exit 1
             }
         done
         echo "ALL_OK"
-    '
+    ' bash \
+        "${PROJECT_ROOT}/scripts/bootstrap/linux/setup.sh" \
+        "Step 1/4: Checking base Linux packages" \
+        "Step 2/4: Running Docker bootstrap" \
+        "Step 3/4: Running Tailscale bootstrap" \
+        "Step 4/4: Running OpenCode bootstrap" \
+        "Linux bootstrap finished"
     assert_success
     assert_output "ALL_OK"
 }
