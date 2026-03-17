@@ -47,7 +47,7 @@ This is process-level isolation, not a real container or VM.
 [`bin_scripts.bats`](/Users/bran/.dotfiles/tests/bin_scripts.bats)
 
 - Covers scripts in [`dotfiles/dot_local/bin`](/Users/bran/.dotfiles/dotfiles/dot_local/bin)
-- Verifies help output for `ph-padd` and `ph-padd-unbound`
+- Verifies help output and startup probing for `ph-padd`
 - Verifies non-root self-elevation behavior for `ph-update` and `ph-test`
 - Runs `ts-test` in a fully mocked sandbox
 - Runs `sshkey` help, local key creation, and cleanup flows inside an isolated home directory
