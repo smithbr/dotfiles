@@ -467,6 +467,84 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
+# macos/setup.sh — mocked execution flow
+# ---------------------------------------------------------------------------
+
+@test "macOS setup.sh installs CLT and Rosetta when needed" {
+    run bash -c '
+        set -euo pipefail
+
+        export TEST_ROOT="'"${TEST_TMPDIR}"'/macos-bootstrap"
+        export TEST_BIN="${TEST_ROOT}/bin"
+        export TEST_LOG="${TEST_ROOT}/bootstrap.log"
+        export PATH="${TEST_BIN}:/usr/bin:/bin"
+        export OSTYPE="darwin24"
+
+        mkdir -p "${TEST_BIN}"
+        : > "${TEST_LOG}"
+
+        cat > "${TEST_BIN}/xcode-select" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1:-}" in
+    -p)
+        exit 1
+        ;;
+    --install)
+        printf "xcode-select %s\n" "$*" >> "${TEST_LOG}"
+        ;;
+esac
+MOCK
+
+        cat > "${TEST_BIN}/xcodebuild" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "-license" && "${2:-}" == "check" ]]; then
+    exit 0
+fi
+
+printf "xcodebuild %s\n" "$*" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BIN}/uname" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+printf "arm64\n"
+MOCK
+
+        cat > "${TEST_BIN}/pgrep" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+exit 1
+MOCK
+
+        cat > "${TEST_BIN}/softwareupdate" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+printf "softwareupdate %s\n" "$*" >> "${TEST_LOG}"
+MOCK
+
+        chmod +x \
+            "${TEST_BIN}/xcode-select" \
+            "${TEST_BIN}/xcodebuild" \
+            "${TEST_BIN}/uname" \
+            "${TEST_BIN}/pgrep" \
+            "${TEST_BIN}/softwareupdate"
+
+        cd "'"${PROJECT_ROOT}"'"
+        printf "\n" | ./scripts/bootstrap/macos/setup.sh
+
+        grep -qx "xcode-select --install" "${TEST_LOG}" || { echo "missing xcode-select install"; exit 1; }
+        grep -qx "softwareupdate --install-rosetta --agree-to-license" "${TEST_LOG}" || {
+            echo "missing rosetta install"
+            exit 1
+        }
+    '
+    assert_success
+    assert_output --partial "Installing Xcode Command Line Tools"
+    assert_output --partial "Installing Rosetta 2..."
+}
+
+# ---------------------------------------------------------------------------
 # All shell scripts have correct shebang and strict mode
 # ---------------------------------------------------------------------------
 

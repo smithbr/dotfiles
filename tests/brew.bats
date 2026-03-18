@@ -649,3 +649,72 @@ MOCK
     assert_success
     assert_output --partial "Installing core Homebrew packages..."
 }
+
+@test "brew.sh links the 1Password SSH agent socket on macOS when op is available" {
+    run bash -c '
+        set -euo pipefail
+
+        export HOME="'"${TEST_TMPDIR}"'/sandbox-home"
+        export TEST_ROOT="'"${TEST_TMPDIR}"'/brew-macos"
+        export TEST_BIN="${TEST_ROOT}/bin"
+        export TEST_LOG="${TEST_TMPDIR}/brew-macos.log"
+        export PATH="${TEST_BIN}:/usr/bin:/bin"
+        export OSTYPE="darwin24"
+
+        mkdir -p "${HOME}" "${TEST_BIN}"
+        : > "${TEST_LOG}"
+
+        cat > "${TEST_BIN}/brew" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf "brew %s\n" "$*" >> "${TEST_LOG}"
+
+case "${1:-}" in
+    --prefix)
+        printf "%s\n" "${TEST_ROOT}"
+        ;;
+    list)
+        exit 0
+        ;;
+    tap)
+        exit 0
+        ;;
+    info)
+        printf "{}\n"
+        ;;
+    bundle)
+        exit 0
+        ;;
+    cleanup)
+        exit 0
+        ;;
+    --cache)
+        printf "%s\n" "${TEST_ROOT}/cache"
+        ;;
+esac
+MOCK
+
+        cat > "${TEST_BIN}/op" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+        chmod +x "${TEST_BIN}/brew" "${TEST_BIN}/op"
+
+        cd "'"${PROJECT_ROOT}"'"
+        ./homebrew/brew.sh
+
+        link_path="${HOME}/.1password/agent.sock"
+        expected_target="${HOME}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+
+        [[ -L "${link_path}" ]] || { echo "missing agent symlink"; exit 1; }
+        [[ "$(readlink "${link_path}")" == "${expected_target}" ]] || {
+            echo "unexpected symlink target"
+            exit 1
+        }
+    '
+    assert_success
+    assert_output --partial "Linked 1Password SSH agent socket"
+    assert_output --partial "Skipping optional Homebrew package selection because no interactive terminal was detected"
+}
