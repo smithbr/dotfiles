@@ -1,5 +1,8 @@
+getantidote/use-omz
 mattmc3/ez-compinit
-zsh-users/zsh-completions kind:fpath path:src
-zdharma-continuum/fast-syntax-highlighting
+ohmyzsh/ohmyzsh path:lib
+ohmyzsh/ohmyzsh path:plugins/command-not-found
+zsh-users/zsh-completions
 zsh-users/zsh-autosuggestions
+zsh-users/zsh-syntax-highlighting
 mass8326/zsh-chezmoi
