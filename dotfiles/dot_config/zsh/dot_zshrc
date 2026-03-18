@@ -1,4 +1,4 @@
-zmodload zsh/zprof
+# zmodload zsh/zprof
 
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${HOME}/.cache}"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
@@ -83,4 +83,4 @@ fpath+=~/.zfunc; autoload -Uz compinit; compinit -d "${XDG_CACHE_HOME}/zsh/zcomp
 
 zstyle ':completion:*' menu select
 
-zprof
+# zprof
