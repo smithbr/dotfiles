@@ -20,67 +20,50 @@ export STARSHIP_CONFIG="${XDG_CONFIG_HOME}/starship/starship.toml"
 export STARSHIP_CACHE="${XDG_CACHE_HOME}/starship/cache"
 export ZDOTDIR="${XDG_CONFIG_HOME}/zsh"
 
-if [[ -S "${HOME}/.1password/agent.sock" ]]; then
-    export SSHKEY_IDENTITY_AGENT="${HOME}/.1password/agent.sock"
-    export SSH_AUTH_SOCK="${SSHKEY_IDENTITY_AGENT}"
-fi
-
-# zsh History configuration
+# History
 export HISTFILE="${XDG_STATE_HOME}/zsh/history"
 export HISTSIZE=20000
 export SAVEHIST=20000
-setopt APPEND_HISTORY           # Append to the history file, don't overwrite
-setopt HIST_EXPIRE_DUPS_FIRST   # Expire duplicate entries first when trimming history
-setopt HIST_FIND_NO_DUPS        # Don't display duplicates when searching history
-setopt HIST_IGNORE_ALL_DUPS     # Remove all previous duplicates
-setopt HIST_IGNORE_DUPS         # Ignore duplicate entries
-setopt HIST_IGNORE_SPACE        # Do not record event starting with a space
-setopt HIST_REDUCE_BLANKS       # Remove superfluous blanks from history entries
-setopt HIST_SAVE_NO_DUPS        # Don't save duplicate entries in the history file
-setopt HIST_VERIFY              # Show command with history expansion before executing
-setopt SHARE_HISTORY            # Share history across all sessions
+setopt APPEND_HISTORY HIST_EXPIRE_DUPS_FIRST HIST_FIND_NO_DUPS HIST_IGNORE_ALL_DUPS
+setopt HIST_IGNORE_DUPS HIST_IGNORE_SPACE HIST_REDUCE_BLANKS HIST_SAVE_NO_DUPS
+setopt HIST_VERIFY SHARE_HISTORY
 
-source "${XDG_CONFIG_HOME}/shell/aliases"
-source "${XDG_CONFIG_HOME}/shell/functions"
+[[ -f "${XDG_CONFIG_HOME}/shell/aliases" ]] && source "${XDG_CONFIG_HOME}/shell/aliases"
+[[ -f "${XDG_CONFIG_HOME}/shell/functions" ]] && source "${XDG_CONFIG_HOME}/shell/functions"
 
-# Bootstrap Homebrew into PATH if not already available
+# 1Password
+op_sock="${HOME}/.1password/agent.sock"
+op_target="${HOME}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+[[ "${OSTYPE}" == darwin* ]] && [[ ! -S "${op_sock}" ]] && [[ -S "${op_target}" ]] && mkdir -p "${HOME}/.1password" && ln -sf "${op_target}" "${op_sock}"
+[[ -S "${op_sock}" ]] && export SSHKEY_IDENTITY_AGENT="${op_sock}" SSH_AUTH_SOCK="${op_sock}"
+
+# Homebrew
 if ! command -v brew >/dev/null 2>&1; then
-    if [[ -x /opt/homebrew/bin/brew ]]; then
-        eval "$(/opt/homebrew/bin/brew shellenv)"
-    elif [[ -x /usr/local/bin/brew ]]; then
-        eval "$(/usr/local/bin/brew shellenv)"
-    elif [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
-        eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
-    fi
+  for d in /opt/homebrew /usr/local /home/linuxbrew/.linuxbrew; do
+    [[ -x "${d}/bin/brew" ]] && eval "$("${d}/bin/brew" shellenv)" && break
+  done
 fi
 
 # Local overrides
-if [[ -f "${XDG_CONFIG_HOME}/zsh/.zshrc.local" ]]; then
-    source "${XDG_CONFIG_HOME}/zsh/.zshrc.local"
+if [[ -f "${ZDOTDIR}/.zshrc.local" ]]; then
+  source "${ZDOTDIR}/.zshrc.local"
 elif [[ -f "${HOME}/.zshrc.local" ]]; then
-    source "${HOME}/.zshrc.local"
+  source "${HOME}/.zshrc.local"
 fi
 
-if command -v brew >/dev/null 2>&1; then
-    antidote_zsh="$(brew --prefix)/opt/antidote/share/antidote/antidote.zsh"
-    if [[ -f "${antidote_zsh}" ]]; then
-        source "${antidote_zsh}"
-        antidote load "${XDG_CONFIG_HOME}/zsh/.zsh_plugins.txt"
-    else
-        printf '%s\n' "antidote not found at ${antidote_zsh}" >&2
-    fi
-elif command -v antidote >/dev/null 2>&1; then
-    antidote load "${XDG_CONFIG_HOME}/zsh/.zsh_plugins.txt"
-else
-    printf '%s\n' "brew is not available; cannot load antidote" >&2
-fi
+# Antidote
+antidote_zsh=""
+command -v brew >/dev/null 2>&1 && antidote_zsh="$(brew --prefix)/opt/antidote/share/antidote/antidote.zsh"
+[[ -f "${antidote_zsh}" ]] && source "${antidote_zsh}"
+command -v antidote >/dev/null 2>&1 && antidote load "${ZDOTDIR}/.zsh_plugins.txt"
 
-if command -v starship >/dev/null 2>&1; then
-    eval "$(starship init zsh)"
-fi
+# Starship
+command -v starship >/dev/null 2>&1 && eval "$(starship init zsh)"
 
-fpath+=~/.zfunc; autoload -Uz compinit; compinit -d "${XDG_CACHE_HOME}/zsh/zcompdump-${ZSH_VERSION}"
-
+# Completion
+fpath+=("${HOME}/.zfunc")
+autoload -Uz compinit
+compinit -d "${XDG_CACHE_HOME}/zsh/zcompdump-${ZSH_VERSION}" -u
 zstyle ':completion:*' menu select
 
 # zprof
