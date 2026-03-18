@@ -12,6 +12,7 @@ alias cz="chezmoi"
 alias cza="chezmoi apply"
 alias czs="chezmoi status"
 alias czui="chezit"
+alias ddf="cd ~/.dotfiles"
 alias ff="fastfetch -c all"
 alias fish="asciiquarium"
 alias rl="exec ${SHELL} -l"
@@ -50,10 +51,6 @@ esac
 # remove junk files
 alias cleanupds="find . -type f -name '*.DS_Store' -ls -delete"
 alias emptyfolders="du -a --max-depth=1 | sort -n"
-
-# encode/decode strings
-alias urldecode='python3 -c "import sys, urllib.parse; print(urllib.parse.unquote_plus(sys.argv[1]))"'
-alias urlencode='python3 -c "import sys, urllib.parse; print(urllib.parse.quote_plus(sys.argv[1]))"'
 
 # domain lookup
 alias tld="domain-check --preset startup --pretty"
