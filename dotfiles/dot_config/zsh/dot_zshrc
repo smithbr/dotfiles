@@ -28,6 +28,8 @@ setopt APPEND_HISTORY HIST_EXPIRE_DUPS_FIRST HIST_FIND_NO_DUPS HIST_IGNORE_ALL_D
 setopt HIST_IGNORE_DUPS HIST_IGNORE_SPACE HIST_REDUCE_BLANKS HIST_SAVE_NO_DUPS
 setopt HIST_VERIFY SHARE_HISTORY
 
+[[ -d "${HOME}/.zfunc" ]] && fpath=("${HOME}/.zfunc" "${fpath[@]}")
+
 [[ -f "${XDG_CONFIG_HOME}/shell/aliases" ]] && source "${XDG_CONFIG_HOME}/shell/aliases"
 [[ -f "${XDG_CONFIG_HOME}/shell/functions" ]] && source "${XDG_CONFIG_HOME}/shell/functions"
 
@@ -52,18 +54,37 @@ elif [[ -f "${HOME}/.zshrc.local" ]]; then
 fi
 
 # Antidote
+zsh_plugins_file="${ZDOTDIR}/.zsh_plugins.txt"
+zsh_plugins_static="${XDG_CACHE_HOME}/zsh/.zsh_plugins.zsh"
 antidote_zsh=""
-command -v brew >/dev/null 2>&1 && antidote_zsh="$(brew --prefix)/opt/antidote/share/antidote/antidote.zsh"
-[[ -f "${antidote_zsh}" ]] && source "${antidote_zsh}"
-command -v antidote >/dev/null 2>&1 && antidote load "${ZDOTDIR}/.zsh_plugins.txt"
+for candidate in \
+  /opt/homebrew/opt/antidote/share/antidote/antidote.zsh \
+  /usr/local/opt/antidote/share/antidote/antidote.zsh \
+  /home/linuxbrew/.linuxbrew/opt/antidote/share/antidote/antidote.zsh; do
+  if [[ -f "${candidate}" ]]; then
+    antidote_zsh="${candidate}"
+    break
+  fi
+done
+
+if [[ -r "${zsh_plugins_static}" ]] && [[ "${zsh_plugins_static}" -nt "${zsh_plugins_file}" ]]; then
+  source "${zsh_plugins_static}"
+elif [[ -f "${zsh_plugins_file}" ]] && [[ -f "${antidote_zsh}" ]]; then
+  source "${antidote_zsh}"
+  mkdir -p "${zsh_plugins_static:h}"
+  if antidote bundle <"${zsh_plugins_file}" >|"${zsh_plugins_static}.tmp"; then
+    mv "${zsh_plugins_static}.tmp" "${zsh_plugins_static}"
+    source "${zsh_plugins_static}"
+  else
+    rm -f "${zsh_plugins_static}.tmp"
+    antidote load "${zsh_plugins_file}"
+  fi
+fi
 
 # Starship
 command -v starship >/dev/null 2>&1 && eval "$(starship init zsh)"
 
 # Completion
-fpath+=("${HOME}/.zfunc")
-autoload -Uz compinit
-compinit -d "${XDG_CACHE_HOME}/zsh/zcompdump-${ZSH_VERSION}" -u
 zstyle ':completion:*' menu select
 
 # zprof

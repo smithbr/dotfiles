@@ -78,6 +78,14 @@ load test_helper
             echo "missing ZDOTDIR for .zsh_plugins.txt"
             exit 1
         }
+        grep -qF "antidote bundle <\"\${zsh_plugins_file}\"" "${file}" || {
+            echo "missing antidote bundle cache generation"
+            exit 1
+        }
+        grep -qF "\${XDG_CACHE_HOME}/zsh/.zsh_plugins.zsh" "${file}" || {
+            echo "missing cached bundle path"
+            exit 1
+        }
     '
 
     assert_success
