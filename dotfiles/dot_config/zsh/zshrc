@@ -1,19 +1,27 @@
+export GNUPGHOME="${XDG_DATA_HOME}/gnupg"
+export DOCKER_CONFIG="${XDG_CONFIG_HOME}/docker"
+export MACHINE_STORAGE_PATH="${XDG_DATA_HOME}/docker-machine"
+export HISTFILE="${XDG_STATE_HOME}/zsh/history"
+export NPM_CONFIG_CACHE="${XDG_CACHE_HOME}/npm"
+export NPM_CONFIG_INIT_MODULE="${XDG_CONFIG_HOME}/npm/config/npm-init.js"
+export NPM_CONFIG_TMP="${XDG_RUNTIME_DIR}/npm"
+export PATH="${HOME}/.local/bin:${PATH}"
+export ZDOTDIR="${XDG_CONFIG_HOME}/zsh"
+export RUSTUP_HOME="${XDG_DATA_HOME}/rustup"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${HOME}/.cache}"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
 export XDG_DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
-export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${HOME}/.cache}"
-export XDG_STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-${HOME}/.local/run}"
-export DOCKER_CONFIG="${XDG_CONFIG_HOME}/docker"
-export NPM_CONFIG_INIT_MODULE="${XDG_CONFIG_HOME}/npm/config/npm-init.js"
-export NPM_CONFIG_CACHE="${XDG_CACHE_HOME}/npm"
-export NPM_CONFIG_TMP="${XDG_RUNTIME_DIR}/npm"
-export RUSTUP_HOME="${XDG_DATA_HOME}/rustup"
-export HISTFILE="${XDG_STATE_HOME}/zsh/history"
-export PATH="${HOME}/.local/bin:${PATH}"
+export XDG_STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
+
 if [[ -S "${HOME}/.1password/agent.sock" ]]; then
     export SSHKEY_IDENTITY_AGENT="${HOME}/.1password/agent.sock"
     export SSH_AUTH_SOCK="${SSHKEY_IDENTITY_AGENT}"
 fi
+
+export NVM_DIR="${XDG_CONFIG_HOME}/nvm"
+[ -s "/usr/local/opt/nvm/nvm.sh" ] && \. "/usr/local/opt/nvm/nvm.sh"  # This loads nvm
+[ -s "/usr/local/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/usr/local/opt/nvm/etc/bash_completion.d/nvm"  # This loads nvm bash_completion
 
 source "${XDG_CONFIG_HOME}/shell/aliases"
 source "${XDG_CONFIG_HOME}/shell/functions"
