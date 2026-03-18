@@ -361,7 +361,7 @@ if [[ "${1:-}" == "--source" ]]; then
     shift 2
     case "${1:-}" in
         status)
-            printf "M %s/.zshrc\n" "${HOME}"
+            printf "M %s/zshrc\n" "${HOME}"
             exit 0
             ;;
         apply)
