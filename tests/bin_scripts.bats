@@ -338,7 +338,15 @@ MOCK
     assert_output --partial "hide-version=yes"
 }
 
-@test "ts-test completes successfully in an isolated mocked environment" {
+@test "ts-test displays help" {
+    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ts-test" --help
+    assert_success
+    assert_output --partial "Usage:"
+    assert_output --partial "ts-test run"
+    assert_output --partial "ts-test exit-node"
+}
+
+@test "ts-test runs the full suite by default in an isolated mocked environment" {
     cat > "${BIN_SANDBOX}/tailscale" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -382,8 +390,10 @@ MOCK
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
         bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ts-test"
     assert_success
-    assert_output --partial "Tailscale Test Suite"
-    assert_output --partial "All tests passed!"
+    assert_output --partial "Platform: Linux"
+    assert_output --partial "Backend: Running"
+    assert_output --partial "Summary"
+    assert_output --partial "All checks passed."
 }
 
 @test "sshkey displays help" {

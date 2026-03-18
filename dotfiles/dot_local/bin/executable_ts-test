@@ -1,48 +1,24 @@
 #!/usr/bin/env bash
-# ============================================================
-#  ts-test — Quick diagnostics for Tailscale (macOS + Linux)
-# ============================================================
 
 set -euo pipefail
 
-# ── OS detection ────────────────────────────────────────────
 IS_LINUX=false
 IS_MACOS=false
 case "${OSTYPE}" in
-    linux*)  IS_LINUX=true ;;
+    linux*) IS_LINUX=true ;;
     darwin*) IS_MACOS=true ;;
 esac
 
-# ── Colours ─────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
+COMMAND=""
+HAS_GUM=false
+command -v gum >/dev/null 2>&1 && [[ -t 1 ]] && HAS_GUM=true
 
-# ── Result tracking ────────────────────────────────────────
 declare -a SUMMARY_RESULTS=()
-PASS_COUNT=0; WARN_COUNT=0; FAIL_COUNT=0
+declare -a NEXT_STEPS=()
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
 
-pass() {
-    printf '  %b✔%b  %s\n' "${GREEN}" "${RESET}" "$*"
-    SUMMARY_RESULTS+=("${GREEN}✔ PASS${RESET}  $*")
-    PASS_COUNT=$((PASS_COUNT + 1))
-}
-fail() {
-    printf '  %b✗%b  %s\n' "${RED}" "${RESET}" "$*"
-    SUMMARY_RESULTS+=("${RED}✗ FAIL${RESET}  $*")
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-}
-warn() {
-    printf '  %b!%b  %s\n' "${YELLOW}" "${RESET}" "$*"
-    SUMMARY_RESULTS+=("${YELLOW}! WARN${RESET}  $*")
-    WARN_COUNT=$((WARN_COUNT + 1))
-}
-info() { printf '  %b→%b  %s\n' "${CYAN}" "${RESET}" "$*"; }
-fix()  { printf '  %b💡 Fix:%b %s\n' "${YELLOW}" "${RESET}" "$*"; }
-header() {
-    printf '\n%b▶ %s%b\n' "${BOLD}${YELLOW}" "$*" "${RESET}"
-}
-
-# ── Cached Tailscale state (populated once in main) ───────
 TS_STATUS_JSON=""
 TS_STATUS_TEXT=""
 TS_PREFS=""
@@ -50,297 +26,766 @@ TS_SELF_IP=""
 TS_SELF_HOSTNAME=""
 TS_ACCEPT_DNS=""
 
-# ── Dependencies ───────────────────────────────────────────
-check_deps() {
-    local missing=0
-    for cmd in tailscale dig; do
-        if ! command -v "${cmd}" &>/dev/null; then
-            printf '%bMissing dependency: %s%b\n' "${RED}" "${cmd}" "${RESET}"
-            case "${cmd}" in
-                tailscale)
-                    if [[ "${IS_MACOS}" == "true" ]]; then
-                        fix "brew install tailscale  # or install from Mac App Store"
-                    else
-                        fix "curl -fsSL https://tailscale.com/install.sh | sh"
-                    fi ;;
-                dig)
-                    if [[ "${IS_MACOS}" == "true" ]]; then
-                        fix "brew install bind  # provides dig"
-                    else
-                        fix "sudo apt install dnsutils   # Debian/Ubuntu"
-                        fix "sudo dnf install bind-utils  # Fedora/RHEL"
-                    fi ;;
-            esac
-            missing=1
-        fi
+_header() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --bold --foreground 212 "$1"
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
+_success() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum log --level info "$1"
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
+_warn() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum log --level warn "$1" >&2
+    else
+        printf '%s\n' "$1" >&2
+    fi
+}
+
+_check() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 76 "  $(printf '\xe2\x9c\x93') $1"
+    else
+        printf '  [ok] %s\n' "$1"
+    fi
+}
+
+_cross() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 196 "  $(printf '\xe2\x9c\x97') $1"
+    else
+        printf '  [fail] %s\n' "$1"
+    fi
+}
+
+_item() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 244 "  $1"
+    else
+        printf '  - %s\n' "$1"
+    fi
+}
+
+_box() {
+    local content="$1"
+
+    if [[ "${HAS_GUM}" == true ]]; then
+        printf '%s' "${content}" | gum style --border rounded --border-foreground 240 --margin "0 0" --padding "0 1"
+    else
+        printf '%s\n' "${content}" | sed 's/^/  /'
+    fi
+}
+
+die() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum log --level error "$1" >&2
+    else
+        printf '%s\n' "$1" >&2
+    fi
+    exit 1
+}
+
+usage() {
+    local help_text
+
+    help_text="$(cat <<'EOF'
+# ts-test
+
+Run focused Tailscale diagnostics for the current machine.
+
+## Commands
+
+| Command     | Description                                      |
+|-------------|--------------------------------------------------|
+| `run`       | Run the full Tailscale check suite               |
+| `service`   | Check `tailscaled` and backend state             |
+| `network`   | Check local Tailscale IP and MagicDNS state      |
+| `dns`       | Check MagicDNS resolution through `100.100.100.100` |
+| `exit-node` | Check exit-node advertising or active usage      |
+| `peers`     | Check peer reachability with `tailscale ping`    |
+
+Running `ts-test` with no command runs the full suite.
+EOF
+)"
+
+    if [[ "${HAS_GUM}" == true ]]; then
+        printf '%s\n' "${help_text}" | gum format
+    else
+        cat <<'EOF'
+Usage:
+  ts-test
+  ts-test run
+  ts-test service
+  ts-test network
+  ts-test dns
+  ts-test exit-node
+  ts-test peers
+
+Running ts-test with no command runs the full suite.
+EOF
+    fi
+}
+
+add_result() {
+    local kind="$1"
+    local message="$2"
+
+    SUMMARY_RESULTS+=("${kind}"$'\t'"${message}")
+
+    case "${kind}" in
+        PASS) PASS_COUNT=$((PASS_COUNT + 1)) ;;
+        WARN) WARN_COUNT=$((WARN_COUNT + 1)) ;;
+        FAIL) FAIL_COUNT=$((FAIL_COUNT + 1)) ;;
+    esac
+}
+
+pass_result() {
+    _check "$1"
+    add_result "PASS" "$1"
+}
+
+warn_result() {
+    _item "Warning: $1"
+    add_result "WARN" "$1"
+}
+
+fail_result() {
+    _cross "$1"
+    add_result "FAIL" "$1"
+}
+
+info_result() {
+    _item "$1"
+}
+
+show_fix() {
+    _item "Fix: $1"
+}
+
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+add_next_step() {
+    local step="$1"
+    local existing=""
+
+    for existing in "${NEXT_STEPS[@]}"; do
+        [[ "${existing}" == "${step}" ]] && return 0
     done
-    if [[ "${missing}" -eq 1 ]]; then
-        exit 1
-    fi
+
+    NEXT_STEPS+=("${step}")
 }
 
-# ── 1. Service status ──────────────────────────────────────
-# Returns 0 if Tailscale is running, 1 otherwise
-test_service() {
-    header "Tailscale service status"
+backend_state_summary() {
+    local backend_state=""
 
-    if [[ "${IS_LINUX}" == "true" ]]; then
-        if systemctl is-active --quiet tailscaled 2>/dev/null; then
-            pass "tailscaled service is active"
-        else
-            fail "tailscaled service is not running"
-            fix "sudo systemctl start tailscaled"
-            fix "sudo systemctl enable tailscaled"
-            return 1
-        fi
-    fi
-
-    # Backend state (works on both macOS and Linux)
-    if [[ -z "${TS_STATUS_JSON}" ]]; then
-        fail "Could not query Tailscale status"
-        if [[ "${IS_MACOS}" == "true" ]]; then
-            fix "Ensure Tailscale.app is running"
-        fi
-        return 1
-    fi
-
-    local backend_state
-    backend_state=$(printf '%s' "${TS_STATUS_JSON}" | grep -o '"BackendState"\s*:\s*"[^"]*"' | cut -d'"' -f4)
-    if [[ "${backend_state}" == "Running" ]]; then
-        pass "Tailscale backend state: Running"
-    else
-        fail "Tailscale backend state: ${backend_state:-unknown}"
-        fix "tailscale up"
-        if [[ "${IS_LINUX}" == "true" ]]; then
-            fix "sudo systemctl restart tailscaled"
-        fi
-        return 1
-    fi
+    backend_state="$(printf '%s' "${TS_STATUS_JSON}" | grep -o '"BackendState"\s*:\s*"[^"]*"' | cut -d'"' -f4 || true)"
+    printf '%s\n' "${backend_state:-unknown}"
 }
 
-# ── 2. Network ──────────────────────────────────────────────
-test_network() {
-    header "Tailscale network"
-
-    if [[ -n "${TS_SELF_IP}" ]]; then
-        pass "Tailscale IPv4: ${TS_SELF_IP}"
-    else
-        fail "No Tailscale IPv4 address assigned"
-        fix "tailscale up"
-        return
-    fi
-
-    # MagicDNS hostname
-    if [[ -n "${TS_SELF_HOSTNAME}" ]]; then
-        info "MagicDNS name: ${TS_SELF_HOSTNAME}"
-    fi
-
-    # MagicDNS enabled
-    if [[ "${TS_ACCEPT_DNS}" == "true" ]]; then
-        pass "MagicDNS is enabled"
-    elif [[ "${TS_ACCEPT_DNS}" == "false" ]]; then
-        info "MagicDNS is disabled — using local DNS only"
-    fi
-}
-
-# ── 3. DNS resolution ──────────────────────────────────────
-test_dns() {
-    header "Tailscale DNS resolution"
-
-    # Only test if MagicDNS is enabled — otherwise 100.100.100.100 may be
-    # answered by another local resolver (e.g. Pi-hole) giving false positives
-    if [[ "${TS_ACCEPT_DNS}" != "true" ]]; then
-        info "MagicDNS is disabled — skipping DNS resolver check"
-        return
-    fi
-
-    local result
-    if [[ -n "${TS_SELF_HOSTNAME}" ]]; then
-        result=$(dig @100.100.100.100 "${TS_SELF_HOSTNAME}" +short +timeout=3 2>/dev/null) || true
-        if [[ -n "${result}" ]]; then
-            pass "Tailscale DNS resolver resolves MagicDNS name: ${TS_SELF_HOSTNAME}"
-        else
-            warn "Tailscale DNS resolver did not resolve MagicDNS name: ${TS_SELF_HOSTNAME}"
-            fix "Ensure MagicDNS is enabled in the Tailscale admin console"
-        fi
-    else
-        info "No MagicDNS hostname found — cannot verify Tailscale DNS resolver"
-    fi
-}
-
-# ── 4. Exit node ───────────────────────────────────────────
-test_exit_node() {
-    header "Tailscale exit node"
+exit_node_summary() {
+    local exit_node_id=""
+    local exit_node_name=""
 
     if [[ -z "${TS_PREFS}" ]]; then
-        info "Could not read Tailscale prefs — skipping exit node checks"
-        return
+        printf 'unknown\n'
+        return 0
     fi
 
-    # Exit node = advertises 0.0.0.0/0 and ::/0
+    if printf '%s' "${TS_PREFS}" | grep -q '"0\.0\.0\.0/0"'; then
+        printf 'advertising\n'
+        return 0
+    fi
+
+    exit_node_id="$(printf '%s' "${TS_PREFS}" | grep -o '"ExitNodeID"\s*:\s*"[^"]*"' | cut -d'"' -f4 || true)"
+    if [[ -z "${exit_node_id}" ]]; then
+        printf 'none\n'
+        return 0
+    fi
+
+    exit_node_name="$(printf '%s\n' "${TS_STATUS_TEXT}" | grep -i "exit" | awk '{print $2}' || true)"
+    printf 'using %s\n' "${exit_node_name:-${exit_node_id}}"
+}
+
+peer_count_summary() {
+    printf '%s\n' "$(printf '%s\n' "${TS_STATUS_TEXT}" | awk -v self="${TS_SELF_IP}" '/^100\./ && $1 != self { count++ } END { print count + 0 }')"
+}
+
+required_commands() {
+    case "${COMMAND}" in
+        dns|run)
+            printf '%s\n' tailscale dig
+            ;;
+        service|network|exit-node|peers)
+            printf '%s\n' tailscale
+            ;;
+        *)
+            ;;
+    esac
+}
+
+check_deps() {
+    local command_name=""
+    local missing=0
+
+    while IFS= read -r command_name; do
+        [[ -n "${command_name}" ]] || continue
+        if command_exists "${command_name}"; then
+            continue
+        fi
+
+        missing=1
+        fail_result "Missing dependency: ${command_name}"
+        case "${command_name}" in
+            tailscale)
+                if [[ "${IS_MACOS}" == true ]]; then
+                    show_fix "brew install tailscale"
+                    show_fix "or install Tailscale from the Mac App Store"
+                    add_next_step "Install Tailscale with brew install tailscale or from the Mac App Store"
+                else
+                    show_fix "curl -fsSL https://tailscale.com/install.sh | sh"
+                    add_next_step "Install Tailscale with curl -fsSL https://tailscale.com/install.sh | sh"
+                fi
+                ;;
+            dig)
+                if [[ "${IS_MACOS}" == true ]]; then
+                    show_fix "brew install bind"
+                    add_next_step "Install dig with brew install bind"
+                else
+                    show_fix "sudo apt install dnsutils"
+                    show_fix "sudo dnf install bind-utils"
+                    add_next_step "Install dig with sudo apt install dnsutils or sudo dnf install bind-utils"
+                fi
+                ;;
+        esac
+    done < <(required_commands)
+
+    [[ "${missing}" -eq 0 ]] || return 1
+}
+
+load_state() {
+    TS_STATUS_JSON="$(tailscale status --json 2>/dev/null || true)"
+    TS_STATUS_TEXT="$(tailscale status 2>/dev/null || true)"
+    TS_PREFS="$(tailscale debug prefs 2>/dev/null || true)"
+    TS_SELF_IP="$(tailscale ip -4 2>/dev/null || true)"
+    TS_SELF_HOSTNAME="$(printf '%s' "${TS_STATUS_JSON}" | grep -o '"DNSName"\s*:\s*"[^"]*"' | head -1 | cut -d'"' -f4 | sed 's/\.$//' || true)"
+    TS_ACCEPT_DNS="$(printf '%s' "${TS_PREFS}" | grep -o '"CorpDNS"\s*:\s*[a-z]*' | awk -F: '{gsub(/[[:space:]]/, "", $2); print $2}' || true)"
+}
+
+print_intro() {
+    local backend_state=""
+    local exit_node_state=""
+    local peer_count=""
+    local os_label="unknown"
+    local section=""
+
+    if [[ "${IS_MACOS}" == true ]]; then
+        os_label="macOS"
+    elif [[ "${IS_LINUX}" == true ]]; then
+        os_label="Linux"
+    fi
+
+    backend_state="$(backend_state_summary)"
+    exit_node_state="$(exit_node_summary)"
+    peer_count="$(peer_count_summary)"
+
+    _header "ts-test"
+    section+="Platform: ${os_label}"$'\n'
+    section+="Backend: ${backend_state}"$'\n'
+    section+="Tailscale IPv4: ${TS_SELF_IP:-unassigned}"$'\n'
+    section+="MagicDNS: ${TS_SELF_HOSTNAME:-unavailable}"$'\n'
+    section+="MagicDNS mode: ${TS_ACCEPT_DNS:-unknown}"$'\n'
+    section+="Exit node: ${exit_node_state}"$'\n'
+    section+="Peers: ${peer_count}"
+    _box "${section}"
+}
+
+test_service() {
+    local backend_state=""
+    local section_failed=0
+    local section=""
+
+    printf '\n'
+    _header "Service"
+
+    if [[ "${IS_LINUX}" == true ]]; then
+        if command_exists systemctl; then
+            if systemctl is-active --quiet tailscaled 2>/dev/null; then
+                section+="OK  tailscaled service is active"$'\n'
+                add_result "PASS" "tailscaled service is active"
+            else
+                section+="FAIL  tailscaled service is not running"$'\n'
+                section+="Fix: sudo systemctl start tailscaled"$'\n'
+                section+="Fix: sudo systemctl enable tailscaled"$'\n'
+                add_result "FAIL" "tailscaled service is not running"
+                add_next_step "Start and enable tailscaled with sudo systemctl start tailscaled and sudo systemctl enable tailscaled"
+                section_failed=1
+            fi
+        else
+            section+="Warning: systemctl is unavailable, so the tailscaled unit check was skipped"$'\n'
+            add_result "WARN" "systemctl is unavailable, so the tailscaled unit check was skipped"
+        fi
+    fi
+
+    if [[ -z "${TS_STATUS_JSON}" ]]; then
+        section+="FAIL  Could not query Tailscale status"$'\n'
+        if [[ "${IS_MACOS}" == true ]]; then
+            section+="Fix: Ensure Tailscale.app is running"$'\n'
+            add_next_step "Ensure Tailscale.app is running"
+        else
+            section+="Fix: Run tailscale up after the daemon is available"$'\n'
+            add_next_step "Run tailscale up after the daemon is available"
+        fi
+        add_result "FAIL" "Could not query Tailscale status"
+        _box "${section%$'\n'}"
+        return 1
+    fi
+
+    backend_state="$(printf '%s' "${TS_STATUS_JSON}" | grep -o '"BackendState"\s*:\s*"[^"]*"' | cut -d'"' -f4 || true)"
+    if [[ "${backend_state}" == "Running" ]]; then
+        section+="OK  Tailscale backend state is Running"$'\n'
+        add_result "PASS" "Tailscale backend state is Running"
+    else
+        section+="FAIL  Tailscale backend state is ${backend_state:-unknown}"$'\n'
+        section+="Fix: tailscale up"$'\n'
+        add_next_step "Run tailscale up"
+        if [[ "${IS_LINUX}" == true ]]; then
+            section+="Fix: sudo systemctl restart tailscaled"$'\n'
+            add_next_step "Restart tailscaled with sudo systemctl restart tailscaled"
+        fi
+        add_result "FAIL" "Tailscale backend state is ${backend_state:-unknown}"
+        section_failed=1
+    fi
+
+    _box "${section%$'\n'}"
+    return "${section_failed}"
+}
+
+test_network() {
+    local section_failed=0
+    local section=""
+
+    printf '\n'
+    _header "Network"
+
+    if [[ -n "${TS_SELF_IP}" ]]; then
+        section+="OK  Tailscale IPv4 is ${TS_SELF_IP}"$'\n'
+        add_result "PASS" "Tailscale IPv4 is ${TS_SELF_IP}"
+    else
+        section+="FAIL  No Tailscale IPv4 address is assigned"$'\n'
+        section+="Fix: tailscale up"$'\n'
+        add_result "FAIL" "No Tailscale IPv4 address is assigned"
+        add_next_step "Run tailscale up"
+        section_failed=1
+    fi
+
+    if [[ -n "${TS_SELF_HOSTNAME}" ]]; then
+        section+="MagicDNS name: ${TS_SELF_HOSTNAME}"$'\n'
+    else
+        section+="Warning: No MagicDNS hostname was reported for this node"$'\n'
+        add_result "WARN" "No MagicDNS hostname was reported for this node"
+    fi
+
+    if [[ "${TS_ACCEPT_DNS}" == "true" ]]; then
+        section+="OK  MagicDNS is enabled"$'\n'
+        add_result "PASS" "MagicDNS is enabled"
+    elif [[ "${TS_ACCEPT_DNS}" == "false" ]]; then
+        section+="MagicDNS is disabled and local DNS is in use"$'\n'
+    else
+        section+="Warning: Could not determine whether MagicDNS is enabled"$'\n'
+        add_result "WARN" "Could not determine whether MagicDNS is enabled"
+    fi
+
+    _box "${section%$'\n'}"
+    return "${section_failed}"
+}
+
+test_dns() {
+    local result=""
+    local section=""
+
+    printf '\n'
+    _header "DNS"
+
+    if [[ "${TS_ACCEPT_DNS}" != "true" ]]; then
+        section+="MagicDNS is disabled, so the resolver check was skipped"
+        _box "${section}"
+        return 0
+    fi
+
+    if [[ -z "${TS_SELF_HOSTNAME}" ]]; then
+        section+="Warning: No MagicDNS hostname was found, so DNS resolution could not be verified"
+        add_result "WARN" "No MagicDNS hostname was found, so DNS resolution could not be verified"
+        _box "${section}"
+        return 0
+    fi
+
+    result="$(dig @100.100.100.100 "${TS_SELF_HOSTNAME}" +short +timeout=3 2>/dev/null || true)"
+    if [[ -n "${result}" ]]; then
+        section+="OK  The Tailscale resolver returns ${TS_SELF_HOSTNAME}"
+        add_result "PASS" "The Tailscale resolver returns ${TS_SELF_HOSTNAME}"
+    else
+        section+="Warning: The Tailscale resolver did not resolve ${TS_SELF_HOSTNAME}"$'\n'
+        section+="Fix: Ensure MagicDNS is enabled in the Tailscale admin console"
+        add_result "WARN" "The Tailscale resolver did not resolve ${TS_SELF_HOSTNAME}"
+        add_next_step "Ensure MagicDNS is enabled in the Tailscale admin console"
+    fi
+
+    _box "${section}"
+}
+
+test_exit_node() {
     local advertises_exit=false
+    local exit_node_id=""
+    local exit_node_ip=""
+    local exit_node_name=""
+    local has_masq=false
+    local ipv4_fwd=""
+    local ipv6_fwd=""
+    local section_failed=0
+    local section=""
+    local forwarding_section=""
+    local nat_section=""
+
+    printf '\n'
+    _header "Exit Node"
+
+    if [[ -z "${TS_PREFS}" ]]; then
+        section+="Warning: Could not read Tailscale prefs, so exit-node checks were skipped"
+        add_result "WARN" "Could not read Tailscale prefs, so exit-node checks were skipped"
+        _box "${section}"
+        return 0
+    fi
+
     if printf '%s' "${TS_PREFS}" | grep -q '"0\.0\.0\.0/0"'; then
         advertises_exit=true
     fi
 
-    if [[ "${advertises_exit}" == "true" ]]; then
-        pass "This node advertises as an exit node"
-        info "Verify this node is approved as exit node in the Tailscale admin console"
+    if [[ "${advertises_exit}" == true ]]; then
+        section+="OK  This node advertises as an exit node"$'\n'
+        section+="Verify that the node is approved as an exit node in the admin console"
+        add_result "PASS" "This node advertises as an exit node"
+        _box "${section}"
 
-        # IP forwarding — Linux only
-        if [[ "${IS_LINUX}" == "true" ]]; then
-            header "Exit node: IP forwarding"
-            local ipv4_fwd ipv6_fwd
-            ipv4_fwd=$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null) || true
-            ipv6_fwd=$(cat /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null) || true
+        if [[ "${IS_LINUX}" == true ]]; then
+            printf '\n'
+            _header "Exit Node Forwarding"
+
+            ipv4_fwd="$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || true)"
+            ipv6_fwd="$(cat /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null || true)"
 
             if [[ "${ipv4_fwd}" == "1" ]]; then
-                pass "IPv4 forwarding is enabled"
+                forwarding_section+="OK  IPv4 forwarding is enabled"$'\n'
+                add_result "PASS" "IPv4 forwarding is enabled"
             else
-                fail "IPv4 forwarding is disabled"
-                fix "printf 'net.ipv4.ip_forward = 1\n' | sudo tee /etc/sysctl.d/99-tailscale.conf"
-                fix "sudo sysctl -p /etc/sysctl.d/99-tailscale.conf"
+                forwarding_section+="FAIL  IPv4 forwarding is disabled"$'\n'
+                forwarding_section+="Fix: printf 'net.ipv4.ip_forward = 1\n' | sudo tee /etc/sysctl.d/99-tailscale.conf"$'\n'
+                forwarding_section+="Fix: sudo sysctl -p /etc/sysctl.d/99-tailscale.conf"$'\n'
+                add_result "FAIL" "IPv4 forwarding is disabled"
+                add_next_step "Enable IPv4 forwarding in /etc/sysctl.d/99-tailscale.conf and reload it with sudo sysctl -p /etc/sysctl.d/99-tailscale.conf"
+                section_failed=1
             fi
 
             if [[ "${ipv6_fwd}" == "1" ]]; then
-                pass "IPv6 forwarding is enabled"
+                forwarding_section+="OK  IPv6 forwarding is enabled"$'\n'
+                add_result "PASS" "IPv6 forwarding is enabled"
             else
-                fail "IPv6 forwarding is disabled"
-                fix "printf 'net.ipv6.conf.all.forwarding = 1\n' | sudo tee -a /etc/sysctl.d/99-tailscale.conf"
-                fix "sudo sysctl -p /etc/sysctl.d/99-tailscale.conf"
+                forwarding_section+="FAIL  IPv6 forwarding is disabled"$'\n'
+                forwarding_section+="Fix: printf 'net.ipv6.conf.all.forwarding = 1\n' | sudo tee -a /etc/sysctl.d/99-tailscale.conf"$'\n'
+                forwarding_section+="Fix: sudo sysctl -p /etc/sysctl.d/99-tailscale.conf"$'\n'
+                add_result "FAIL" "IPv6 forwarding is disabled"
+                add_next_step "Enable IPv6 forwarding in /etc/sysctl.d/99-tailscale.conf and reload it with sudo sysctl -p /etc/sysctl.d/99-tailscale.conf"
+                section_failed=1
             fi
 
-            # NAT / masquerade rules
-            header "Exit node: NAT rules"
-            local has_masq=false
-            if command -v iptables &>/dev/null; then
-                if iptables -t nat -S 2>/dev/null | grep -qi "MASQUERADE"; then
-                    has_masq=true
-                fi
+            _box "${forwarding_section%$'\n'}"
+
+            printf '\n'
+            _header "Exit Node NAT"
+
+            if command_exists iptables && iptables -t nat -S 2>/dev/null | grep -qi "MASQUERADE"; then
+                has_masq=true
             fi
-            if command -v nft &>/dev/null; then
-                if nft list ruleset 2>/dev/null | grep -qi "masquerade"; then
-                    has_masq=true
-                fi
+            if command_exists nft && nft list ruleset 2>/dev/null | grep -qi "masquerade"; then
+                has_masq=true
             fi
-            if [[ "${has_masq}" == "true" ]]; then
-                pass "NAT masquerade rules detected"
+
+            if [[ "${has_masq}" == true ]]; then
+                nat_section+="OK  NAT masquerade rules were detected"
+                add_result "PASS" "NAT masquerade rules were detected"
             else
-                info "No static NAT masquerade rules — Tailscale manages its own dynamically"
+                nat_section+="No static NAT masquerade rules were found; Tailscale may manage them dynamically"
             fi
-        fi
-
-        if [[ "${IS_MACOS}" == "true" ]]; then
-            info "IP forwarding and NAT are managed by Tailscale.app on macOS"
-        fi
-    else
-        info "This node does not advertise as an exit node"
-
-        # Check if this client is using an exit node
-        local exit_node_id
-        exit_node_id=$(printf '%s' "${TS_PREFS}" | grep -o '"ExitNodeID"\s*:\s*"[^"]*"' | cut -d'"' -f4) || true
-
-        if [[ -n "${exit_node_id}" ]]; then
-            local exit_node_name
-            exit_node_name=$(printf '%s\n' "${TS_STATUS_TEXT}" | grep -i "exit" | awk '{print $2}') || true
-            pass "Using exit node: ${exit_node_name:-${exit_node_id}}"
-
-            local exit_node_ip
-            exit_node_ip=$(printf '%s' "${TS_STATUS_JSON}" \
-                | grep -A5 "\"${exit_node_id}\"" \
-                | grep -o '"TailscaleIPs"\s*:\s*\["[^"]*"' \
-                | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+') || true
-            if [[ -n "${exit_node_ip}" ]]; then
-                if tailscale ping --timeout=3s "${exit_node_ip}" &>/dev/null; then
-                    pass "Exit node is reachable (${exit_node_ip})"
-                else
-                    warn "Exit node is not reachable (${exit_node_ip})"
-                    fix "Check that the exit node is online: tailscale status"
-                    fix "Try: tailscale ping ${exit_node_ip}"
-                fi
-            fi
+            _box "${nat_section}"
         else
-            info "Not using an exit node"
+            printf '\n'
+            _header "Exit Node Forwarding"
+            _box "IP forwarding and NAT are managed by Tailscale.app on macOS"
         fi
+
+        return "${section_failed}"
     fi
+
+    section+="This node does not advertise as an exit node"$'\n'
+
+    exit_node_id="$(printf '%s' "${TS_PREFS}" | grep -o '"ExitNodeID"\s*:\s*"[^"]*"' | cut -d'"' -f4 || true)"
+    if [[ -z "${exit_node_id}" ]]; then
+        section+="No exit node is currently in use"
+        _box "${section}"
+        return 0
+    fi
+
+    exit_node_name="$(printf '%s\n' "${TS_STATUS_TEXT}" | grep -i "exit" | awk '{print $2}' || true)"
+    section+="OK  Using exit node ${exit_node_name:-${exit_node_id}}"$'\n'
+    add_result "PASS" "Using exit node ${exit_node_name:-${exit_node_id}}"
+
+    exit_node_ip="$(printf '%s' "${TS_STATUS_JSON}" \
+        | grep -A5 "\"${exit_node_id}\"" \
+        | grep -o '"TailscaleIPs"\s*:\s*\["[^"]*"' \
+        | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+' || true)"
+
+    if [[ -z "${exit_node_ip}" ]]; then
+        section+="Warning: Could not resolve the active exit node IP from tailscale status"
+        add_result "WARN" "Could not resolve the active exit node IP from tailscale status"
+        _box "${section}"
+        return 0
+    fi
+
+    if tailscale ping --timeout=3s "${exit_node_ip}" >/dev/null 2>&1; then
+        section+="OK  Exit node is reachable at ${exit_node_ip}"
+        add_result "PASS" "Exit node is reachable at ${exit_node_ip}"
+    else
+        section+="Warning: Exit node is not reachable at ${exit_node_ip}"$'\n'
+        section+="Fix: Check that the exit node is online with tailscale status"$'\n'
+        section+="Fix: Try tailscale ping ${exit_node_ip}"
+        add_result "WARN" "Exit node is not reachable at ${exit_node_ip}"
+        add_next_step "Check that the exit node is online with tailscale status and retry with tailscale ping ${exit_node_ip}"
+    fi
+
+    _box "${section}"
 }
 
-# ── 5. Peer connectivity ──────────────────────────────────
 test_peers() {
-    header "Tailscale peer connectivity"
-    local peer_count=0 reachable=0 unreachable=0
+    local peer_count=0
+    local reachable=0
+    local unreachable=0
+    local section=""
+
+    printf '\n'
+    _header "Peers"
 
     while read -r peer_ip peer_name; do
-        [[ -z "${peer_ip}" ]] && continue
+        [[ -n "${peer_ip}" ]] || continue
         peer_count=$((peer_count + 1))
 
-        if tailscale ping --timeout=3s --c=1 "${peer_ip}" &>/dev/null; then
-            pass "Peer reachable: ${peer_name} (${peer_ip})"
+        if tailscale ping --timeout=3s --c=1 "${peer_ip}" >/dev/null 2>&1; then
+            section+="OK  Peer reachable: ${peer_name} (${peer_ip})"$'\n'
+            add_result "PASS" "Peer reachable: ${peer_name} (${peer_ip})"
             reachable=$((reachable + 1))
         else
+            section+="Warning: Peer unreachable: ${peer_name} (${peer_ip})"$'\n'
+            add_result "WARN" "Peer unreachable: ${peer_name} (${peer_ip})"
             unreachable=$((unreachable + 1))
-            warn "Peer unreachable: ${peer_name} (${peer_ip})"
         fi
-    done < <(printf '%s\n' "${TS_STATUS_TEXT}" | awk -v self="${TS_SELF_IP}" '/^100\./ && $1 != self {print $1, $2}')
+    done < <(printf '%s\n' "${TS_STATUS_TEXT}" | awk -v self="${TS_SELF_IP}" '/^100\./ && $1 != self { print $1, $2 }')
 
     if [[ "${peer_count}" -eq 0 ]]; then
-        info "No peers found in tailnet"
-    elif [[ "${reachable}" -eq 0 ]]; then
-        fail "No peers reachable (0 of ${peer_count})"
-    else
-        info "Peers: ${reachable} reachable, ${unreachable} unreachable out of ${peer_count}"
+        section+="No peers were found in this tailnet"
+        _box "${section}"
+        return 0
     fi
+
+    if [[ "${reachable}" -eq 0 ]]; then
+        section+="FAIL  No peers were reachable (0 of ${peer_count})"$'\n'
+        add_result "FAIL" "No peers were reachable (0 of ${peer_count})"
+        section+="Peers: ${reachable} reachable, ${unreachable} unreachable, ${peer_count} total"
+        _box "${section}"
+        return 1
+    fi
+
+    section+="Peers: ${reachable} reachable, ${unreachable} unreachable, ${peer_count} total"
+    _box "${section}"
 }
 
-# ── Summary ─────────────────────────────────────────────────
 print_summary() {
-    printf '\n%b╔══════════════════════════════════════╗%b\n' "${BOLD}" "${RESET}"
-    printf '║            Test Summary              ║\n'
-    printf '%b╚══════════════════════════════════════╝%b\n' "${BOLD}" "${RESET}"
+    local entry=""
+    local kind=""
+    local message=""
+    local summary_body=""
+    local step=""
+    local steps_body=""
 
-    local result
-    for result in "${SUMMARY_RESULTS[@]}"; do
-        printf '  %b\n' "${result}"
+    printf '\n'
+    _header "Summary"
+
+    summary_body="passed: ${PASS_COUNT}"$'\n'"warnings: ${WARN_COUNT}"$'\n'"failed: ${FAIL_COUNT}"
+    for entry in "${SUMMARY_RESULTS[@]}"; do
+        kind="${entry%%$'\t'*}"
+        message="${entry#*$'\t'}"
+        summary_body+=$'\n'
+        summary_body+="${kind}  ${message}"
     done
 
-    printf '\n  %bTotal: %s passed, %s warnings, %s failed%b\n' "${BOLD}" "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}" "${RESET}"
+    _box "${summary_body}"
+    printf '\n'
+
     if [[ "${FAIL_COUNT}" -eq 0 && "${WARN_COUNT}" -eq 0 ]]; then
-        printf '  %bAll tests passed!%b\n\n' "${GREEN}${BOLD}" "${RESET}"
-    elif [[ "${FAIL_COUNT}" -eq 0 ]]; then
-        printf '  %bNode is healthy.%b %b%s warning(s) to review.%b\n\n' "${GREEN}${BOLD}" "${RESET}" "${YELLOW}${BOLD}" "${WARN_COUNT}" "${RESET}"
-    else
-        printf '  %b%s test(s) need attention.%b\n\n' "${RED}${BOLD}" "${FAIL_COUNT}" "${RESET}"
+        if [[ "${HAS_GUM}" == true ]]; then
+            gum style --foreground 76 --bold "Passed: ${PASS_COUNT}  Warnings: ${WARN_COUNT}  Failed: ${FAIL_COUNT}"
+            gum style --foreground 76 --bold "All checks passed."
+        else
+            printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
+            printf 'All checks passed.\n'
+        fi
+        return 0
     fi
+
+    if [[ "${FAIL_COUNT}" -eq 0 ]]; then
+        if [[ "${HAS_GUM}" == true ]]; then
+            gum style --foreground 76 --bold "Passed: ${PASS_COUNT}"
+            gum style --foreground 214 --bold "Warnings: ${WARN_COUNT}"
+            gum style --foreground 214 --bold "Completed with ${WARN_COUNT} warning(s)."
+        else
+            printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
+            printf 'Completed with %s warning(s).\n' "${WARN_COUNT}" >&2
+        fi
+        if [[ "${#NEXT_STEPS[@]}" -gt 0 ]]; then
+            printf '\n'
+            _header "Next Steps"
+            for step in "${NEXT_STEPS[@]}"; do
+                steps_body+="- ${step}"$'\n'
+            done
+            _box "${steps_body%$'\n'}"
+        fi
+        return 0
+    fi
+
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 76 --bold "Passed: ${PASS_COUNT}"
+        gum style --foreground 214 --bold "Warnings: ${WARN_COUNT}"
+        gum style --foreground 196 --bold "Failed: ${FAIL_COUNT}"
+        gum style --foreground 196 --bold "Found ${FAIL_COUNT} failing check(s)."
+    else
+        printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
+        printf 'Found %s failing check(s).\n' "${FAIL_COUNT}" >&2
+    fi
+
+    if [[ "${#NEXT_STEPS[@]}" -gt 0 ]]; then
+        printf '\n'
+        _header "Next Steps"
+        for step in "${NEXT_STEPS[@]}"; do
+            steps_body+="- ${step}"$'\n'
+        done
+        _box "${steps_body%$'\n'}"
+    fi
+
+    return 1
 }
 
-# ── Main ────────────────────────────────────────────────────
+parse_args() {
+    [[ $# -gt 0 ]] || {
+        COMMAND="run"
+        return 0
+    }
+
+    case "$1" in
+        run|service|network|dns|exit-node|peers)
+            COMMAND="$1"
+            shift
+            ;;
+        -h|-help|--help|help)
+            usage
+            exit 0
+            ;;
+        *)
+            _warn "Unknown command: $1"
+            _warn "Tip: run 'ts-test --help' for available commands"
+            exit 1
+            ;;
+    esac
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|-help|--help)
+                usage
+                exit 0
+                ;;
+            -*)
+                _warn "Unknown option: $1"
+                _warn "Tip: run 'ts-test --help' for available options"
+                exit 1
+                ;;
+            *)
+                die "Unexpected argument: $1"
+                ;;
+        esac
+    done
+}
+
+run_command() {
+    local service_failed=0
+
+    case "${COMMAND}" in
+        run)
+            test_service || service_failed=1
+            if [[ "${service_failed}" -eq 0 ]]; then
+                test_network || true
+                test_dns || true
+                test_exit_node || true
+                test_peers || true
+            fi
+            ;;
+        service)
+            test_service || true
+            ;;
+        network)
+            test_service || service_failed=1
+            if [[ "${service_failed}" -eq 0 ]]; then
+                test_network || true
+            fi
+            ;;
+        dns)
+            test_service || service_failed=1
+            if [[ "${service_failed}" -eq 0 ]]; then
+                test_dns || true
+            fi
+            ;;
+        exit-node)
+            test_service || service_failed=1
+            if [[ "${service_failed}" -eq 0 ]]; then
+                test_exit_node || true
+            fi
+            ;;
+        peers)
+            test_service || service_failed=1
+            if [[ "${service_failed}" -eq 0 ]]; then
+                test_peers || true
+            fi
+            ;;
+    esac
+}
+
 main() {
-    printf '\n%b╔══════════════════════════════════════╗%b\n' "${BOLD}" "${RESET}"
-    printf '║       Tailscale Test Suite           ║\n'
-    printf '%b╚══════════════════════════════════════╝%b\n' "${BOLD}" "${RESET}"
+    parse_args "$@"
 
-    local os_label="unknown"
-    if [[ "${IS_MACOS}" == "true" ]]; then os_label="macOS"; fi
-    if [[ "${IS_LINUX}" == "true" ]]; then os_label="Linux"; fi
-    printf '  Platform: %b%s%b\n' "${CYAN}" "${os_label}" "${RESET}"
-
-    check_deps
-    TS_STATUS_JSON=$(tailscale status --json 2>/dev/null) || true
-    TS_STATUS_TEXT=$(tailscale status 2>/dev/null) || true
-    TS_PREFS=$(tailscale debug prefs 2>/dev/null) || true
-    TS_SELF_IP=$(tailscale ip -4 2>/dev/null) || true
-    TS_SELF_HOSTNAME=$(printf '%s' "${TS_STATUS_JSON}" | grep -o '"DNSName"\s*:\s*"[^"]*"' | head -1 | cut -d'"' -f4 | sed 's/\.$//') || true
-    TS_ACCEPT_DNS=$(printf '%s' "${TS_PREFS}" | grep -o '"CorpDNS"\s*:\s*[a-z]*' | awk -F: '{gsub(/[[:space:]]/, "", $2); print $2}') || true
-    if ! test_service; then
+    if ! check_deps; then
         print_summary
-        return
+        return 1
     fi
-    test_network
-    test_dns
-    test_exit_node
-    test_peers
 
+    load_state
+    print_intro
+    run_command
     print_summary
 }
 
-main
+main "$@"
