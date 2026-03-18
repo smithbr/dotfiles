@@ -7,6 +7,7 @@ setup() {
     setup_tmpdir
     export BIN_SANDBOX="${TEST_TMPDIR}/bin"
     mkdir -p "${BIN_SANDBOX}"
+    ln -sf "$(brew --prefix)/bin/bash" "${BIN_SANDBOX}/bash"
 }
 
 teardown() {
@@ -386,11 +387,12 @@ MOCK
 }
 
 @test "sshkey displays help" {
-    run env HOME="${TEST_TMPDIR}/home" PATH="/usr/bin:/bin" \
+    run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
         "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_sshkey" --help
     assert_success
     assert_output --partial "Usage:"
-    assert_output --partial "sshkey create <name>"
+    assert_output --partial "sshkey profiles"
+    assert_output --partial "sshkey create [name]"
 }
 
 @test "sshkey create writes a local key inside an isolated home" {
@@ -439,6 +441,114 @@ MOCK
     assert_output --partial "Generated local key at ${TEST_TMPDIR}/home/.ssh/devkey"
     [[ -f "${TEST_TMPDIR}/home/.ssh/devkey" ]]
     [[ -f "${TEST_TMPDIR}/home/.ssh/devkey.pub" ]]
+}
+
+@test "sshkey create uses the selected profile key when no name is provided" {
+    cat > "${BIN_SANDBOX}/hostname" <<'MOCK'
+#!/usr/bin/env bash
+printf 'sandbox-host\n'
+MOCK
+
+    cat > "${BIN_SANDBOX}/ssh-keygen" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+
+file=""
+comment=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -f)
+            file="$2"
+            shift 2
+            ;;
+        -C)
+            comment="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+printf 'PRIVATE KEY\n' > "${file}"
+printf 'ssh-ed25519 LOCALKEY %s\n' "${comment}" > "${file}.pub"
+MOCK
+
+    cat > "${BIN_SANDBOX}/ssh-add" <<'MOCK'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/hostname" "${BIN_SANDBOX}/ssh-keygen" "${BIN_SANDBOX}/ssh-add"
+    mkdir -p "${TEST_TMPDIR}/home/.config/sshkey"
+    cat > "${TEST_TMPDIR}/home/.config/sshkey/config.toml" <<'EOF'
+default_profile = "work"
+
+[profiles.work]
+key_name = "id_work"
+storage = "local"
+EOF
+
+    run env HOME="${TEST_TMPDIR}/home" XDG_CONFIG_HOME="${TEST_TMPDIR}/home/.config" USER="sandbox-user" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_sshkey" create
+    assert_success
+    assert_output --partial "Generated local key at ${TEST_TMPDIR}/home/.ssh/id_work"
+    [[ -f "${TEST_TMPDIR}/home/.ssh/id_work" ]]
+    [[ -f "${TEST_TMPDIR}/home/.ssh/id_work.pub" ]]
+}
+
+@test "sshkey maps legacy home machine type to the personal profile" {
+    cat > "${BIN_SANDBOX}/hostname" <<'MOCK'
+#!/usr/bin/env bash
+printf 'sandbox-host\n'
+MOCK
+
+    cat > "${BIN_SANDBOX}/ssh-keygen" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+
+file=""
+comment=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -f)
+            file="$2"
+            shift 2
+            ;;
+        -C)
+            comment="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+printf 'PRIVATE KEY\n' > "${file}"
+printf 'ssh-ed25519 LOCALKEY %s\n' "${comment}" > "${file}.pub"
+MOCK
+
+    cat > "${BIN_SANDBOX}/ssh-add" <<'MOCK'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/hostname" "${BIN_SANDBOX}/ssh-keygen" "${BIN_SANDBOX}/ssh-add"
+    mkdir -p "${TEST_TMPDIR}/home/.config/sshkey"
+    cat > "${TEST_TMPDIR}/home/.config/sshkey/config.toml" <<'EOF'
+[profiles.personal]
+key_name = "id_personal"
+storage = "local"
+EOF
+
+    run env HOME="${TEST_TMPDIR}/home" XDG_CONFIG_HOME="${TEST_TMPDIR}/home/.config" USER="sandbox-user" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_sshkey" create -m home
+    assert_success
+    assert_output --partial "Generated local key at ${TEST_TMPDIR}/home/.ssh/id_personal"
+    [[ -f "${TEST_TMPDIR}/home/.ssh/id_personal" ]]
+    [[ -f "${TEST_TMPDIR}/home/.ssh/id_personal.pub" ]]
 }
 
 @test "sshkey cleanup fixes perms and removes orphaned files inside an isolated home" {

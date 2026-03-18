@@ -6,9 +6,15 @@ CONFIG_PATH="${SSHKEY_CONFIG:-${XDG_CONFIG_HOME:-${HOME}/.config}/sshkey/config.
 ONEPASSWORD_VAULT="${SSHKEY_1PASSWORD_VAULT:-}"
 ONEPASSWORD_VAULT_EXPLICIT=false
 [[ -n "${ONEPASSWORD_VAULT}" ]] && ONEPASSWORD_VAULT_EXPLICIT=true
-MACHINE_TYPE=""
+PROFILE_NAME="${SSHKEY_PROFILE:-}"
+DEFAULT_PROFILE="${SSHKEY_DEFAULT_PROFILE:-personal}"
+PROFILE_NAMES="personal work server"
+SELECTED_PROFILE=""
 GITHUB_KEY_NAME="${SSHKEY_GITHUB_KEY_NAME:-id_ed25519}"
-GITHUB_TITLE_TEMPLATE="${SSHKEY_GITHUB_TITLE_TEMPLATE:-github - {{machine_type}} - {{user}}@{{hostname}}}"
+TITLE_TEMPLATE="${SSHKEY_TITLE_TEMPLATE:-}"
+[[ -n "${TITLE_TEMPLATE}" ]] || TITLE_TEMPLATE='{{profile_or_key}} - {{user}}@{{hostname}}'
+GITHUB_TITLE_TEMPLATE="${SSHKEY_GITHUB_TITLE_TEMPLATE:-}"
+[[ -n "${GITHUB_TITLE_TEMPLATE}" ]] || GITHUB_TITLE_TEMPLATE='github - {{profile_or_key}} - {{user}}@{{hostname}}'
 USE_1PASSWORD_DEFAULT="${SSHKEY_USE_1PASSWORD:-false}"
 HOSTNAME_SHORT="$(hostname -s 2>/dev/null || hostname)"
 USER_NAME="${USER:-$(id -un)}"
@@ -111,28 +117,30 @@ usage() {
     help_text="$(cat <<'EOF'
 # sshkey
 
-Manage SSH keys across local, GitHub, and 1Password.
+Manage SSH keys around explicit profiles like personal, work, and server.
 
 ## Commands
 
-| Command   | Description                                      |
-|-----------|--------------------------------------------------|
-| `gh`      | Create/recreate the default GitHub key           |
-| `create`  | Create/recreate a named SSH key                  |
-| `delete`  | Delete a named key and optional remote entries    |
-| `list`    | Show local keys, agent, GitHub, or 1Password     |
-| `doctor`  | Check local SSH health and GitHub key status      |
-| `cleanup` | Remove orphaned keys, fix permissions             |
+| Command    | Description                                     |
+|------------|-------------------------------------------------|
+| `profiles` | Show resolved profile defaults                  |
+| `gh`       | Create/recreate the main key for the selected profile |
+| `create`   | Create a named key or the selected profile key  |
+| `delete`   | Delete a named key or the selected profile key  |
+| `list`     | Show local keys, agent, GitHub, or 1Password    |
+| `doctor`   | Check local SSH health and the main GitHub key  |
+| `cleanup`  | Remove orphaned keys and fix permissions        |
 
 ## Flags
 
-| Flag   | Description                      |
-|--------|----------------------------------|
-| `-m`   | Machine type: home, work, server |
-| `-y`   | Skip confirmations               |
-| `-n`   | Dry run cleanup actions          |
-| `-1p`  | Include 1Password operations     |
-| `-gh`  | Include GitHub operations        |
+| Flag    | Description                                 |
+|---------|---------------------------------------------|
+| `-p`    | Profile name: personal, work, server, etc.  |
+| `-m`    | Legacy alias for `-p` (`home` maps to `personal`) |
+| `-y`    | Skip confirmations                          |
+| `-n`    | Dry run cleanup actions                     |
+| `-1p`   | Force 1Password-backed key creation/listing |
+| `-gh`   | Force GitHub sync/listing                   |
 EOF
 )"
     help_text+=$'\n\n'"**Config:** \`${CONFIG_PATH}\`"
@@ -143,12 +151,26 @@ EOF
         # plain fallback
         cat <<EOF
 Usage:
-  sshkey gh [-m <home|work|server>] [-y] [-1p]
-  sshkey create <name> [-m <home|work|server>] [-y] [-1p] [-gh]
-  sshkey delete <name> [-m <home|work|server>] [-y] [-1p] [-gh]
-  sshkey list [-m <home|work|server>] [-gh] [-1p]
-  sshkey doctor [-m <home|work|server>]
-  sshkey cleanup [-m <home|work|server>] [-y] [-n]
+  sshkey profiles [-p <profile>]
+  sshkey gh [-p <profile>] [-y] [-1p]
+  sshkey create [name] [-p <profile>] [-y] [-1p] [-gh]
+  sshkey delete [name] [-p <profile>] [-y] [-1p] [-gh]
+  sshkey list [-p <profile>] [-gh] [-1p]
+  sshkey doctor [-p <profile>]
+  sshkey cleanup [-y] [-n]
+
+Config example:
+  default_profile = "personal"
+
+  [profiles.personal]
+  key_name = "id_ed25519"
+  storage = "local"
+  github = true
+
+  [profiles.work]
+  key_name = "id_work"
+  storage = "1password"
+  vault = "Employee"
 
 Config: ${CONFIG_PATH}
 EOF
@@ -297,38 +319,40 @@ confirm() {
     fi
 }
 
-load_config() {
-    local line key raw_value value
-
-    [[ -f "${CONFIG_PATH}" ]] || return 0
-
-    while IFS= read -r line; do
-        line="${line%%#*}"
-        [[ "${line}" == *"="* ]] || continue
-
-        key="$(trim "${line%%=*}")"
-        raw_value="$(trim "${line#*=}")"
-        value="$(strip_quotes "${raw_value}")"
-
-        case "${key}" in
-            github_key_name) GITHUB_KEY_NAME="${value}" ;;
-            github_title_template) GITHUB_TITLE_TEMPLATE="${value}" ;;
-            use_1password) USE_1PASSWORD_DEFAULT="${value}" ;;
-            onepassword_vault|op_vault)
-                ONEPASSWORD_VAULT="${value}"
-                ONEPASSWORD_VAULT_EXPLICIT=true
-                ;;
-        esac
-    done < "${CONFIG_PATH}"
+truthy() {
+    case "$1" in
+        true|TRUE|True|1|yes|YES|Yes|on|ON|On) return 0 ;;
+    esac
+    return 1
 }
 
-validate_machine_type() {
-    case "${MACHINE_TYPE}" in
-        home|work|server) ;;
-        *)
-            die "machine_type must be one of: home, work, server"
-            ;;
+profile_slug() {
+    local value="$1"
+    value="${value//[^A-Za-z0-9]/_}"
+    printf '%s\n' "${value}"
+}
+
+canonicalize_profile_name() {
+    case "$1" in
+        "" ) printf '\n' ;;
+        home) printf 'personal\n' ;;
+        Home) printf 'personal\n' ;;
+        *) printf '%s\n' "$1" ;;
     esac
+}
+
+legacy_machine_type_name() {
+    case "$1" in
+        personal) printf 'home\n' ;;
+        *) printf '%s\n' "$1" ;;
+    esac
+}
+
+validate_profile_name() {
+    local profile="$1"
+
+    [[ -n "${profile}" ]] || die "Profile name is required"
+    [[ "${profile}" =~ ^[A-Za-z0-9._-]+$ ]] || die "Profile name must use only letters, numbers, ., _, or -"
 }
 
 validate_key_name() {
@@ -339,39 +363,184 @@ validate_key_name() {
     [[ "${name}" =~ ^[A-Za-z0-9._-]+$ ]] || die "Key name must use only letters, numbers, ., _, or -"
 }
 
-prompt_machine_type() {
+register_profile() {
+    local profile="$1"
+
+    [[ -n "${profile}" ]] || return 0
+    case " ${PROFILE_NAMES} " in
+        *" ${profile} "*) ;;
+        *) PROFILE_NAMES="${PROFILE_NAMES:+${PROFILE_NAMES} }${profile}" ;;
+    esac
+}
+
+profile_var_name() {
+    local profile="$1"
+    local field="$2"
+
+    printf 'SSHKEY_PROFILE_%s_%s\n' "$(profile_slug "${profile}")" "$(profile_slug "${field}")"
+}
+
+set_profile_field() {
+    local profile="$1"
+    local field="$2"
+    local value="$3"
+    local var_name=""
+
+    profile="$(canonicalize_profile_name "${profile}")"
+    validate_profile_name "${profile}"
+    register_profile "${profile}"
+    var_name="$(profile_var_name "${profile}" "${field}")"
+    printf -v "${var_name}" '%s' "${value}"
+}
+
+get_profile_field() {
+    local profile="$1"
+    local field="$2"
+    local var_name=""
+    local value=""
+
+    [[ -n "${profile}" ]] || return 0
+    var_name="$(profile_var_name "${profile}" "${field}")"
+    eval "value=\${${var_name}-}"
+    printf '%s\n' "${value}"
+}
+
+profile_truthy() {
+    local profile="$1"
+    local field="$2"
+    local value=""
+
+    value="$(get_profile_field "${profile}" "${field}")"
+    truthy "${value}"
+}
+
+apply_config_setting() {
+    local key="$1"
+    local value="$2"
+    local current_profile="$3"
+    local profile=""
+    local field=""
+
+    if [[ -n "${current_profile}" && "${key}" != *.* ]]; then
+        set_profile_field "${current_profile}" "${key}" "${value}"
+        return 0
+    fi
+
+    case "${key}" in
+        default_profile)
+            DEFAULT_PROFILE="$(canonicalize_profile_name "${value}")"
+            ;;
+        github_key_name)
+            GITHUB_KEY_NAME="${value}"
+            ;;
+        title_template)
+            TITLE_TEMPLATE="${value}"
+            ;;
+        github_title_template)
+            GITHUB_TITLE_TEMPLATE="${value}"
+            ;;
+        use_1password)
+            USE_1PASSWORD_DEFAULT="${value}"
+            ;;
+        onepassword_vault|op_vault)
+            ONEPASSWORD_VAULT="${value}"
+            ONEPASSWORD_VAULT_EXPLICIT=true
+            ;;
+        profile.*|profiles.*)
+            profile="${key#*.}"
+            field="${profile#*.}"
+            profile="${profile%%.*}"
+            profile="$(canonicalize_profile_name "${profile}")"
+            [[ -n "${field}" ]] || return 0
+
+            case "${field}" in
+                op_vault) field="vault" ;;
+                onepassword_vault) field="vault" ;;
+                use_github) field="github" ;;
+            esac
+
+            set_profile_field "${profile}" "${field}" "${value}"
+            ;;
+    esac
+}
+
+load_config() {
+    local line=""
+    local key=""
+    local raw_value=""
+    local value=""
+    local current_profile=""
+
+    [[ -f "${CONFIG_PATH}" ]] || return 0
+
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="$(trim "${line}")"
+        [[ -n "${line}" ]] || continue
+
+        if [[ "${line}" =~ ^\[(profile|profiles)\.([A-Za-z0-9._-]+)\]$ ]]; then
+            current_profile="$(canonicalize_profile_name "${BASH_REMATCH[2]}")"
+            validate_profile_name "${current_profile}"
+            register_profile "${current_profile}"
+            continue
+        fi
+
+        [[ "${line}" == *"="* ]] || continue
+
+        key="$(trim "${line%%=*}")"
+        raw_value="$(trim "${line#*=}")"
+        value="$(strip_quotes "${raw_value}")"
+        apply_config_setting "${key}" "${value}" "${current_profile}"
+    done < "${CONFIG_PATH}"
+}
+
+prompt_profile() {
+    local -a profile_names=()
+
     if [[ ! -t 0 ]]; then
-        die "machine_type is required. Pass it with -m <home|work|server>"
+        die "A profile is required here. Pass it with -p <profile>"
     fi
 
     if [[ "${HAS_GUM}" == true ]]; then
-        MACHINE_TYPE="$(gum choose --header "Machine type?" "home" "work" "server")"
+        read -r -a profile_names <<< "${PROFILE_NAMES}"
+        PROFILE_NAME="$(gum choose --header "Profile?" "${profile_names[@]}")"
         return 0
     fi
 
     local answer=""
     while true; do
-        read -r -p 'Machine type? [h]ome/[w]ork/[s]erver: ' answer
+        read -r -p 'Profile name: ' answer
         case "${answer}" in
-            h|H|home|Home) MACHINE_TYPE="home"; return 0 ;;
-            w|W|work|Work) MACHINE_TYPE="work"; return 0 ;;
-            s|S|server|Server) MACHINE_TYPE="server"; return 0 ;;
+            "") ;;
+            *)
+                PROFILE_NAME="$(canonicalize_profile_name "${answer}")"
+                validate_profile_name "${PROFILE_NAME}"
+                return 0
+                ;;
         esac
         printf 'Invalid selection.\n' >&2
     done
 }
 
-resolve_machine_type() {
-    if [[ -z "${MACHINE_TYPE}" ]]; then
-        prompt_machine_type
+resolve_selected_profile() {
+    if [[ -z "${PROFILE_NAME}" && -n "${DEFAULT_PROFILE}" ]]; then
+        PROFILE_NAME="${DEFAULT_PROFILE}"
     fi
-    validate_machine_type
+
+    PROFILE_NAME="$(canonicalize_profile_name "${PROFILE_NAME}")"
+
+    if [[ -z "${PROFILE_NAME}" ]]; then
+        return 0
+    fi
+
+    validate_profile_name "${PROFILE_NAME}"
+    register_profile "${PROFILE_NAME}"
+    SELECTED_PROFILE="${PROFILE_NAME}"
 }
 
-command_requires_machine_type() {
+command_uses_profile() {
     case "${COMMAND}" in
-        gh) return 0 ;;
-        create|delete|list) [[ "${USE_OP_FLAG}" == true ]] ;;
+        profiles|gh|create|delete|list|doctor) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -385,26 +554,140 @@ ensure_ssh_dir() {
     chmod 700 "${HOME}/.ssh"
 }
 
-github_title() {
-    local title="${GITHUB_TITLE_TEMPLATE}"
-    title="${title//'{{machine_type}}'/${MACHINE_TYPE}}"
-    title="${title//'{{user}}'/${USER_NAME}}"
-    title="${title//'{{hostname}}'/${HOSTNAME_SHORT}}"
-    printf '%s\n' "${title}"
+profile_default_key_name() {
+    local profile="$1"
+
+    case "${profile}" in
+        ""|personal) printf '%s\n' "${GITHUB_KEY_NAME}" ;;
+        *) printf 'id_%s\n' "${profile}" ;;
+    esac
 }
 
-custom_github_title() {
-    printf '%s - %s@%s\n' "$1" "${USER_NAME}" "${HOSTNAME_SHORT}"
+resolved_profile_key_name() {
+    local profile="${1:-${SELECTED_PROFILE}}"
+    local key_name=""
+
+    key_name="$(get_profile_field "${profile}" "key_name")"
+    if [[ -z "${key_name}" ]]; then
+        key_name="$(profile_default_key_name "${profile}")"
+    fi
+
+    printf '%s\n' "${key_name}"
 }
 
-key_comment() {
-    local key_kind="$1"
-    local name="${2:-}"
+resolved_storage() {
+    local profile="${1:-${SELECTED_PROFILE}}"
+    local storage=""
+    local use_1password=""
 
-    if [[ "${key_kind}" == "github" ]]; then
-        github_title
+    storage="$(get_profile_field "${profile}" "storage")"
+    [[ -n "${storage}" ]] || storage="$(get_profile_field "${profile}" "provider")"
+    if [[ -z "${storage}" ]]; then
+        use_1password="$(get_profile_field "${profile}" "use_1password")"
+        if truthy "${use_1password}"; then
+            storage="1password"
+        fi
+    fi
+    if [[ -z "${storage}" ]]; then
+        if truthy "${USE_1PASSWORD_DEFAULT}"; then
+            storage="1password"
+        else
+            storage="local"
+        fi
+    fi
+
+    printf '%s\n' "${storage}"
+}
+
+selected_profile_uses_github() {
+    local profile="${1:-${SELECTED_PROFILE}}"
+
+    profile_truthy "${profile}" "github" || profile_truthy "${profile}" "use_github"
+}
+
+render_title_template() {
+    local template="$1"
+    local key_name="$2"
+    local profile="${3:-${SELECTED_PROFILE}}"
+    local legacy_machine_type=""
+    local profile_or_key=""
+
+    legacy_machine_type="$(legacy_machine_type_name "${profile}")"
+    if [[ -n "${profile}" ]]; then
+        profile_or_key="${profile}"
     else
-        custom_github_title "${name}"
+        profile_or_key="${key_name}"
+    fi
+
+    template="${template//'{{profile}}'/${profile}}"
+    template="${template//'{{machine_type}}'/${legacy_machine_type}}"
+    template="${template//'{{user}}'/${USER_NAME}}"
+    template="${template//'{{hostname}}'/${HOSTNAME_SHORT}}"
+    template="${template//'{{key_name}}'/${key_name}}"
+    template="${template//'{{profile_or_key}}'/${profile_or_key}}"
+    printf '%s\n' "${template}"
+}
+
+resolved_title() {
+    local key_name="$1"
+    local mode="$2"
+    local profile="${3:-${SELECTED_PROFILE}}"
+    local template=""
+
+    if [[ "${mode}" == "github" ]]; then
+        template="$(get_profile_field "${profile}" "github_title")"
+        [[ -n "${template}" ]] || template="$(get_profile_field "${profile}" "title")"
+        [[ -n "${template}" ]] || template="${GITHUB_TITLE_TEMPLATE}"
+    else
+        template="$(get_profile_field "${profile}" "title")"
+        [[ -n "${template}" ]] || template="$(get_profile_field "${profile}" "comment")"
+        [[ -n "${template}" ]] || template="${TITLE_TEMPLATE}"
+    fi
+
+    render_title_template "${template}" "${key_name}" "${profile}"
+}
+
+resolved_key_name_for_command() {
+    if [[ -n "${KEY_NAME}" ]]; then
+        printf '%s\n' "${KEY_NAME}"
+        return 0
+    fi
+
+    if [[ "${COMMAND}" == "gh" || -n "${SELECTED_PROFILE}" ]]; then
+        resolved_profile_key_name
+        return 0
+    fi
+
+    die "Key name is required"
+}
+
+profile_summary_line() {
+    local profile="$1"
+    local key_name=""
+    local storage=""
+    local github_enabled="no"
+    local vault=""
+    local suffix=""
+    local suffix_label=""
+
+    key_name="$(resolved_profile_key_name "${profile}")"
+    storage="$(resolved_storage "${profile}")"
+    selected_profile_uses_github "${profile}" && github_enabled="yes"
+    if [[ "${storage}" == "1password" ]]; then
+        vault="$(get_profile_field "${profile}" "vault")"
+        [[ -n "${vault}" ]] || vault="$(default_onepassword_vault "${profile}")"
+    fi
+
+    [[ "${profile}" == "${DEFAULT_PROFILE}" ]] && suffix=" default"
+    [[ "${profile}" == "${SELECTED_PROFILE}" ]] && suffix="${suffix} selected"
+    if [[ -n "${suffix}" ]]; then
+        suffix_label=" (${suffix# })"
+    fi
+
+    if [[ -n "${vault}" ]]; then
+        printf '%s: key=%s, storage=%s, github=%s, vault=%s%s\n' "${profile}" "${key_name}" "${storage}" "${github_enabled}" "${vault}" "${suffix_label}"
+    else
+        printf '%s: key=%s, storage=%s, github=%s%s\n' "${profile}" "${key_name}" "${storage}" "${github_enabled}" "${suffix_label}"
     fi
 }
 
@@ -444,7 +727,10 @@ gh_ready() {
 }
 
 gh_installed() {
-    command_exists gh
+    local gh_path=""
+
+    gh_path="$(command -v gh 2>/dev/null || true)"
+    [[ -n "${gh_path}" && "${gh_path}" == /* && -x "${gh_path}" ]]
 }
 
 op_ready() {
@@ -452,10 +738,11 @@ op_ready() {
 }
 
 default_onepassword_vault() {
-    case "${MACHINE_TYPE}" in
+    case "${1:-${SELECTED_PROFILE}}" in
         work) printf 'Employee\n' ;;
-        home) printf 'Personal\n' ;;
+        personal|"") printf 'Personal\n' ;;
         server) printf 'Server\n' ;;
+        *) printf 'Personal\n' ;;
     esac
 }
 
@@ -471,7 +758,8 @@ resolve_onepassword_vault() {
     if [[ -n "${ONEPASSWORD_VAULT}" ]]; then
         requested_vault="${ONEPASSWORD_VAULT}"
     else
-        requested_vault="$(default_onepassword_vault)"
+        requested_vault="$(get_profile_field "${SELECTED_PROFILE}" "vault")"
+        [[ -n "${requested_vault}" ]] || requested_vault="$(default_onepassword_vault "${SELECTED_PROFILE}")"
         ONEPASSWORD_VAULT="${requested_vault}"
     fi
 
@@ -480,7 +768,7 @@ resolve_onepassword_vault() {
         return 0
     fi
 
-    _warn "Cannot access 1Password vault '${requested_vault}'${ONEPASSWORD_VAULT_EXPLICIT:+" (explicitly configured)"}${MACHINE_TYPE:+" for ${MACHINE_TYPE} machine type"}"
+    _warn "Cannot access 1Password vault '${requested_vault}'${ONEPASSWORD_VAULT_EXPLICIT:+" (explicitly configured)"}${SELECTED_PROFILE:+" for profile ${SELECTED_PROFILE}"}"
     _warn "Tip: run 'op account list' to see signed-in accounts, or 'op signin' to authenticate"
     exit 1
 }
@@ -794,11 +1082,17 @@ generate_onepassword_key() {
 }
 
 should_use_1password() {
+    local storage=""
+
     [[ "${USE_OP_FLAG}" == true ]] && return 0
-    case "${USE_1PASSWORD_DEFAULT}" in
-        true|TRUE|True|1|yes|YES|on|ON) return 0 ;;
-    esac
-    return 1
+    storage="$(resolved_storage)"
+    [[ "${storage}" == "1password" ]]
+}
+
+should_sync_to_github() {
+    [[ "${COMMAND}" == "gh" || "${USE_GH_FLAG}" == true ]] && return 0
+    selected_profile_uses_github
+    return $?
 }
 
 create_key_material() {
@@ -806,9 +1100,13 @@ create_key_material() {
     local name="$2"
     local key_path="$3"
     local title=""
+    local title_mode="local"
 
     ensure_ssh_dir
-    title="$(key_comment "${key_kind}" "${name}")"
+    if [[ "${key_kind}" == "github" ]] || should_sync_to_github; then
+        title_mode="github"
+    fi
+    title="$(resolved_title "${name}" "${title_mode}")"
 
     if should_use_1password; then
         generate_onepassword_key "${key_path}" "${title}"
@@ -830,7 +1128,11 @@ create_key_command() {
     local replace_existing=false
 
     ensure_mutable_key_name "${name}"
-    title="$(key_comment "${key_kind}" "${name}")"
+    if [[ "${key_kind}" == "github" ]] || should_sync_to_github; then
+        title="$(resolved_title "${name}" "github")"
+    else
+        title="$(resolved_title "${name}" "local")"
+    fi
     if [[ -f "${key_path}" || -f "${key_path}.pub" ]]; then
         if ! confirm "Key already exists at '${key_path}'. Recreate it?"; then
             die "Aborted"
@@ -850,7 +1152,7 @@ create_key_command() {
         staged_local_private=true
     fi
 
-    if [[ "${key_kind}" == "github" || "${USE_GH_FLAG}" == true ]]; then
+    if [[ "${key_kind}" == "github" ]] || should_sync_to_github; then
         upload_key_to_github "${staged_key_path}.pub" "${title}"
         _spin "Testing GitHub SSH..." test_github_ssh
     fi
@@ -872,7 +1174,7 @@ create_key_command() {
         fi
 
         if [[ -n "${existing_blob}" ]]; then
-            if [[ "${key_kind}" == "github" ]]; then
+            if [[ "${key_kind}" == "github" ]] || should_sync_to_github; then
                 delete_github_matches "${existing_blob}" "" || true
             fi
             if should_use_1password; then
@@ -892,7 +1194,7 @@ delete_key_command() {
     validate_key_name "${name}"
     ensure_mutable_key_name "${name}"
     key_path="$(ssh_key_path "${name}")"
-    title="$(custom_github_title "${name}")"
+    title="$(resolved_title "${name}" "github")"
 
     [[ -f "${key_path}" || -f "${key_path}.pub" ]] && had_any=true
     blob="$(public_key_blob "${key_path}.pub" 2>/dev/null || true)"
@@ -911,13 +1213,24 @@ delete_key_command() {
         _success "Removed local key: ${name}"
     fi
 
-    if [[ "${USE_GH_FLAG}" == true ]]; then
+    if should_sync_to_github; then
         delete_github_matches "${blob}" "${title}" || true
     fi
 
     if [[ "${USE_OP_FLAG}" == true ]]; then
         delete_onepassword_matches "${blob}" "${title}" || true
     fi
+}
+
+profiles_command() {
+    local profile=""
+    local section=""
+
+    _header "Profiles"
+    for profile in ${PROFILE_NAMES}; do
+        section+="$(profile_summary_line "${profile}")"$'\n'
+    done
+    _box "${section%$'\n'}"
 }
 
 list_command() {
@@ -934,6 +1247,12 @@ list_command() {
     local local_name=""
     local op_backed_count=0
     local section=""
+
+    if [[ -n "${SELECTED_PROFILE}" ]]; then
+        _header "Profile"
+        _box "$(profile_summary_line "${SELECTED_PROFILE}")"
+        printf '\n'
+    fi
 
     op_agent_keys="$(onepassword_agent_public_keys)"
 
@@ -983,7 +1302,7 @@ list_command() {
 
     if [[ "${USE_GH_FLAG}" == true ]]; then
         printf '\n'
-        _header "GitHub: all keys, regardless of machine type"
+        _header "GitHub"
         if gh_ready; then
             section=""
             found=false
@@ -1010,7 +1329,7 @@ list_command() {
         if op_ready; then
             ONEPASSWORD_VAULT="$(resolve_onepassword_vault)"
             printf '\n'
-            _header "1Password: ${ONEPASSWORD_VAULT} vault (${MACHINE_TYPE})"
+            _header "1Password: ${ONEPASSWORD_VAULT} vault${SELECTED_PROFILE:+ (${SELECTED_PROFILE})}"
             section=""
             found=false
             while IFS=$'\t' read -r id title key_blob; do
@@ -1068,7 +1387,7 @@ doctor_github_key() {
     local github_match=false
     local github_checks_fatal=true
 
-    key_path="$(ssh_key_path "${GITHUB_KEY_NAME}")"
+    key_path="$(ssh_key_path "$(resolved_profile_key_name)")"
     printf '\n'
     _header "GitHub key checks"
 
@@ -1138,6 +1457,12 @@ doctor_command() {
     local permission_issue=0
     local github_issue_count=0
 
+    if [[ -n "${SELECTED_PROFILE}" ]]; then
+        _header "Profile"
+        _box "$(profile_summary_line "${SELECTED_PROFILE}")"
+        printf '\n'
+    fi
+
     _header "Local checks"
     if [[ -d "${HOME}/.ssh" ]]; then
         dir_perms="$(get_perms "${HOME}/.ssh")"
@@ -1188,7 +1513,7 @@ doctor_command() {
         issues=$((issues + 1))
     fi
 
-    key_path="$(ssh_key_path "${GITHUB_KEY_NAME}")"
+    key_path="$(ssh_key_path "$(resolved_profile_key_name)")"
     if [[ -f "${key_path}.pub" ]]; then
         doctor_github_key github_issue_count || true
         issues=$((issues + github_issue_count))
@@ -1404,17 +1729,26 @@ cleanup_command() {
 }
 
 interactive_mode() {
+    local -a profile_names=()
+
     if [[ "${HAS_GUM}" != true ]]; then
         usage
         exit 1
     fi
 
-    COMMAND="$(gum choose --header "sshkey" "gh" "create" "delete" "list" "doctor" "cleanup")"
+    COMMAND="$(gum choose --header "sshkey" "profiles" "gh" "create" "delete" "list" "doctor" "cleanup")"
+
+    if [[ "${COMMAND}" != "cleanup" ]]; then
+        read -r -a profile_names <<< "${PROFILE_NAMES}"
+        PROFILE_NAME="$(gum choose --header "Profile" "${profile_names[@]}")"
+    fi
 
     case "${COMMAND}" in
         create|delete)
-            KEY_NAME="$(gum input --placeholder "Key name" --header "Enter key name")"
-            validate_key_name "${KEY_NAME}"
+            KEY_NAME="$(gum input --placeholder "Leave blank to use the profile key" --header "Key name")"
+            if [[ -n "${KEY_NAME}" ]]; then
+                validate_key_name "${KEY_NAME}"
+            fi
 
             local options=()
             [[ "${COMMAND}" == "create" ]] && options+=("Add to GitHub (-gh)")
@@ -1448,7 +1782,7 @@ parse_args() {
     }
 
     case "$1" in
-        gh|create|delete|list|doctor|cleanup)
+        profiles|gh|create|delete|list|doctor|cleanup)
             COMMAND="$1"
             shift
             ;;
@@ -1468,13 +1802,21 @@ parse_args() {
         case "${arg}" in
             -y|-yes|--yes) FORCE=true ;;
             -n|--dry-run) DRY_RUN=true ;;
+            -p|--profile)
+                shift
+                [[ $# -gt 0 ]] || die "Missing value for ${arg}"
+                PROFILE_NAME="$1"
+                ;;
+            -p=*|--profile=*)
+                PROFILE_NAME="${arg#*=}"
+                ;;
             -m)
                 shift
                 [[ $# -gt 0 ]] || die "Missing value for -m"
-                MACHINE_TYPE="$1"
+                PROFILE_NAME="$1"
                 ;;
             -m=*)
-                MACHINE_TYPE="${arg#-m=}"
+                PROFILE_NAME="${arg#-m=}"
                 ;;
             -1p|--1p) USE_OP_FLAG=true ;;
             -gh|--gh) USE_GH_FLAG=true ;;
@@ -1498,14 +1840,24 @@ parse_args() {
         shift
     done
 
+    PROFILE_NAME="$(canonicalize_profile_name "${PROFILE_NAME}")"
+    if [[ -n "${PROFILE_NAME}" ]]; then
+        validate_profile_name "${PROFILE_NAME}"
+    fi
+
     case "${COMMAND}" in
+        profiles)
+            [[ -z "${KEY_NAME}" ]] || die "sshkey profiles does not take a key name"
+            [[ "${FORCE}" == false ]] || die "-y is not used with profiles"
+            [[ "${DRY_RUN}" == false ]] || die "--dry-run is only used with cleanup"
+            ;;
         gh)
             [[ -z "${KEY_NAME}" ]] || die "gh commands do not take a key name"
             [[ "${DRY_RUN}" == false ]] || die "--dry-run is only used with cleanup"
             [[ "${USE_GH_FLAG}" == false ]] || die "-gh is not used with gh commands"
             ;;
         create|delete)
-            validate_key_name "${KEY_NAME}"
+            [[ -z "${KEY_NAME}" ]] || validate_key_name "${KEY_NAME}"
             [[ "${DRY_RUN}" == false ]] || die "--dry-run is only used with cleanup"
             ;;
         list)
@@ -1530,24 +1882,30 @@ parse_args() {
 
 main() {
     local key_path=""
+    local resolved_key_name=""
 
     load_config
     parse_args "$@"
-    if command_requires_machine_type; then
-        resolve_machine_type
+    if command_uses_profile; then
+        resolve_selected_profile
     fi
 
     case "${COMMAND}" in
+        profiles)
+            profiles_command
+            ;;
         gh)
-            key_path="$(ssh_key_path "${GITHUB_KEY_NAME}")"
-            create_key_command "github" "github" "${key_path}"
+            resolved_key_name="$(resolved_key_name_for_command)"
+            key_path="$(ssh_key_path "${resolved_key_name}")"
+            create_key_command "github" "${resolved_key_name}" "${key_path}"
             ;;
         create)
-            key_path="$(ssh_key_path "${KEY_NAME}")"
-            create_key_command "custom" "${KEY_NAME}" "${key_path}"
+            resolved_key_name="$(resolved_key_name_for_command)"
+            key_path="$(ssh_key_path "${resolved_key_name}")"
+            create_key_command "custom" "${resolved_key_name}" "${key_path}"
             ;;
         delete)
-            delete_key_command "${KEY_NAME}"
+            delete_key_command "$(resolved_key_name_for_command)"
             ;;
         list)
             list_command
