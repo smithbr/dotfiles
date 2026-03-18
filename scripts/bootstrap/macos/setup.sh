@@ -25,7 +25,7 @@ fi
 
 # Enable Rosetta 2 on Apple Silicon
 if [[ "$(uname -m)" == "arm64" ]]; then
-    if ! /usr/bin/pgrep -q oahd; then
+    if ! pgrep -q oahd >/dev/null 2>&1; then
         spin "Installing Rosetta 2..." softwareupdate --install-rosetta --agree-to-license
     else
         log_info "Rosetta 2 already installed"

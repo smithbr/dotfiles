@@ -3,6 +3,7 @@
 set -euo pipefail
 
 BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck disable=SC1091
 source "${BASEDIR}/scripts/common.sh"
 
 require_non_root
@@ -17,6 +18,60 @@ CHEZMOI_DEFAULT_SOURCE="${HOME}/.dotfiles/dotfiles"
 CHEZMOI_CONFIG_DIR="${HOME}/.config/chezmoi"
 CHEZMOI_CONFIG_FILE="${CHEZMOI_CONFIG_DIR}/chezmoi.json"
 LOCAL_INSTALL_SSH_KEY_PATH="${HOME}/.ssh/id_rsa"
+HAS_GUM=false
+command -v gum >/dev/null 2>&1 && [[ -t 1 ]] && HAS_GUM=true
+
+_header() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --bold --foreground 212 "$1"
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
+_item() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 244 "  $1"
+    else
+        printf '  %s\n' "$1"
+    fi
+}
+
+_box() {
+    local content="$1"
+
+    if [[ "${HAS_GUM}" == true ]]; then
+        printf '%s' "${content}" | gum style --border rounded --border-foreground 240 --margin "0 0" --padding "0 1"
+    else
+        printf '%s\n' "${content}" | sed 's/^/  /'
+    fi
+}
+
+begin_section() {
+    printf '\n'
+    _header "$1"
+}
+
+run_boxed() {
+    local tmp_output=""
+    local output=""
+    local status=0
+
+    tmp_output="$(mktemp "${TMPDIR:-/tmp}/install-output.XXXXXX")"
+    if ! "$@" > "${tmp_output}" 2>&1; then
+        status=$?
+    fi
+    output="$(cat "${tmp_output}")"
+    rm -f "${tmp_output}"
+
+    if [[ -n "${output}" ]]; then
+        _box "${output}"
+    else
+        _box "Done."
+    fi
+
+    return "${status}"
+}
 
 ssh_key_comment() {
     printf '%s@%s\n' "${USER:-$(id -un)}" "$(hostname -s 2>/dev/null || hostname)"
@@ -66,11 +121,7 @@ copy_and_list_local_example_files() {
     review_message+=$'  - ~/.ssh/config.local\n'
     review_message+=$'  - ~/.config/1Password/ssh/agent.toml'
 
-    if command -v gum >/dev/null 2>&1 && [[ -t 1 ]]; then
-        printf '\n%s\n' "${review_message}" | gum style --border rounded --border-foreground 240 --padding "0 1"
-    else
-        printf '\n%s\n' "${review_message}"
-    fi
+    printf '%s\n' "${review_message}"
 }
 
 ensure_dotfiles_repo_link() {
@@ -178,36 +229,64 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-ensure_dotfiles_repo_link
+begin_section "Repository"
+_item "Running dotfiles repo link check"
+_item "Running ln -sfn ${BASEDIR} ${HOME}/.dotfiles when needed"
+run_boxed ensure_dotfiles_repo_link
 
-spin "Ensuring SSH key exists..." ensure_local_install_ssh_key
+begin_section "SSH Key"
+_item "Running SSH key existence check"
+_item "Running ssh-keygen when the local install key is missing"
+run_boxed ensure_local_install_ssh_key
 
 if [[ "${run_system_bootstrap}" -eq 1 ]]; then
+    begin_section "System Bootstrap"
     case "${OSTYPE}" in
         darwin*)
+            _item "Running chmod +x scripts/bootstrap/macos/setup.sh"
+            _item "Running ./scripts/bootstrap/macos/setup.sh"
             chmod +x scripts/bootstrap/macos/setup.sh
             ./scripts/bootstrap/macos/setup.sh
             ;;
         linux*)
+            _item "Running chmod +x scripts/bootstrap/linux/setup.sh"
+            _item "Running ./scripts/bootstrap/linux/setup.sh"
             chmod +x scripts/bootstrap/linux/setup.sh
             ./scripts/bootstrap/linux/setup.sh
             ;;
     esac
+    _box "System bootstrap completed."
 fi
 
 if [[ "${run_brew}" -eq 1 ]]; then
-    chmod +x homebrew/brew.sh && ./homebrew/brew.sh
+    begin_section "Homebrew"
+    _item "Running chmod +x homebrew/brew.sh"
+    _item "Running ./homebrew/brew.sh"
+    chmod +x homebrew/brew.sh
+    ./homebrew/brew.sh
+    _box "Homebrew setup completed."
 fi
 
-ensure_chezmoi
+begin_section "Chezmoi"
+_item "Running chezmoi availability check"
+_item "Running brew install chezmoi or the standalone installer when needed"
+run_boxed ensure_chezmoi
 
 # Remove invalid config so chezmoi apply can regenerate it from the template
 if [[ -f "${CHEZMOI_CONFIG_FILE}" ]] && ! chezmoi --source "${CHEZMOI_SOURCE}" dump-config &>/dev/null; then
+    begin_section "Chezmoi Config"
+    _item "Running chezmoi --source ${CHEZMOI_SOURCE} dump-config"
+    _item "Running rm -f ${CHEZMOI_CONFIG_FILE}"
     log_warn "Removing invalid ${CHEZMOI_CONFIG_FILE}"
     rm -f "${CHEZMOI_CONFIG_FILE}"
+    _box "Removed invalid ${CHEZMOI_CONFIG_FILE}."
 fi
 
-apply_dotfiles
+begin_section "Apply"
+_item "Running chezmoi status"
+_item "Running chezmoi apply"
+run_boxed apply_dotfiles
+
 chezmoi_source_path="$(chezmoi source-path 2>/dev/null || true)"
 chezmoi_source_resolved="$(resolve_dir_path "${chezmoi_source_path}" || true)"
 chezmoi_default_resolved="$(resolve_dir_path "${CHEZMOI_DEFAULT_SOURCE}" || true)"
@@ -218,22 +297,29 @@ fi
 
 zsh_path="$(command -v zsh || true)"
 if [[ -n "${zsh_path}" ]]; then
+    begin_section "Shell"
     if ! grep -qxF "${zsh_path}" /etc/shells; then
         if command -v sudo >/dev/null 2>&1; then
-            spin "Adding zsh to /etc/shells..." bash -c "printf '%s\n' '${zsh_path}' | sudo tee -a /etc/shells >/dev/null"
+            _item "Running printf '%s\\n' '${zsh_path}' | sudo tee -a /etc/shells >/dev/null"
+            bash -c "printf '%s\n' '${zsh_path}' | sudo tee -a /etc/shells >/dev/null"
         else
             log_warn "sudo not found; could not update /etc/shells"
         fi
     fi
     if [[ "${SHELL}" != "${zsh_path}" ]]; then
-        spin "Setting default shell to zsh..." chsh -s "${zsh_path}"
+        _item "Running chsh -s ${zsh_path}"
+        chsh -s "${zsh_path}"
     fi
+    _box "Shell setup completed."
 fi
 
-copy_and_list_local_example_files
+begin_section "Local Config"
+_item "Running local example file scan"
+run_boxed copy_and_list_local_example_files
 
 if [[ -n "${zsh_path:-}" ]]; then
-    log_info "Run 'exec -l \$SHELL' (or open a new terminal) to reload your shell"
+    begin_section "Next Steps"
+    _box "Run 'exec -l \$SHELL' (or open a new terminal) to reload your shell"
 fi
 
 printf "\nDone.\n"
