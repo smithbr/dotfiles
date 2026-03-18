@@ -1,27 +1,44 @@
-export GNUPGHOME="${XDG_DATA_HOME}/gnupg"
-export DOCKER_CONFIG="${XDG_CONFIG_HOME}/docker"
-export MACHINE_STORAGE_PATH="${XDG_DATA_HOME}/docker-machine"
-export HISTFILE="${XDG_STATE_HOME}/zsh/history"
-export NPM_CONFIG_CACHE="${XDG_CACHE_HOME}/npm"
-export NPM_CONFIG_INIT_MODULE="${XDG_CONFIG_HOME}/npm/config/npm-init.js"
-export NPM_CONFIG_TMP="${XDG_RUNTIME_DIR}/npm"
-export PATH="${HOME}/.local/bin:${PATH}"
-export ZDOTDIR="${XDG_CONFIG_HOME}/zsh"
-export RUSTUP_HOME="${XDG_DATA_HOME}/rustup"
+zmodload zsh/zprof
+
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${HOME}/.cache}"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
 export XDG_DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-${HOME}/.local/run}"
 export XDG_STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
 
+export ANTIDOTE_HOME="${XDG_CACHE_HOME}/antidote"
+export DOCKER_CONFIG="${XDG_CONFIG_HOME}/docker"
+export GNUPGHOME="${XDG_DATA_HOME}/gnupg"
+export MACHINE_STORAGE_PATH="${XDG_DATA_HOME}/docker-machine"
+export NPM_CONFIG_CACHE="${XDG_CACHE_HOME}/npm"
+export NPM_CONFIG_INIT_MODULE="${XDG_CONFIG_HOME}/npm/config/npm-init.js"
+export NPM_CONFIG_TMP="${XDG_RUNTIME_DIR}/npm"
+export NVM_DIR="${XDG_CONFIG_HOME}/nvm"
+export PATH="${HOME}/.local/bin:${PATH}"
+export RUSTUP_HOME="${XDG_DATA_HOME}/rustup"
+export STARSHIP_CONFIG="${XDG_CONFIG_HOME}/starship/starship.toml"
+export STARSHIP_CACHE="${XDG_CACHE_HOME}/starship/cache"
+export ZDOTDIR="${XDG_CONFIG_HOME}/zsh"
+
 if [[ -S "${HOME}/.1password/agent.sock" ]]; then
     export SSHKEY_IDENTITY_AGENT="${HOME}/.1password/agent.sock"
     export SSH_AUTH_SOCK="${SSHKEY_IDENTITY_AGENT}"
 fi
 
-export NVM_DIR="${XDG_CONFIG_HOME}/nvm"
-[ -s "/usr/local/opt/nvm/nvm.sh" ] && \. "/usr/local/opt/nvm/nvm.sh"  # This loads nvm
-[ -s "/usr/local/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/usr/local/opt/nvm/etc/bash_completion.d/nvm"  # This loads nvm bash_completion
+# zsh History configuration
+export HISTFILE="${XDG_STATE_HOME}/zsh/history"
+export HISTSIZE=20000
+export SAVEHIST=20000
+setopt APPEND_HISTORY           # Append to the history file, don't overwrite
+setopt HIST_EXPIRE_DUPS_FIRST   # Expire duplicate entries first when trimming history
+setopt HIST_FIND_NO_DUPS        # Don't display duplicates when searching history
+setopt HIST_IGNORE_ALL_DUPS     # Remove all previous duplicates
+setopt HIST_IGNORE_DUPS         # Ignore duplicate entries
+setopt HIST_IGNORE_SPACE        # Do not record event starting with a space
+setopt HIST_REDUCE_BLANKS       # Remove superfluous blanks from history entries
+setopt HIST_SAVE_NO_DUPS        # Don't save duplicate entries in the history file
+setopt HIST_VERIFY              # Show command with history expansion before executing
+setopt SHARE_HISTORY            # Share history across all sessions
 
 source "${XDG_CONFIG_HOME}/shell/aliases"
 source "${XDG_CONFIG_HOME}/shell/functions"
@@ -48,12 +65,12 @@ if command -v brew >/dev/null 2>&1; then
     antidote_zsh="$(brew --prefix)/opt/antidote/share/antidote/antidote.zsh"
     if [[ -f "${antidote_zsh}" ]]; then
         source "${antidote_zsh}"
-        antidote load "${XDG_CONFIG_HOME}/zsh/plugins.txt"
+        antidote load "${XDG_CONFIG_HOME}/zsh/.zsh_plugins.txt"
     else
         printf '%s\n' "antidote not found at ${antidote_zsh}" >&2
     fi
 elif command -v antidote >/dev/null 2>&1; then
-    antidote load "${XDG_CONFIG_HOME}/zsh/plugins.txt"
+    antidote load "${XDG_CONFIG_HOME}/zsh/.zsh_plugins.txt"
 else
     printf '%s\n' "brew is not available; cannot load antidote" >&2
 fi
@@ -65,3 +82,5 @@ fi
 fpath+=~/.zfunc; autoload -Uz compinit; compinit -d "${XDG_CACHE_HOME}/zsh/zcompdump-${ZSH_VERSION}"
 
 zstyle ':completion:*' menu select
+
+zprof
