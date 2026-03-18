@@ -11,6 +11,7 @@ brew "opencode"
 cask "opencode-desktop"
 
 # Browsers
+brew "agent-browser"
 cask "brave-browser"
 cask "comet"
 cask "firefox"
