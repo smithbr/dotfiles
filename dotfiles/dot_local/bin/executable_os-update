@@ -9,46 +9,9 @@ if [[ -f "${COMMON_SH}" ]]; then
     # shellcheck disable=SC1090,SC1091
     source "${COMMON_SH}"
 else
-    _has_gum=""
-    _has_gum_checked=0
-
-    _check_gum() {
-        if [[ "${_has_gum_checked}" -eq 0 ]]; then
-            _has_gum_checked=1
-            command -v gum >/dev/null 2>&1 && _has_gum=1 || _has_gum=0
-        fi
-    }
-
-    log_info() {
-        _check_gum
-        if [[ "${_has_gum}" -eq 1 ]]; then
-            gum log --level info "$*"
-        else
-            printf 'info: %s\n' "$*"
-        fi
-    }
-
-    log_warn() {
-        _check_gum
-        if [[ "${_has_gum}" -eq 1 ]]; then
-            gum log --level warn "$*" >&2
-        else
-            printf 'warning: %s\n' "$*" >&2
-        fi
-    }
-
-    log_error() {
-        _check_gum
-        if [[ "${_has_gum}" -eq 1 ]]; then
-            gum log --level error "$*" >&2
-        else
-            printf 'error: %s\n' "$*" >&2
-        fi
-    }
-
     require_non_root() {
         if [[ "${EUID}" -eq 0 ]]; then
-            log_error "Do not run this script as root."
+            printf 'error: Do not run this script as root.\n' >&2
             exit 1
         fi
     }
@@ -59,7 +22,7 @@ else
         elif command -v sudo >/dev/null 2>&1; then
             sudo "$@"
         else
-            log_error "sudo is required for: $*"
+            printf 'error: sudo is required for: %s\n' "$*" >&2
             exit 1
         fi
     }
@@ -71,6 +34,122 @@ SOFTWAREUPDATE_BIN="${SOFTWAREUPDATE_BIN:-softwareupdate}"
 MAS_BIN="${MAS_BIN:-mas}"
 XCODEBUILD_BIN="${XCODEBUILD_BIN:-xcodebuild}"
 XCODE_APP_PATH="${XCODE_APP_PATH:-/Applications/Xcode.app}"
+
+HAS_GUM=false
+command -v gum >/dev/null 2>&1 && [[ -t 1 ]] && HAS_GUM=true
+
+declare -a SUMMARY_RESULTS=()
+declare -a NEXT_STEPS=()
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
+
+usage() {
+    local help_text
+
+    help_text="$(cat <<'EOF'
+# os-update
+
+Run operating system and package-manager updates for this machine.
+
+## Steps
+
+- `Linux`: run `apt-get update`, `full-upgrade`, `autoremove`, and `autoclean` when available
+- `macOS`: run `softwareupdate --install --all` when available
+- `App Store`: run `mas upgrade` when updates are available
+- `Xcode`: accept the license if a newly updated install requires it
+- `Homebrew`: run `brew update`, `upgrade`, `cleanup`, and clear the brew cache
+
+## Examples
+
+- `os-update`: run the full update flow for the current platform
+EOF
+)"
+
+    if [[ "${HAS_GUM}" == true ]]; then
+        printf '%s\n' "${help_text}" | gum format
+        return
+    fi
+
+    cat <<'EOF'
+Usage:
+  os-update
+  os-update --help
+
+Run operating system and package-manager updates for this machine.
+EOF
+}
+
+_header() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --bold --foreground 212 "$1"
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
+_box() {
+    local content="$1"
+
+    if [[ "${HAS_GUM}" == true ]]; then
+        printf '%s' "${content}" | gum style --border rounded --border-foreground 240 --margin "0 0" --padding "0 1"
+    else
+        printf '%s\n' "${content}" | sed 's/^/  /'
+    fi
+}
+
+_item() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 244 "  $1"
+    else
+        printf '  %s\n' "$1"
+    fi
+}
+
+_success() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 76 --bold "$1"
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
+_warn() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 214 --bold "$1"
+    else
+        printf '%s\n' "$1" >&2
+    fi
+}
+
+die() {
+    printf '%s\n' "$1" >&2
+    exit 1
+}
+
+add_result() {
+    local kind="$1"
+    local message="$2"
+
+    SUMMARY_RESULTS+=("${kind}"$'\t'"${message}")
+
+    case "${kind}" in
+        PASS) PASS_COUNT=$((PASS_COUNT + 1)) ;;
+        WARN) WARN_COUNT=$((WARN_COUNT + 1)) ;;
+        FAIL) FAIL_COUNT=$((FAIL_COUNT + 1)) ;;
+    esac
+}
+
+add_next_step() {
+    local step="$1"
+    local existing=""
+
+    for existing in "${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}"; do
+        [[ "${existing}" == "${step}" ]] && return 0
+    done
+
+    NEXT_STEPS+=("${step}")
+}
 
 append_path_dir() {
     local dir="${1}"
@@ -84,22 +163,6 @@ has_command() {
     local cmd="${1}"
 
     command -v "${cmd}" >/dev/null 2>&1
-}
-
-usage() {
-    printf 'Usage: %s [--help]\n' "$(basename "${0}")"
-    printf '\n'
-    printf 'Update operating system packages and Homebrew packages.\n'
-    printf '\n'
-    printf 'Linux:\n'
-    printf '  - apt-get update/full-upgrade/autoremove/autoclean\n'
-    printf '  - Homebrew update/upgrade/cleanup when brew is installed\n'
-    printf '\n'
-    printf 'macOS:\n'
-    printf '  - softwareupdate --install --all\n'
-    printf '  - mas upgrade when App Store updates are available via mas\n'
-    printf '  - Accept Xcode license if a newly updated Xcode requires it\n'
-    printf '  - Homebrew update/upgrade/cleanup when brew is installed\n'
 }
 
 ensure_brew_in_path() {
@@ -127,92 +190,174 @@ ensure_brew_in_path() {
     esac
 }
 
+platform_label() {
+    case "${OSTYPE}" in
+        darwin*) printf 'macOS\n' ;;
+        linux*) printf 'Linux\n' ;;
+        *) printf 'unknown\n' ;;
+    esac
+}
+
+print_intro() {
+    local section=""
+
+    _header "os-update"
+    section+="Platform: $(platform_label)"
+    section+=$'\n'"apt-get: ${APT_GET_BIN}"
+    section+=$'\n'"brew: ${BREW_BIN}"
+
+    case "${OSTYPE}" in
+        darwin*)
+            section+=$'\n'"softwareupdate: ${SOFTWAREUPDATE_BIN}"
+            section+=$'\n'"mas: ${MAS_BIN}"
+            section+=$'\n'"xcodebuild: ${XCODEBUILD_BIN}"
+            ;;
+    esac
+
+    _box "${section}"
+}
+
 run_brew_updates() {
     local brew_cache=""
+    local section=""
+
+    printf '\n'
+    _header "Homebrew"
 
     ensure_brew_in_path
 
     if ! has_command "${BREW_BIN}"; then
-        log_info "Homebrew not found; skipping Homebrew updates"
-        return
+        section+="Warning: Homebrew not found; skipping Homebrew updates"
+        add_result "WARN" "Homebrew not found; skipping Homebrew updates"
+        _box "${section}"
+        return 0
     fi
 
-    log_info "Updating Homebrew packages"
+    _item "Running brew update"
+    _item "Running brew upgrade"
+    _item "Running brew cleanup --prune=all"
+
     "${BREW_BIN}" update
     "${BREW_BIN}" upgrade
     "${BREW_BIN}" cleanup --prune=all
 
     brew_cache="$("${BREW_BIN}" --cache)"
-    log_info "Removing Homebrew cache at ${brew_cache}"
     rm -rf "${brew_cache}"
+
+    add_result "PASS" "Homebrew updates completed"
 }
 
 run_linux_updates() {
+    local section=""
+
+    printf '\n'
+    _header "Linux"
+
     if ! has_command "${APT_GET_BIN}"; then
-        log_warn "apt-get not found; skipping apt updates"
+        section+="Warning: apt-get not found; skipping apt updates"
+        _box "${section}"
+        add_result "WARN" "apt-get not found; skipping apt updates"
         run_brew_updates
-        return
+        return 0
     fi
 
-    log_info "Updating apt package index"
+    _item "Running apt-get update"
+    _item "Running apt-get full-upgrade -y"
+    _item "Running apt-get autoremove --purge -y"
+    _item "Running apt-get autoclean -y"
+
     sudo_cmd "${APT_GET_BIN}" update
-
-    log_info "Upgrading apt packages"
     sudo_cmd "${APT_GET_BIN}" full-upgrade -y
-
-    log_info "Removing unused apt packages"
     sudo_cmd "${APT_GET_BIN}" autoremove --purge -y
-
-    log_info "Cleaning apt caches"
     sudo_cmd "${APT_GET_BIN}" autoclean -y
 
+    add_result "PASS" "Linux package updates completed"
     run_brew_updates
 }
 
 run_app_store_updates() {
     local outdated_output=""
+    local section=""
+
+    printf '\n'
+    _header "App Store"
+    _item "Running mas outdated"
 
     if ! has_command "${MAS_BIN}"; then
-        log_info "mas not found; skipping App Store updates"
-        return
+        section+="Warning: mas not found; skipping App Store updates"
+        _box "${section}"
+        add_result "WARN" "mas not found; skipping App Store updates"
+        return 0
     fi
 
     if ! outdated_output="$("${MAS_BIN}" outdated 2>&1)"; then
-        log_warn "mas could not check App Store updates; skipping"
-        return
+        section+="Warning: mas could not check App Store updates; skipping"
+        _box "${section}"
+        add_result "WARN" "mas could not check App Store updates; skipping"
+        return 0
     fi
 
     if [[ -z "${outdated_output}" ]]; then
-        log_info "No App Store updates available"
-        return
+        section+="No App Store updates available"
+        _box "${section}"
+        add_result "PASS" "No App Store updates available"
+        return 0
     fi
 
-    log_info "Updating App Store apps"
+    _item "Running mas upgrade"
     "${MAS_BIN}" upgrade
+    add_result "PASS" "App Store updates completed"
 }
 
 accept_xcode_license_if_needed() {
+    local section=""
+
+    printf '\n'
+    _header "Xcode"
+
     if [[ ! -d "${XCODE_APP_PATH}" ]]; then
-        return
+        _item "Checking for Xcode at ${XCODE_APP_PATH}"
+        section+="Xcode app not found; skipping license check"
+        _box "${section}"
+        add_result "PASS" "Xcode app not found; skipping license check"
+        return 0
     fi
 
     if ! has_command "${XCODEBUILD_BIN}"; then
-        log_warn "xcodebuild not found; skipping Xcode license check"
-        return
+        _item "Checking for ${XCODEBUILD_BIN}"
+        section+="Warning: xcodebuild not found; skipping Xcode license check"
+        _box "${section}"
+        add_result "WARN" "xcodebuild not found; skipping Xcode license check"
+        return 0
     fi
 
+    _item "Running ${XCODEBUILD_BIN} -license check"
     if ! "${XCODEBUILD_BIN}" -license check >/dev/null 2>&1; then
-        log_info "Accepting Xcode license"
+        _item "Accepting Xcode license"
         sudo_cmd "${XCODEBUILD_BIN}" -license accept
+        add_result "PASS" "Accepted Xcode license"
+        return 0
     fi
+
+    section+="Xcode license already accepted"
+    _box "${section}"
+    add_result "PASS" "Xcode license already accepted"
 }
 
 run_macos_updates() {
+    local section=""
+
+    printf '\n'
+    _header "macOS"
+
     if has_command "${SOFTWAREUPDATE_BIN}"; then
-        log_info "Installing macOS software updates"
+        _item "Running softwareupdate --install --all"
         sudo_cmd "${SOFTWAREUPDATE_BIN}" --install --all
+        add_result "PASS" "macOS software updates completed"
     else
-        log_warn "softwareupdate not found; skipping macOS software updates"
+        section+="Warning: softwareupdate not found; skipping macOS software updates"
+        _box "${section}"
+        add_result "WARN" "softwareupdate not found; skipping macOS software updates"
     fi
 
     run_app_store_updates
@@ -220,22 +365,80 @@ run_macos_updates() {
     run_brew_updates
 }
 
-main() {
+print_summary() {
+    local entry=""
+    local kind=""
+    local message=""
+    local summary_body=""
+    local step=""
+    local steps_body=""
+
+    printf '\n'
+    _header "Summary"
+
+    summary_body="passed: ${PASS_COUNT}"$'\n'"warnings: ${WARN_COUNT}"$'\n'"failed: ${FAIL_COUNT}"
+    for entry in "${SUMMARY_RESULTS[@]}"; do
+        kind="${entry%%$'\t'*}"
+        message="${entry#*$'\t'}"
+        summary_body+=$'\n'
+        summary_body+="${kind}  ${message}"
+    done
+
+    _box "${summary_body}"
+    printf '\n'
+
+    if [[ "${FAIL_COUNT}" -eq 0 && "${WARN_COUNT}" -eq 0 ]]; then
+        if [[ "${HAS_GUM}" == true ]]; then
+            gum style --foreground 76 --bold "Passed: ${PASS_COUNT}  Warnings: ${WARN_COUNT}  Failed: ${FAIL_COUNT}"
+            gum style --foreground 76 --bold "OS update run completed."
+        else
+            printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
+            printf 'OS update run completed.\n'
+        fi
+        return 0
+    fi
+
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 76 --bold "Passed: ${PASS_COUNT}"
+        gum style --foreground 214 --bold "Warnings: ${WARN_COUNT}"
+        gum style --foreground 196 --bold "Failed: ${FAIL_COUNT}"
+        gum style --foreground 214 --bold "Completed with ${WARN_COUNT} warning(s) and ${FAIL_COUNT} failing check(s)."
+    else
+        printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
+        printf 'Completed with %s warning(s) and %s failing check(s).\n' "${WARN_COUNT}" "${FAIL_COUNT}" >&2
+    fi
+
+    for step in "${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}"; do
+        steps_body+="- ${step}"$'\n'
+    done
+
+    if [[ -n "${steps_body}" ]]; then
+        printf '\n'
+        _header "Next Steps"
+        _box "${steps_body%$'\n'}"
+    fi
+
+    [[ "${FAIL_COUNT}" -eq 0 ]]
+}
+
+parse_args() {
     case "${1:-}" in
         "")
             ;;
-        -h|--help)
+        -h|-help|--help|help)
             usage
             exit 0
             ;;
         *)
-            log_error "Unknown argument: ${1}"
-            usage
-            exit 1
+            die "Unknown argument: ${1}"
             ;;
     esac
+}
 
+main() {
+    parse_args "$@"
     require_non_root
+    print_intro
 
     case "${OSTYPE}" in
         darwin*)
@@ -245,12 +448,17 @@ main() {
             run_linux_updates
             ;;
         *)
-            log_error "Unsupported OS: ${OSTYPE}"
+            add_result "FAIL" "Unsupported OS: ${OSTYPE}"
+            add_next_step "Run os-update on macOS or Linux"
+            printf '\n'
+            _header "Platform"
+            _box "FAIL  Unsupported OS: ${OSTYPE}"$'\n'"Fix: Run os-update on macOS or Linux"
+            print_summary
             exit 1
             ;;
     esac
 
-    log_info "OS update run finished"
+    print_summary
 }
 
 main "$@"

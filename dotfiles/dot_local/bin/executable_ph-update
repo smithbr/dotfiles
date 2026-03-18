@@ -9,11 +9,128 @@ if [[ ! -x "${OS_UPDATE_SCRIPT}" ]]; then
     OS_UPDATE_SCRIPT="${SCRIPT_DIR}/executable_os-update"
 fi
 
+HAS_GUM=false
+command -v gum >/dev/null 2>&1 && [[ -t 1 ]] && HAS_GUM=true
+
+declare -a SUMMARY_RESULTS=()
+declare -a NEXT_STEPS=()
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
+
+usage() {
+    local help_text
+
+    help_text="$(cat <<'EOF'
+# ph-update
+
+Run the Pi-hole maintenance flow for this machine.
+
+## Steps
+
+| Step | Description |
+|------|-------------|
+| `os-update` | Run system package updates before privilege escalation |
+| `Pi-hole` | Run `pihole -up` and `pihole -f` |
+| `PADD` | Run `ph-padd -u` |
+
+## Examples
+
+| Command | Description |
+|---------|-------------|
+| `ph-update` | Run the full maintenance flow |
+EOF
+)"
+
+    if command -v gum >/dev/null 2>&1 && [[ -t 1 ]]; then
+        printf '%s\n' "${help_text}" | gum format
+        return
+    fi
+
+    cat <<'EOF'
+Usage:
+  ph-update
+  ph-update --help
+
+Run os-update, refresh Pi-hole, and update PADD.
+EOF
+}
+
+_header() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --bold --foreground 212 "$1"
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
+_box() {
+    local content="$1"
+
+    if [[ "${HAS_GUM}" == true ]]; then
+        printf '%s' "${content}" | gum style --border rounded --border-foreground 240 --margin "0 0" --padding "0 1"
+    else
+        printf '%s\n' "${content}" | sed 's/^/  /'
+    fi
+}
+
+_success() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 76 --bold "$1"
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
+_warn() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 214 --bold "$1"
+    else
+        printf '%s\n' "$1" >&2
+    fi
+}
+
+_item() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 244 "  $1"
+    else
+        printf '  %s\n' "$1"
+    fi
+}
+
+die() {
+    printf '%s\n' "$1" >&2
+    exit 1
+}
+
+add_result() {
+    local kind="$1"
+    local message="$2"
+
+    SUMMARY_RESULTS+=("${kind}"$'\t'"${message}")
+
+    case "${kind}" in
+        PASS) PASS_COUNT=$((PASS_COUNT + 1)) ;;
+        WARN) WARN_COUNT=$((WARN_COUNT + 1)) ;;
+        FAIL) FAIL_COUNT=$((FAIL_COUNT + 1)) ;;
+    esac
+}
+
+add_next_step() {
+    local step="$1"
+    local existing=""
+
+    for existing in "${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}"; do
+        [[ "${existing}" == "${step}" ]] && return 0
+    done
+
+    NEXT_STEPS+=("${step}")
+}
+
 run_os_update() {
     if [[ "${EUID}" -eq 0 ]]; then
         if [[ -z "${SUDO_USER:-}" ]]; then
-            printf 'error: ph-update needs SUDO_USER set to run os-update as the calling user.\n' >&2
-            exit 1
+            die "error: ph-update needs SUDO_USER set to run os-update as the calling user."
         fi
 
         sudo -u "${SUDO_USER}" env PATH="${PATH}" "${OS_UPDATE_SCRIPT}"
@@ -23,22 +140,225 @@ run_os_update() {
     "${OS_UPDATE_SCRIPT}"
 }
 
-# Preserve user's PATH through sudo for ~/.local/bin commands
-if [[ "${EUID}" -ne 0 ]]; then
-    run_os_update
-    exec sudo PATH="${PATH}" PH_UPDATE_SKIP_OS_UPDATE=1 "${0}" "${@+"${@}"}"
-fi
+preflight_check() {
+    local section=""
 
-if [[ "${PH_UPDATE_SKIP_OS_UPDATE:-0}" -eq 0 ]]; then
-    run_os_update
-fi
+    printf '\n'
+    _header "Preflight"
 
-# Update Pi-hole
-pihole -up
-pihole -f
+    if ! command -v pihole >/dev/null 2>&1; then
+        add_result "FAIL" "pihole command is unavailable"
+        add_next_step "Install Pi-hole or ensure the pihole command is on PATH before running ph-update"
+        section+="FAIL  pihole command is unavailable"$'\n'
+        section+="Fix: Install Pi-hole or ensure the pihole command is on PATH before running ph-update"
+        _box "${section}"
+        return 1
+    fi
 
-# Update PADD
-ph-padd -u
+    _box "OK  Pi-hole is installed and available on PATH"
+    add_result "PASS" "Pi-hole is installed and available on PATH"
+    return 0
+}
 
-# Reboot the system
-# reboot
+check_deps() {
+    local missing=0
+    local section=""
+
+    printf '\n'
+    _header "Dependencies"
+
+    if [[ ! -x "${OS_UPDATE_SCRIPT}" ]]; then
+        missing=1
+        add_result "FAIL" "os-update helper is not executable"
+        add_next_step "Ensure ${OS_UPDATE_SCRIPT} exists and is executable"
+        _box "FAIL  os-update helper is not executable"$'\n'"Fix: Ensure ${OS_UPDATE_SCRIPT} exists and is executable"
+        return 1
+    fi
+
+    if ! command -v ph-padd >/dev/null 2>&1; then
+        missing=1
+        add_result "FAIL" "ph-padd command is unavailable"
+        add_next_step "Install ph-padd or ensure the ph-padd command is on PATH"
+        section+="FAIL  ph-padd command is unavailable"$'\n'
+        section+="Fix: Install ph-padd or ensure the ph-padd command is on PATH"$'\n'
+    fi
+
+    if [[ "${missing}" -eq 0 ]]; then
+        _box "OK  Required commands are available"
+        return 0
+    fi
+
+    _box "${section%$'\n'}"
+    return 1
+}
+
+print_intro() {
+    local section=""
+
+    _header "ph-update"
+    section+="OS update helper: ${OS_UPDATE_SCRIPT}"$'\n'
+    section+="Run mode: root"$'\n'
+    if [[ "${PH_UPDATE_SKIP_OS_UPDATE:-0}" -eq 0 ]]; then
+        section+="System updates: pending in this run"
+    else
+        section+="System updates: already completed before elevation"
+    fi
+    _box "${section}"
+}
+
+run_step() {
+    local title="$1"
+    local success_message="$2"
+    local failure_message="$3"
+    local next_step="$4"
+    local running_message="$5"
+    shift 5
+
+    printf '\n'
+    _header "${title}"
+    _item "${running_message}"
+
+    if "$@"; then
+        _box "OK  ${success_message}"
+        add_result "PASS" "${success_message}"
+        return 0
+    fi
+
+    _box "FAIL  ${failure_message}"$'\n'"Fix: ${next_step}"
+    add_result "FAIL" "${failure_message}"
+    add_next_step "${next_step}"
+    return 1
+}
+
+update_pihole() {
+    _item "Running pihole -up"
+    pihole -up
+    _item "Running pihole -f"
+    pihole -f
+}
+
+print_summary() {
+    local entry=""
+    local kind=""
+    local message=""
+    local summary_body=""
+    local step=""
+    local steps_body=""
+
+    printf '\n'
+    _header "Summary"
+
+    summary_body="passed: ${PASS_COUNT}"$'\n'"warnings: ${WARN_COUNT}"$'\n'"failed: ${FAIL_COUNT}"
+    for entry in "${SUMMARY_RESULTS[@]}"; do
+        kind="${entry%%$'\t'*}"
+        message="${entry#*$'\t'}"
+        summary_body+=$'\n'
+        summary_body+="${kind}  ${message}"
+    done
+
+    _box "${summary_body}"
+    printf '\n'
+
+    if [[ "${FAIL_COUNT}" -eq 0 ]]; then
+        if [[ "${HAS_GUM}" == true ]]; then
+            gum style --foreground 76 --bold "Passed: ${PASS_COUNT}  Warnings: ${WARN_COUNT}  Failed: ${FAIL_COUNT}"
+            gum style --foreground 76 --bold "Update run completed."
+        else
+            printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
+            printf 'Update run completed.\n'
+        fi
+        return 0
+    fi
+
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 76 --bold "Passed: ${PASS_COUNT}"
+        gum style --foreground 214 --bold "Warnings: ${WARN_COUNT}"
+        gum style --foreground 196 --bold "Failed: ${FAIL_COUNT}"
+        gum style --foreground 214 --bold "Found ${FAIL_COUNT} failing check(s)."
+    else
+        printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
+        printf 'Found %s failing check(s).\n' "${FAIL_COUNT}" >&2
+    fi
+
+    for step in "${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}"; do
+        steps_body+="- ${step}"$'\n'
+    done
+    if [[ -n "${steps_body}" ]]; then
+        printf '\n'
+        _header "Next Steps"
+        _box "${steps_body%$'\n'}"
+    fi
+
+    return 1
+}
+
+parse_args() {
+    [[ $# -eq 0 ]] && return 0
+
+    case "${1}" in
+        -h|-help|--help|help)
+            usage
+            exit 0
+            ;;
+        *)
+            die "Unknown argument: ${1}"
+            ;;
+    esac
+}
+
+main() {
+    parse_args "$@"
+
+    preflight_check || {
+        print_summary
+        return 1
+    }
+
+    # Preserve user's PATH through sudo for ~/.local/bin commands
+    if [[ "${EUID}" -ne 0 ]]; then
+        run_os_update
+        exec sudo PATH="${PATH}" PH_UPDATE_SKIP_OS_UPDATE=1 "${0}" "${@+"${@}"}"
+    fi
+
+    print_intro
+
+    check_deps || {
+        print_summary
+        return 1
+    }
+
+    if [[ "${PH_UPDATE_SKIP_OS_UPDATE:-0}" -eq 0 ]]; then
+        run_step \
+            "OS Update" \
+            "os-update completed" \
+            "os-update did not complete successfully" \
+            "Run ${OS_UPDATE_SCRIPT} directly and fix any reported update errors" \
+            "Running ${OS_UPDATE_SCRIPT}" \
+            run_os_update || true
+    else
+        printf '\n'
+        _header "OS Update"
+        _box "OK  System updates already ran before elevation"
+        add_result "PASS" "System updates already ran before elevation"
+    fi
+
+    run_step \
+        "Pi-hole" \
+        "Pi-hole update and gravity refresh completed" \
+        "Pi-hole update or gravity refresh failed" \
+        "Run pihole -up and pihole -f manually to inspect the failure" \
+        "Preparing Pi-hole update commands" \
+        update_pihole || true
+
+    run_step \
+        "PADD" \
+        "PADD update completed" \
+        "PADD update failed" \
+        "Run ph-padd -u manually to inspect the failure" \
+        "Running ph-padd -u" \
+        ph-padd -u || true
+
+    print_summary
+}
+
+main "$@"

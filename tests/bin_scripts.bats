@@ -68,8 +68,9 @@ MOCK
 @test "os-update displays help" {
     run "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_os-update" --help
     assert_success
-    assert_output --partial "Usage: executable_os-update [--help]"
-    assert_output --partial "softwareupdate --install --all"
+    assert_output --partial "Usage:"
+    assert_output --partial "os-update"
+    assert_output --partial "package-manager updates"
 }
 
 @test "os-update runs linux apt and Homebrew updates" {
@@ -177,7 +178,47 @@ MOCK
     [[ ! -d "${TEST_TMPDIR}/brew-cache-macos" ]]
 }
 
+@test "ph-update displays help" {
+    run "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-update" --help
+    assert_success
+    assert_output --partial "Usage:"
+    assert_output --partial "ph-update"
+    assert_output --partial "Run os-update, refresh Pi-hole, and update PADD"
+}
+
 @test "ph-update runs os-update before self-elevating through sudo" {
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+printf 'sudo %s\n' "$*"
+MOCK
+
+    cat > "${BIN_SANDBOX}/apt-get" <<'MOCK'
+#!/usr/bin/env bash
+printf 'apt-get %s\n' "$*"
+MOCK
+
+    cat > "${BIN_SANDBOX}/pihole" <<'MOCK'
+#!/usr/bin/env bash
+printf 'pihole %s\n' "$*"
+MOCK
+
+    cat > "${BIN_SANDBOX}/ph-padd" <<'MOCK'
+#!/usr/bin/env bash
+printf 'ph-padd %s\n' "$*"
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/apt-get" "${BIN_SANDBOX}/pihole" "${BIN_SANDBOX}/ph-padd"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-update"
+    assert_success
+    assert_output --partial "sudo apt-get update"
+    assert_output --partial "sudo PATH=${BIN_SANDBOX}:/usr/bin:/bin"
+    assert_output --partial "PH_UPDATE_SKIP_OS_UPDATE=1"
+    assert_output --partial "executable_ph-update"
+}
+
+@test "ph-update fails before os-update when pihole is unavailable" {
     cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
 #!/usr/bin/env bash
 printf 'sudo %s\n' "$*"
@@ -192,11 +233,17 @@ MOCK
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
         "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-update"
+    assert_failure
+    assert_output --partial "pihole command is unavailable"
+    [[ "${output}" != *"sudo apt-get update"* ]]
+}
+
+@test "ph-test displays help" {
+    run "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-test" --help
     assert_success
-    assert_output --partial "sudo apt-get update"
-    assert_output --partial "sudo PATH=${BIN_SANDBOX}:/usr/bin:/bin"
-    assert_output --partial "PH_UPDATE_SKIP_OS_UPDATE=1"
-    assert_output --partial "executable_ph-update"
+    assert_output --partial "Usage:"
+    assert_output --partial "ph-test [dns-server-ip]"
+    assert_output --partial "Defaults to 127.0.0.1"
 }
 
 @test "ph-test self-elevates through sudo and preserves dns server arg" {
