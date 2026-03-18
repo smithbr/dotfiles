@@ -178,7 +178,7 @@ add_next_step() {
     local step="$1"
     local existing=""
 
-    for existing in "${NEXT_STEPS[@]}"; do
+    for existing in "${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}"; do
         [[ "${existing}" == "${step}" ]] && return 0
     done
 
@@ -273,9 +273,15 @@ check_deps() {
 }
 
 load_state() {
+    printf '\n'
+    _header "Discovery"
+    _item "Running tailscale status --json"
     TS_STATUS_JSON="$(tailscale status --json 2>/dev/null || true)"
+    _item "Running tailscale status"
     TS_STATUS_TEXT="$(tailscale status 2>/dev/null || true)"
+    _item "Running tailscale debug prefs"
     TS_PREFS="$(tailscale debug prefs 2>/dev/null || true)"
+    _item "Running tailscale ip -4"
     TS_SELF_IP="$(tailscale ip -4 2>/dev/null || true)"
     TS_SELF_HOSTNAME="$(printf '%s' "${TS_STATUS_JSON}" | grep -o '"DNSName"\s*:\s*"[^"]*"' | head -1 | cut -d'"' -f4 | sed 's/\.$//' || true)"
     TS_ACCEPT_DNS="$(printf '%s' "${TS_PREFS}" | grep -o '"CorpDNS"\s*:\s*[a-z]*' | awk -F: '{gsub(/[[:space:]]/, "", $2); print $2}' || true)"
@@ -298,7 +304,6 @@ print_intro() {
     exit_node_state="$(exit_node_summary)"
     peer_count="$(peer_count_summary)"
 
-    _header "ts-test"
     section+="Platform: ${os_label}"$'\n'
     section+="Backend: ${backend_state}"$'\n'
     section+="Tailscale IPv4: ${TS_SELF_IP:-unassigned}"$'\n'
@@ -316,9 +321,11 @@ test_service() {
 
     printf '\n'
     _header "Service"
+    _item "Running cached backend state checks"
 
     if [[ "${IS_LINUX}" == true ]]; then
         if command_exists systemctl; then
+            _item "Running systemctl is-active --quiet tailscaled"
             if systemctl is-active --quiet tailscaled 2>/dev/null; then
                 section+="OK  tailscaled service is active"$'\n'
                 add_result "PASS" "tailscaled service is active"
@@ -376,6 +383,7 @@ test_network() {
 
     printf '\n'
     _header "Network"
+    _item "Running cached Tailscale IPv4 and MagicDNS checks"
 
     if [[ -n "${TS_SELF_IP}" ]]; then
         section+="OK  Tailscale IPv4 is ${TS_SELF_IP}"$'\n'
@@ -429,6 +437,7 @@ test_dns() {
         return 0
     fi
 
+    _item "Running dig @100.100.100.100 ${TS_SELF_HOSTNAME} +short +timeout=3"
     result="$(dig @100.100.100.100 "${TS_SELF_HOSTNAME}" +short +timeout=3 2>/dev/null || true)"
     if [[ -n "${result}" ]]; then
         section+="OK  The Tailscale resolver returns ${TS_SELF_HOSTNAME}"
@@ -458,6 +467,7 @@ test_exit_node() {
 
     printf '\n'
     _header "Exit Node"
+    _item "Running cached exit node checks"
 
     if [[ -z "${TS_PREFS}" ]]; then
         section+="Warning: Could not read Tailscale prefs, so exit-node checks were skipped"
@@ -480,7 +490,9 @@ test_exit_node() {
             printf '\n'
             _header "Exit Node Forwarding"
 
+            _item "Reading /proc/sys/net/ipv4/ip_forward"
             ipv4_fwd="$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || true)"
+            _item "Reading /proc/sys/net/ipv6/conf/all/forwarding"
             ipv6_fwd="$(cat /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null || true)"
 
             if [[ "${ipv4_fwd}" == "1" ]]; then
@@ -512,9 +524,11 @@ test_exit_node() {
             printf '\n'
             _header "Exit Node NAT"
 
+            command_exists iptables && _item "Running iptables -t nat -S"
             if command_exists iptables && iptables -t nat -S 2>/dev/null | grep -qi "MASQUERADE"; then
                 has_masq=true
             fi
+            command_exists nft && _item "Running nft list ruleset"
             if command_exists nft && nft list ruleset 2>/dev/null | grep -qi "masquerade"; then
                 has_masq=true
             fi
@@ -560,6 +574,7 @@ test_exit_node() {
         return 0
     fi
 
+    _item "Running tailscale ping --timeout=3s ${exit_node_ip}"
     if tailscale ping --timeout=3s "${exit_node_ip}" >/dev/null 2>&1; then
         section+="OK  Exit node is reachable at ${exit_node_ip}"
         add_result "PASS" "Exit node is reachable at ${exit_node_ip}"
@@ -587,6 +602,7 @@ test_peers() {
         [[ -n "${peer_ip}" ]] || continue
         peer_count=$((peer_count + 1))
 
+        _item "Running tailscale ping --timeout=3s --c=1 ${peer_ip}"
         if tailscale ping --timeout=3s --c=1 "${peer_ip}" >/dev/null 2>&1; then
             section+="OK  Peer reachable: ${peer_name} (${peer_ip})"$'\n'
             add_result "PASS" "Peer reachable: ${peer_name} (${peer_ip})"
@@ -658,12 +674,12 @@ print_summary() {
             printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
             printf 'Completed with %s warning(s).\n' "${WARN_COUNT}" >&2
         fi
-        if [[ "${#NEXT_STEPS[@]}" -gt 0 ]]; then
+        for step in "${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}"; do
+            steps_body+="- ${step}"$'\n'
+        done
+        if [[ -n "${steps_body}" ]]; then
             printf '\n'
             _header "Next Steps"
-            for step in "${NEXT_STEPS[@]}"; do
-                steps_body+="- ${step}"$'\n'
-            done
             _box "${steps_body%$'\n'}"
         fi
         return 0
@@ -679,12 +695,12 @@ print_summary() {
         printf 'Found %s failing check(s).\n' "${FAIL_COUNT}" >&2
     fi
 
-    if [[ "${#NEXT_STEPS[@]}" -gt 0 ]]; then
+    for step in "${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}"; do
+        steps_body+="- ${step}"$'\n'
+    done
+    if [[ -n "${steps_body}" ]]; then
         printf '\n'
         _header "Next Steps"
-        for step in "${NEXT_STEPS[@]}"; do
-            steps_body+="- ${step}"$'\n'
-        done
         _box "${steps_body%$'\n'}"
     fi
 
