@@ -1,0 +1,5 @@
+# Install all dependencies with: brew bundle
+# Usage: brew bundle [--file=Brewfile.core]
+
+brew "allure"
+brew "k6"
