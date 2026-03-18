@@ -1,10 +1,9 @@
-mattmc3/ez-compinit
+getantidote/use-omz
 
-zsh-users/zsh-completions
+zsh-users/zsh-completions kind:fpath path:src
 zsh-users/zsh-autosuggestions
 zsh-users/zsh-syntax-highlighting
 
-getantidote/use-omz
 ohmyzsh/ohmyzsh path:lib
 ohmyzsh/ohmyzsh path:plugins/command-not-found
 
