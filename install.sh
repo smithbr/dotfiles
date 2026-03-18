@@ -48,7 +48,7 @@ copy_and_list_local_example_files() {
     local example_path
     local target_path
     local local_path
-    local -a local_paths=()
+    local review_message=""
 
     while IFS= read -r -d '' example_path; do
         target_path="$(chezmoi target-path --source "${CHEZMOI_SOURCE}" "${example_path}")"
@@ -58,15 +58,18 @@ copy_and_list_local_example_files() {
             cp "${target_path}" "${local_path}"
             log_info " Local config ${local_path} doesn't exist yet, creating one from example: ${local_path}"
         fi
-
-        local_paths+=("${local_path}")
     done < <(find "${CHEZMOI_SOURCE}" -type f -name '*.local.example' -print0)
 
-    if [[ "${#local_paths[@]}" -gt 0 ]]; then
-        printf "\nReview these local config files if you still need to personalize this machine:\n"
-        for local_path in "${local_paths[@]}"; do
-            printf "  - %s\n" "${local_path/#"${HOME}"/~}"
-        done
+    review_message=$'Review these local config files if you still need to personalize this machine:\n\n'
+    review_message+=$'  - ~/.config/git/config.local\n'
+    review_message+=$'  - ~/.config/zsh/.zshrc.local\n'
+    review_message+=$'  - ~/.ssh/config.local\n'
+    review_message+=$'  - ~/.config/1Password/ssh/agent.toml'
+
+    if command -v gum >/dev/null 2>&1 && [[ -t 1 ]]; then
+        printf '\n%s\n' "${review_message}" | gum style --border rounded --border-foreground 240 --padding "0 1"
+    else
+        printf '\n%s\n' "${review_message}"
     fi
 }
 
