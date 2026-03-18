@@ -1,6 +1,5 @@
 mattmc3/ez-compinit
 zsh-users/zsh-completions kind:fpath path:src
-zsh-users/zsh-syntax-highlighting
-zdharma-continuum/fast-syntax-highlighting kind:defer
+zdharma-continuum/fast-syntax-highlighting
 zsh-users/zsh-autosuggestions
 mass8326/zsh-chezmoi
