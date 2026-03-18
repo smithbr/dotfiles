@@ -63,3 +63,22 @@ load test_helper
 
     assert_success
 }
+
+@test "zshrc uses ZDOTDIR for local overrides and plugins" {
+    run bash -c '
+        set -euo pipefail
+        file="'"${PROJECT_ROOT}"'/dotfiles/dot_config/zsh/dot_zshrc"
+
+        [[ -f "${file}" ]] || { echo "missing ${file}"; exit 1; }
+        grep -qF "\${ZDOTDIR}/.zshrc.local" "${file}" || {
+            echo "missing ZDOTDIR for .zshrc.local"
+            exit 1
+        }
+        grep -qF "\${ZDOTDIR}/.zsh_plugins.txt" "${file}" || {
+            echo "missing ZDOTDIR for .zsh_plugins.txt"
+            exit 1
+        }
+    '
+
+    assert_success
+}
