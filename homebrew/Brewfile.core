@@ -4,6 +4,7 @@
 # Core Tools
 cask "1password-cli"
 cask "daptify14/tap/chezit"
+brew "bats-core"
 brew "bottom"
 brew "curl"
 brew "docker"
