@@ -16,11 +16,11 @@ load test_helper
             echo "missing ZDOTDIR export"
             exit 1
         }
-        grep -qxF "if [[ -f \"\${ZDOTDIR}/zshenv\" ]]; then" "${file}" || {
+        grep -qxF "if [[ -f \"\${ZDOTDIR}/.zshenv\" ]]; then" "${file}" || {
             echo "missing source guard"
             exit 1
         }
-        grep -qxF "    source \"\${ZDOTDIR}/zshenv\"" "${file}" || {
+        grep -qxF "    source \"\${ZDOTDIR}/.zshenv\"" "${file}" || {
             echo "missing source statement"
             exit 1
         }
