@@ -220,7 +220,7 @@ is_hidden_local_state() {
         "${HOME}/Library/Application Support/Code/"* | "${HOME}/Library/Application Support/Cursor/"* )
             return 0
             ;;
-        "${HOME}/.config/1Password/ssh/agent.toml" | "${HOME}/.config/gh/config.yml" | "${HOME}/.config/git/config.local" | "${HOME}/.config/zsh/.zsh_history" | "${HOME}/.config/zsh/plugins.zsh" | "${HOME}/.local/bin/python"* )
+        "${HOME}/.config/1Password/ssh/agent.toml" | "${HOME}/.config/gh/config.yml" | "${HOME}/.config/git/config.local" | "${HOME}/.config/zsh/zsh_history" | "${HOME}/.config/zsh/plugins.zsh" | "${HOME}/.local/bin/python"* )
             return 0
             ;;
         *"/.DS_Store" | *"/.ignore.swp" | *"/Cookies" | *"/Cookies-journal" | *"/DIPS" | *"/DIPS-wal" | *"/Network Persistent State" | *"/SharedStorage" | *"/SharedStorage-wal" | *"/TransportSecurity" | *"/Trust Tokens" | *"/Trust Tokens-journal" | *"/code.lock" | *"/languagepacks.json" | *"/machineid" | *"/known_hosts" | *"/known_hosts.old" | *"/history.jsonl" | *"/mcp-needs-auth-cache.json" | *"/models_cache.json" | *"/policy-limits.json" | *"/readout-cost-cache.json" | *"/readout-pricing.json" | *"/session_index.jsonl" | *"/stats-cache.json" | *"/auth.json" | *"/.codex-global-state.json" | *"/.personality_migration" | *"/logs_"*.sqlite | *"/logs_"*.sqlite-shm | *"/logs_"*.sqlite-wal | *"/state_"*.sqlite | *"/state_"*.sqlite-shm | *"/state_"*.sqlite-wal )

@@ -38,10 +38,10 @@ if ! command -v brew >/dev/null 2>&1; then
 fi
 
 # Local overrides
-if [[ -f "${XDG_CONFIG_HOME}/zsh/.zshrc.local" ]]; then
-    source "${XDG_CONFIG_HOME}/zsh/.zshrc.local"
-elif [[ -f "${HOME}/.zshrc.local" ]]; then
-    source "${HOME}/.zshrc.local"
+if [[ -f "${XDG_CONFIG_HOME}/zsh/zshrc.local" ]]; then
+    source "${XDG_CONFIG_HOME}/zsh/zshrc.local"
+elif [[ -f "${HOME}/zshrc.local" ]]; then
+    source "${HOME}/zshrc.local"
 fi
 
 if command -v brew >/dev/null 2>&1; then
