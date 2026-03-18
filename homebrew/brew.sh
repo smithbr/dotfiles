@@ -36,9 +36,15 @@ case "${OSTYPE}" in
         ;;
 esac
 
+existing_brew=""
+if existing_brew="$(command -v brew 2>/dev/null)" && [[ -x "${existing_brew}" ]]; then
+    brewbinpath="$(cd "$(dirname "${existing_brew}")" && pwd)"
+    brewsbinpath="$(cd "${brewbinpath}/.." && pwd)/sbin"
+fi
+
 export PATH="${brewbinpath}:${brewsbinpath}:${PATH}"
 
-if [[ ! -x "${brewbinpath}/brew" ]] && ! command -v brew >/dev/null 2>&1; then
+if [[ ! -x "${brewbinpath}/brew" ]]; then
     printf "\n\nInstalling %s...\n\n" "${brewpath}"
     /bin/bash -c "$(curl -fsSL "https://raw.githubusercontent.com/${brewplatform}/install/HEAD/install.sh")"
 fi
@@ -133,36 +139,6 @@ entry_is_brew_managed() {
     return 1
 }
 
-cask_app_bundle_exists() {
-    local pkg_name="$1"
-    local cask_json=""
-    local app_candidate=""
-
-    if [[ "${os_name}" != "Darwin" ]]; then
-        return 1
-    fi
-
-    cask_json="$(brew info --cask --json=v2 "${pkg_name}" 2>/dev/null || true)"
-    if [[ -z "${cask_json}" ]]; then
-        return 1
-    fi
-
-    while IFS= read -r app_candidate; do
-        app_candidate="${app_candidate#\"}"
-        app_candidate="${app_candidate%\"}"
-        app_candidate="${app_candidate%%.app*}.app"
-        app_candidate="${app_candidate##*/}"
-
-        [[ -z "${app_candidate}" ]] && continue
-
-        if [[ -d "/Applications/${app_candidate}" ]] || [[ -d "${HOME}/Applications/${app_candidate}" ]]; then
-            return 0
-        fi
-    done < <(printf '%s\n' "${cask_json}" | grep -o '"[^"]*\.app[^"]*"')
-
-    return 1
-}
-
 optional_entry_is_installed() {
     local pkg_type="$1"
     local pkg_name="$2"
@@ -171,15 +147,19 @@ optional_entry_is_installed() {
         return 0
     fi
 
-    if [[ "${pkg_type}" == "cask" ]] && cask_app_bundle_exists "${pkg_name}"; then
-        return 0
-    fi
-
     return 1
 }
 
+has_interactive_tty() {
+    if [[ ! -t 0 || ! -t 1 || ! -r /dev/tty || ! -w /dev/tty ]]; then
+        return 1
+    fi
+
+    return 0
+}
+
 optional_prompt_mode() {
-    if [[ ! -e /dev/tty ]]; then
+    if ! has_interactive_tty; then
         printf 'skip\n'
         return
     fi
@@ -279,8 +259,6 @@ prompt_optional_brewfile() {
     local optional_brewfile="$1"
     local prompt_label="$2"
     local tmp_optional_brewfile
-    local tmp_scan_output
-    local scan_pid
     local selected_optional=0
     local -a optional_entries=()
     local -a optional_names=()
@@ -296,57 +274,36 @@ prompt_optional_brewfile() {
     local selected_name
     local prompt_mode=""
     tmp_optional_brewfile="$(mktemp "${TMPDIR:-/tmp}/brewfile-optional.XXXXXX")"
-    tmp_scan_output="$(mktemp "${TMPDIR:-/tmp}/brewfile-optional-scan.XXXXXX")"
+    log_info "Checking already installed optional packages..."
 
-    collect_pending_optional_entries() {
-        while IFS= read -r raw_line || [[ -n "${raw_line}" ]]; do
-            line="${raw_line#"${raw_line%%[![:space:]]*}"}"
-            line="${line%"${line##*[![:space:]]}"}"
+    while IFS= read -r raw_line || [[ -n "${raw_line}" ]]; do
+        line="${raw_line#"${raw_line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
 
-            [[ -z "${line}" ]] && continue
-            if [[ "${line}" == \#* ]]; then
-                continue
-            fi
+        [[ -z "${line}" ]] && continue
+        if [[ "${line}" == \#* ]]; then
+            continue
+        fi
 
-            if [[ "${line}" =~ ^(brew|cask|tap|mas)[[:space:]]+\"([^\"]+)\" ]]; then
-                pkg_type="${BASH_REMATCH[1]}"
-                pkg_name="${BASH_REMATCH[2]}"
-            elif [[ "${line}" =~ ^(brew|cask|tap|mas)[[:space:]]+\'([^\']+)\' ]]; then
-                pkg_type="${BASH_REMATCH[1]}"
-                pkg_name="${BASH_REMATCH[2]}"
-            else
-                log_warn "Skipping unsupported optional line: ${line}"
-                continue
-            fi
+        if [[ "${line}" =~ ^(brew|cask|tap|mas)[[:space:]]+\"([^\"]+)\" ]]; then
+            pkg_type="${BASH_REMATCH[1]}"
+            pkg_name="${BASH_REMATCH[2]}"
+        elif [[ "${line}" =~ ^(brew|cask|tap|mas)[[:space:]]+\'([^\']+)\' ]]; then
+            pkg_type="${BASH_REMATCH[1]}"
+            pkg_name="${BASH_REMATCH[2]}"
+        else
+            log_warn "Skipping unsupported optional line: ${line}"
+            continue
+        fi
 
-            if optional_entry_is_installed "${pkg_type}" "${pkg_name}"; then
-                continue
-            fi
+        if optional_entry_is_installed "${pkg_type}" "${pkg_name}"; then
+            continue
+        fi
 
-            printf '%s\t%s\n' "${pkg_type}" "${pkg_name}" >> "${tmp_scan_output}"
-        done < "${optional_brewfile}"
-    }
-
-    collect_pending_optional_entries &
-    scan_pid=$!
-
-    if command -v gum >/dev/null 2>&1 && [[ -e /dev/tty ]]; then
-        spin "Checking already installed optional packages..." \
-            bash -c "while kill -0 \"\$1\" 2>/dev/null; do sleep 0.1; done" _ "${scan_pid}"
-    else
-        log_info "Checking already installed optional packages..."
-    fi
-
-    wait "${scan_pid}"
-
-    while IFS=$'\t' read -r pkg_type pkg_name || [[ -n "${pkg_type:-}" ]]; do
-        [[ -z "${pkg_type:-}" || -z "${pkg_name:-}" ]] && continue
         optional_entries+=("${pkg_type} \"${pkg_name}\"")
         optional_names+=("${pkg_name}")
         pending_count=$((pending_count + 1))
-    done < "${tmp_scan_output}"
-
-    rm -f "${tmp_scan_output}"
+    done < "${optional_brewfile}"
 
     if [[ "${pending_count}" -eq 0 ]]; then
         log_info "All ${prompt_label}s already installed"

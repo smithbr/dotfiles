@@ -211,111 +211,33 @@ _parse_brewfile_line() {
     assert_output "MANAGED"
 }
 
-@test "optional cask detection treats matching app bundle as already installed" {
+@test "optional entries only count as installed when Homebrew manages them" {
     run bash -c '
         set -euo pipefail
 
-        os_name="Darwin"
-        HOME="'"${TEST_TMPDIR}"'/home"
-        mkdir -p "${HOME}/Applications/Example App.app"
+        entry_is_brew_managed() {
+            local pkg_type="$1"
+            local pkg_name="$2"
 
-        cask_app_bundle_exists() {
-            local pkg_name="$1"
-            local cask_json=""
-            local app_candidate=""
-
-            if [[ "${os_name}" != "Darwin" ]]; then
-                return 1
-            fi
-
-            case "${pkg_name}" in
-                example-app)
-                    cask_json=$'"'"'{"casks":[{"artifacts":[{"app":["Example App.app"]}]}]}'"'"'
-                    ;;
-                *)
-                    return 1
-                    ;;
-            esac
-
-            while IFS= read -r app_candidate; do
-                app_candidate="${app_candidate#\"}"
-                app_candidate="${app_candidate%\"}"
-                app_candidate="${app_candidate%%.app*}.app"
-                app_candidate="${app_candidate##*/}"
-
-                [[ -z "${app_candidate}" ]] && continue
-
-                if [[ -d "/Applications/${app_candidate}" ]] || [[ -d "${HOME}/Applications/${app_candidate}" ]]; then
-                    return 0
-                fi
-            done < <(printf "%s\n" "${cask_json}" | grep -o '"'"'"[^"]*\.app[^"]*"'"'"')
-
-            return 1
+            [[ "${pkg_type}:${pkg_name}" == "cask:chatgpt" ]]
         }
 
         optional_entry_is_installed() {
             local pkg_type="$1"
             local pkg_name="$2"
 
-            if [[ "${pkg_type}" == "cask" ]] && cask_app_bundle_exists "${pkg_name}"; then
+            if entry_is_brew_managed "${pkg_type}" "${pkg_name}"; then
                 return 0
             fi
 
             return 1
         }
 
-        optional_entry_is_installed cask example-app && echo "INSTALLED" || echo "MISSING"
+        optional_entry_is_installed cask chatgpt && echo "INSTALLED" || echo "MISSING"
+        optional_entry_is_installed cask claude && echo "INSTALLED" || echo "MISSING"
     '
     assert_success
-    assert_output "INSTALLED"
-}
-
-@test "optional cask detection ignores unrelated app bundles" {
-    run bash -c '
-        set -euo pipefail
-
-        os_name="Darwin"
-        HOME="'"${TEST_TMPDIR}"'/home"
-        mkdir -p "${HOME}/Applications/Claude.app"
-
-        cask_app_bundle_exists() {
-            local pkg_name="$1"
-            local cask_json=""
-            local app_candidate=""
-
-            if [[ "${os_name}" != "Darwin" ]]; then
-                return 1
-            fi
-
-            case "${pkg_name}" in
-                example-app)
-                    cask_json=$'"'"'{"casks":[{"artifacts":[{"app":["Example App.app"]}]}]}'"'"'
-                    ;;
-                *)
-                    return 1
-                    ;;
-            esac
-
-            while IFS= read -r app_candidate; do
-                app_candidate="${app_candidate#\"}"
-                app_candidate="${app_candidate%\"}"
-                app_candidate="${app_candidate%%.app*}.app"
-                app_candidate="${app_candidate##*/}"
-
-                [[ -z "${app_candidate}" ]] && continue
-
-                if [[ -d "/Applications/${app_candidate}" ]] || [[ -d "${HOME}/Applications/${app_candidate}" ]]; then
-                    return 0
-                fi
-            done < <(printf "%s\n" "${cask_json}" | grep -o '"'"'"[^"]*\.app[^"]*"'"'"')
-
-            return 1
-        }
-
-        cask_app_bundle_exists example-app && echo "INSTALLED" || echo "MISSING"
-    '
-    assert_success
-    assert_output "MISSING"
+    assert_output $'INSTALLED\nMISSING'
 }
 
 @test "optional_prompt_mode skips when no interactive terminal is available" {
