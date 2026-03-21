@@ -385,6 +385,191 @@ MOCK
     assert_output --partial "hide-version=yes"
 }
 
+@test "ph-test still prints summary when stats collection fails" {
+    local conf_file="${TEST_TMPDIR}/unbound.conf"
+
+    cat > "${conf_file}" <<'CONF'
+server:
+    interface: 127.0.0.1
+    hide-version: yes
+    hide-identity: yes
+    harden-glue: yes
+    harden-dnssec-stripped: yes
+CONF
+
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == PATH=* ]]; then
+    path_assignment="${1}"
+    script_path="${2}"
+    shift 2
+
+    export PATH="${path_assignment#PATH=}"
+
+    tmp_script="$(mktemp)"
+    awk '
+        /^# Self-elevate if not root \(preserve PATH for ~\/\.local\/bin commands\)$/ { skip=1; next }
+        skip && /^DNS_SERVER=/ { skip=0 }
+        !skip {
+            print
+        }
+    ' "${script_path}" > "${tmp_script}"
+
+    chmod +x "${tmp_script}"
+    exec "${tmp_script}" "$@"
+fi
+
+exec "$@"
+MOCK
+
+    cat > "${BIN_SANDBOX}/unbound-checkconf" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-o" && "${2:-}" == "config-file" ]]; then
+    printf '%s\n' "${PH_TEST_UNBOUND_MAIN_CONF}"
+    exit 0
+fi
+
+printf 'no errors\n'
+MOCK
+
+    cat > "${BIN_SANDBOX}/unbound-control" <<'MOCK'
+#!/usr/bin/env bash
+case "${1:-}" in
+    status)
+        printf 'version 1.0\n'
+        printf 'daemon is running\n'
+        ;;
+    stats_noreset)
+        exit 1
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+MOCK
+
+    cat > "${BIN_SANDBOX}/ss" <<'MOCK'
+#!/usr/bin/env bash
+printf 'udp UNCONN 0 0 127.0.0.1:53 0.0.0.0:* users:(("unbound",pid=1,fd=3))\n'
+MOCK
+
+    cat > "${BIN_SANDBOX}/dig" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "$*" == *"google.com +short"* ]]; then
+    printf '142.250.190.14\n'
+    exit 0
+fi
+
+if [[ "$*" == *"google.com +dnssec"* ]]; then
+    cat <<'OUT'
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1
+;; flags: qr rd ra; QUERY: 1, ANSWER: 1
+OUT
+    exit 0
+fi
+
+if [[ "$*" == *"dnssec-failed.org"* ]]; then
+    cat <<'OUT'
+;; ->>HEADER<<- opcode: QUERY, status: SERVFAIL, id: 1
+OUT
+    exit 0
+fi
+
+if [[ "$*" == *"doubleclick.net"* ]]; then
+    cat <<'OUT'
+;; ->>HEADER<<- opcode: QUERY, status: NXDOMAIN, id: 1
+OUT
+    exit 0
+fi
+
+cat <<'OUT'
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1
+;; Query time: 12 msec
+OUT
+MOCK
+
+    cat > "${BIN_SANDBOX}/ps" <<'MOCK'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+    cat > "${BIN_SANDBOX}/id" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "unbound" ]]; then
+    exit 0
+fi
+exit 1
+MOCK
+
+    cat > "${BIN_SANDBOX}/getent" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${2:-}" == "unbound" ]]; then
+    exit 0
+fi
+exit 1
+MOCK
+
+    cat > "${BIN_SANDBOX}/systemctl" <<'MOCK'
+#!/usr/bin/env bash
+case "${1:-}" in
+    is-enabled)
+        exit 0
+        ;;
+    is-active)
+        exit 1
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+MOCK
+
+    cat > "${BIN_SANDBOX}/stat" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-c" && "${2:-}" == "%U:%G" ]]; then
+    printf 'root:root\n'
+elif [[ "${1:-}" == "-c" && "${2:-}" == "%a" ]]; then
+    printf '755\n'
+fi
+MOCK
+
+    cat > "${BIN_SANDBOX}/pgrep" <<'MOCK'
+#!/usr/bin/env bash
+exit 1
+MOCK
+
+    cat > "${BIN_SANDBOX}/find" <<'MOCK'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+    chmod +x \
+        "${BIN_SANDBOX}/sudo" \
+        "${BIN_SANDBOX}/unbound-checkconf" \
+        "${BIN_SANDBOX}/unbound-control" \
+        "${BIN_SANDBOX}/ss" \
+        "${BIN_SANDBOX}/dig" \
+        "${BIN_SANDBOX}/ps" \
+        "${BIN_SANDBOX}/id" \
+        "${BIN_SANDBOX}/getent" \
+        "${BIN_SANDBOX}/systemctl" \
+        "${BIN_SANDBOX}/stat" \
+        "${BIN_SANDBOX}/pgrep" \
+        "${BIN_SANDBOX}/find"
+
+    run env \
+        PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        PH_TEST_UNBOUND_CONF="${conf_file}" \
+        PH_TEST_UNBOUND_MAIN_CONF="${conf_file}" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-test"
+    assert_failure
+    assert_output --partial "Summary"
+    assert_output --partial "Could not retrieve stats"
+    assert_output --partial "Found 1 failing check(s)."
+}
+
 @test "ts-test displays help" {
     run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ts-test" --help
     assert_success

@@ -115,7 +115,7 @@ copy_and_list_local_example_files() {
         fi
     done < <(find "${CHEZMOI_SOURCE}" -type f -name '*.local.example' -print0)
 
-    review_message=$'Review these local config files if you still need to personalize this machine:\n\n'
+    review_message=$'Check these local config files:\n\n'
     review_message+=$'  - ~/.config/git/config.local\n'
     review_message+=$'  - ~/.config/zsh/.zshrc.local\n'
     review_message+=$'  - ~/.ssh/config.local\n'
@@ -267,14 +267,13 @@ if [[ "${run_brew}" -eq 1 ]]; then
     _box "Homebrew setup completed."
 fi
 
-begin_section "Chezmoi"
+begin_section "Configuration"
 _item "Running chezmoi availability check"
 _item "Running brew install chezmoi or the standalone installer when needed"
 run_boxed ensure_chezmoi
 
 # Remove invalid config so chezmoi apply can regenerate it from the template
 if [[ -f "${CHEZMOI_CONFIG_FILE}" ]] && ! chezmoi --source "${CHEZMOI_SOURCE}" dump-config &>/dev/null; then
-    begin_section "Chezmoi Config"
     _item "Running chezmoi --source ${CHEZMOI_SOURCE} dump-config"
     _item "Running rm -f ${CHEZMOI_CONFIG_FILE}"
     log_warn "Removing invalid ${CHEZMOI_CONFIG_FILE}"
@@ -282,7 +281,6 @@ if [[ -f "${CHEZMOI_CONFIG_FILE}" ]] && ! chezmoi --source "${CHEZMOI_SOURCE}" d
     _box "Removed invalid ${CHEZMOI_CONFIG_FILE}."
 fi
 
-begin_section "Apply"
 _item "Running chezmoi status"
 _item "Running chezmoi apply"
 run_boxed apply_dotfiles
@@ -297,7 +295,6 @@ fi
 
 zsh_path="$(command -v zsh || true)"
 if [[ -n "${zsh_path}" ]]; then
-    begin_section "Shell"
     if ! grep -qxF "${zsh_path}" /etc/shells; then
         if command -v sudo >/dev/null 2>&1; then
             _item "Running printf '%s\\n' '${zsh_path}' | sudo tee -a /etc/shells >/dev/null"
@@ -313,12 +310,11 @@ if [[ -n "${zsh_path}" ]]; then
     _box "Shell setup completed."
 fi
 
-begin_section "Local Config"
+begin_section "Finish"
 _item "Running local example file scan"
 run_boxed copy_and_list_local_example_files
 
 if [[ -n "${zsh_path:-}" ]]; then
-    begin_section "Next Steps"
     _box "Run 'exec -l \$SHELL' (or open a new terminal) to reload your shell"
 fi
 
