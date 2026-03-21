@@ -238,9 +238,6 @@ check_deps() {
             missing=1
         fi
     done
-    if [[ "${missing}" -eq 0 ]]; then
-        info "Required commands are available"
-    fi
     [[ "${missing}" -eq 0 ]]
 }
 
@@ -707,7 +704,7 @@ test_stats() {
     header "Unbound stats snapshot"
     local stats
     _item "Running sudo unbound-control stats_noreset"
-    stats=$(sudo unbound-control stats_noreset 2>/dev/null)
+    stats=$(sudo unbound-control stats_noreset 2>/dev/null || true)
     if [[ -n "${stats}" ]]; then
         local key val
         for key in total.num.queries total.num.cachehits total.num.cachemiss \
