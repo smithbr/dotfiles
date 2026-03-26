@@ -87,6 +87,7 @@ WARN_COUNT=0
 FAIL_COUNT=0
 CURRENT_SECTION_TITLE=""
 CURRENT_SECTION_BODY=""
+RUN_WITH_TIMEOUT_OUTPUT=""
 
 _header() {
     if [[ "${HAS_GUM}" == true ]]; then
@@ -192,6 +193,44 @@ info() {
 fix() {
     CURRENT_SECTION_BODY+="Fix: $*"$'\n'
     add_next_step "$*"
+}
+
+run_with_timeout() {
+    local timeout_seconds="${1}"
+    local output_file=""
+    local pid=""
+    local elapsed=0
+    local exit_code=0
+    shift
+
+    output_file="$(mktemp)"
+    RUN_WITH_TIMEOUT_OUTPUT=""
+
+    "$@" >"${output_file}" 2>&1 &
+    pid=$!
+
+    while kill -0 "${pid}" 2>/dev/null; do
+        if [[ "${elapsed}" -ge "${timeout_seconds}" ]]; then
+            kill "${pid}" 2>/dev/null || true
+            wait "${pid}" 2>/dev/null || true
+            RUN_WITH_TIMEOUT_OUTPUT="$(cat "${output_file}" 2>/dev/null || true)"
+            rm -f "${output_file}"
+            return 124
+        fi
+
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    if wait "${pid}"; then
+        exit_code=0
+    else
+        exit_code=$?
+    fi
+
+    RUN_WITH_TIMEOUT_OUTPUT="$(cat "${output_file}" 2>/dev/null || true)"
+    rm -f "${output_file}"
+    return "${exit_code}"
 }
 
 unbound_config_paths() {
@@ -703,9 +742,16 @@ test_blocklist() {
 test_stats() {
     header "Unbound stats snapshot"
     local stats
+    local stats_status=0
+    local timeout_seconds="${PH_TEST_TIMEOUT_SECONDS:-5}"
     _item "Running sudo unbound-control stats_noreset"
-    stats=$(sudo unbound-control stats_noreset 2>/dev/null || true)
-    if [[ -n "${stats}" ]]; then
+    if run_with_timeout "${timeout_seconds}" sudo unbound-control stats_noreset; then
+        stats_status=0
+    else
+        stats_status=$?
+    fi
+    stats="${RUN_WITH_TIMEOUT_OUTPUT}"
+    if [[ "${stats_status}" -eq 0 && -n "${stats}" ]]; then
         local key val
         for key in total.num.queries total.num.cachehits total.num.cachemiss \
                    total.num.recursivereplies num.query.type.A num.query.type.AAAA; do
@@ -713,7 +759,12 @@ test_stats() {
             [[ -n "${val}" ]] && info "${key}: ${val}"
         done
     else
-        fail "Could not retrieve stats (is unbound-control configured?)"
+        if [[ "${stats_status}" -eq 124 ]]; then
+            fail "Could not retrieve stats (timed out after ${timeout_seconds}s)"
+            fix "Check whether unbound-control is responsive: sudo unbound-control status"
+        else
+            fail "Could not retrieve stats (is unbound-control configured?)"
+        fi
         fix "Enable remote control in ${UNBOUND_CONF} or ${UNBOUND_MAIN_CONF}:"
         fix "  remote-control:"
         fix "    control-enable: yes"
