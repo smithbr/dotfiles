@@ -197,6 +197,7 @@ fix() {
 
 run_with_timeout() {
     local timeout_seconds="${1}"
+    local timeout_cmd=""
     local output_file=""
     local pid=""
     local elapsed=0
@@ -206,12 +207,32 @@ run_with_timeout() {
     output_file="$(mktemp)"
     RUN_WITH_TIMEOUT_OUTPUT=""
 
+    if command -v timeout >/dev/null 2>&1; then
+        timeout_cmd="timeout"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        timeout_cmd="gtimeout"
+    fi
+
+    if [[ -n "${timeout_cmd}" ]]; then
+        if "${timeout_cmd}" --signal=TERM --kill-after=1s "${timeout_seconds}s" "$@" >"${output_file}" 2>&1; then
+            exit_code=0
+        else
+            exit_code=$?
+        fi
+
+        RUN_WITH_TIMEOUT_OUTPUT="$(cat "${output_file}" 2>/dev/null || true)"
+        rm -f "${output_file}"
+        return "${exit_code}"
+    fi
+
     "$@" >"${output_file}" 2>&1 &
     pid=$!
 
     while kill -0 "${pid}" 2>/dev/null; do
         if [[ "${elapsed}" -ge "${timeout_seconds}" ]]; then
             kill "${pid}" 2>/dev/null || true
+            sleep 1
+            kill -9 "${pid}" 2>/dev/null || true
             wait "${pid}" 2>/dev/null || true
             RUN_WITH_TIMEOUT_OUTPUT="$(cat "${output_file}" 2>/dev/null || true)"
             rm -f "${output_file}"
