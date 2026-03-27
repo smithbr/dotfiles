@@ -777,7 +777,9 @@ test_stats() {
         for key in total.num.queries total.num.cachehits total.num.cachemiss \
                    total.num.recursivereplies num.query.type.A num.query.type.AAAA; do
             val=$(printf '%s\n' "${stats}" | grep "^${key}=" | cut -d= -f2 || true)
-            [[ -n "${val}" ]] && info "${key}: ${val}"
+            if [[ -n "${val}" ]]; then
+                info "${key}: ${val}"
+            fi
         done
     else
         if [[ "${stats_status}" -eq 124 ]]; then
@@ -793,6 +795,8 @@ test_stats() {
         fix "Generate control keys: sudo unbound-control-setup"
         fix "After changes: sudo systemctl restart unbound"
     fi
+
+    return 0
 }
 
 print_intro() {
