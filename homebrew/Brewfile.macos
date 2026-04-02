@@ -3,7 +3,7 @@
 
 # AI Apps
 cask "chatgpt"
-cask "claude-code"
+cask "claude-code@latest"
 cask "claude"
 cask "codex-app"
 cask "codex"
