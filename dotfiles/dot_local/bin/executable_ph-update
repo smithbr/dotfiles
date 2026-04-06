@@ -17,6 +17,7 @@ declare -a NEXT_STEPS=()
 PASS_COUNT=0
 WARN_COUNT=0
 FAIL_COUNT=0
+RESTART_AFTER_UPDATE=0
 
 usage() {
     local help_text
@@ -39,6 +40,7 @@ Run the Pi-hole maintenance flow for this machine.
 | Command | Description |
 |---------|-------------|
 | `ph-update` | Run the full maintenance flow |
+| `ph-update -r` | Run the full maintenance flow and restart Linux after success |
 EOF
 )"
 
@@ -50,10 +52,18 @@ EOF
     cat <<'EOF'
 Usage:
   ph-update
+  ph-update -r
   ph-update --help
 
-Run os-update, refresh Pi-hole, and update PADD.
+Run os-update, refresh Pi-hole, update PADD, and optionally restart Linux.
 EOF
+}
+
+is_linux() {
+    case "${OSTYPE}" in
+        linux*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 _header() {
@@ -203,6 +213,12 @@ print_intro() {
     else
         section+="System updates: already completed before elevation"
     fi
+    section+=$'\n'
+    if [[ "${RESTART_AFTER_UPDATE}" -eq 1 ]]; then
+        section+="Restart after update: enabled"
+    else
+        section+="Restart after update: disabled"
+    fi
     _box "${section}"
 }
 
@@ -293,17 +309,31 @@ print_summary() {
 }
 
 parse_args() {
-    [[ $# -eq 0 ]] && return 0
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            -h|-help|--help|help)
+                usage
+                exit 0
+                ;;
+            -r|--restart)
+                if ! is_linux; then
+                    die "error: -r/--restart is only supported on Linux."
+                fi
+                RESTART_AFTER_UPDATE=1
+                ;;
+            *)
+                die "Unknown argument: ${1}"
+                ;;
+        esac
+        shift
+    done
+}
 
-    case "${1}" in
-        -h|-help|--help|help)
-            usage
-            exit 0
-            ;;
-        *)
-            die "Unknown argument: ${1}"
-            ;;
-    esac
+restart_linux() {
+    printf '\n'
+    _header "Restart"
+    _item "Running shutdown -r now"
+    shutdown -r now
 }
 
 main() {
@@ -358,7 +388,11 @@ main() {
         "Running ph-padd -u" \
         ph-padd -u || true
 
-    print_summary
+    print_summary || return 1
+
+    if [[ "${RESTART_AFTER_UPDATE}" -eq 1 ]]; then
+        restart_linux
+    fi
 }
 
 main "$@"
