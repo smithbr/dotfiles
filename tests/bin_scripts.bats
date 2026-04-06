@@ -60,6 +60,9 @@ run_padd_dns_unbound_probe() {
             skip=0
             next
         }
+        skip {
+            next
+        }
         { print }
     ' "${source_script}" > "${probe_script}"
 
