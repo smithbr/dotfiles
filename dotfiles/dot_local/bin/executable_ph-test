@@ -417,7 +417,7 @@ test_dnssec() {
 
     # Good domain should carry the AD (Authenticated Data) flag
     # Pi-hole (dnsmasq/FTL) strips the AD flag, so query Unbound directly when possible.
-    local ad_target="${DNS_SERVER}" ad_port="" unbound_interface="" unbound_port=""
+    local ad_target="${DNS_SERVER}" ad_port="" unbound_interface="" unbound_port="" ad_probe_hint=""
     local -a ad_port_args=() dig_args=()
     if has_pihole; then
         unbound_interface=$(get_unbound_setting "interface" || true)
@@ -438,9 +438,15 @@ test_dnssec() {
         ad_port_args=(-p "${ad_port}")
     fi
 
-    dig_args=(@"${ad_target}" "${GOOD_DOMAIN}" +dnssec)
+    dig_args=(@"${ad_target}")
     if [[ "${#ad_port_args[@]}" -gt 0 ]]; then
         dig_args+=("${ad_port_args[@]}")
+    fi
+    dig_args+=("${GOOD_DOMAIN}" +dnssec +adflag)
+
+    ad_probe_hint="dig @${ad_target} ${GOOD_DOMAIN} +dnssec +adflag"
+    if [[ -n "${ad_port}" ]]; then
+        ad_probe_hint="dig @${ad_target} -p ${ad_port} ${GOOD_DOMAIN} +dnssec +adflag"
     fi
 
     local ad_flag ad_status
@@ -453,6 +459,8 @@ test_dnssec() {
     elif [[ "${dnssec_validated}" == "true" ]]; then
         warn "AD flag not exposed on direct query to ${ad_target}${ad_port:+:${ad_port}}"
         info "DNSSEC validation is still confirmed by ${DNSSEC_FAIL_DOMAIN} returning SERVFAIL"
+        fix "Re-test the direct resolver socket: ${ad_probe_hint}"
+        fix "If that query still lacks 'ad', Unbound is validating answers but not surfacing the AD bit on ${ad_target}${ad_port:+:${ad_port}}"
     else
         fail "AD flag not set for ${GOOD_DOMAIN}"
         fix "Verify trust anchor: sudo unbound-anchor -a ${UNBOUND_DIR}/root.key"
