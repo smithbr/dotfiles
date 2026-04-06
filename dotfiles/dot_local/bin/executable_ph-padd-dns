@@ -441,13 +441,11 @@ GetUnboundInformation() {
     local cache_rate
 
     unbound_status="N/A"
-    unbound_status_heatmap=${reset_text}
     unbound_listener="N/A"
     unbound_listener_heatmap=${reset_text}
     unbound_dnssec_status="N/A"
     unbound_dnssec_heatmap=${reset_text}
     unbound_control_status="N/A"
-    unbound_control_heatmap=${reset_text}
     unbound_cache_status="N/A"
     unbound_cache_heatmap=${reset_text}
     unbound_stats=""
@@ -467,12 +465,10 @@ GetUnboundInformation() {
         case "${unbound_status_output}" in
             *"is running"*)
                 unbound_status="Running"
-                unbound_status_heatmap=${green_text}
                 unbound_stats="$(unbound-control stats_noreset 2>/dev/null || true)"
                 ;;
             *"not running"*)
                 unbound_status="Stopped"
-                unbound_status_heatmap=${red_text}
                 ;;
         esac
     fi
@@ -480,10 +476,8 @@ GetUnboundInformation() {
     if [ "${unbound_status}" = "N/A" ]; then
         if command -v pgrep >/dev/null 2>&1 && pgrep -x unbound >/dev/null 2>&1; then
             unbound_status="Running"
-            unbound_status_heatmap=${green_text}
         elif [ -f "${UNBOUND_CONF}" ] || [ -f "${UNBOUND_MAIN_CONF}" ]; then
             unbound_status="Stopped"
-            unbound_status_heatmap=${red_text}
         fi
     fi
 
@@ -503,11 +497,9 @@ GetUnboundInformation() {
     case "${control_enabled}" in
         yes)
             unbound_control_status="Enabled"
-            unbound_control_heatmap=${green_text}
             ;;
         no)
             unbound_control_status="Disabled"
-            unbound_control_heatmap=${blue_text}
             ;;
     esac
 
