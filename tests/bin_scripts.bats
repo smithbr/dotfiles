@@ -39,10 +39,47 @@ run_padd_api_probe() {
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" "${probe_script}"
 }
 
+run_padd_dns_unbound_probe() {
+    local source_script="${1}"
+    local probe_script="${TEST_TMPDIR}/$(basename "${source_script}")"
+
+    awk '
+        /^main\(\)\{$/ {
+            print "main(){"
+            print "    connection_down_flag=true"
+            print "    GetNetworkInformation"
+            print "    printf '\''status=%s\\n'\'' \"${unbound_status}\""
+            print "    printf '\''listener=%s\\n'\'' \"${unbound_listener}\""
+            print "    printf '\''dnssec=%s\\n'\'' \"${unbound_dnssec_status}\""
+            print "    printf '\''cache=%s\\n'\'' \"${unbound_cache_status}\""
+            print "}"
+            skip=1
+            next
+        }
+        skip && /^}$/ {
+            skip=0
+            next
+        }
+        { print }
+    ' "${source_script}" > "${probe_script}"
+
+    chmod +x "${probe_script}"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" "${probe_script}"
+}
+
 @test "ph-padd displays help" {
     run sh "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-padd" --help
     assert_success
     assert_output --partial "PADD displays stats about your Pi-hole"
+    assert_output --partial "--api"
+    assert_output --partial "--runonce"
+}
+
+@test "ph-padd-dns displays help" {
+    run sh "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-padd-dns" --help
+    assert_success
+    assert_output --partial "Unbound resolver details"
     assert_output --partial "--api"
     assert_output --partial "--runonce"
 }
@@ -63,6 +100,52 @@ MOCK
     assert_success
     assert_output --partial "+time=2"
     assert_output --partial "+tries=1"
+}
+
+@test "ph-padd-dns surfaces unbound listener and cache details" {
+    local main_conf="${TEST_TMPDIR}/unbound.conf"
+    local include_conf="${TEST_TMPDIR}/pi-hole.conf"
+
+    cat > "${main_conf}" <<'CONF'
+remote-control:
+    control-enable: yes
+CONF
+
+    cat > "${include_conf}" <<'CONF'
+server:
+    interface: 127.0.0.1
+    port: 5335
+    harden-dnssec-stripped: yes
+CONF
+
+    cat > "${BIN_SANDBOX}/unbound-control" <<'MOCK'
+#!/usr/bin/env bash
+case "${1:-}" in
+    status)
+        printf 'unbound is running as pid 1234\n'
+        ;;
+    stats_noreset)
+        printf 'total.num.queries=200\n'
+        printf 'total.num.cachehits=150\n'
+        ;;
+esac
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/unbound-control"
+
+    export PH_PADD_DNS_UNBOUND_MAIN_CONF="${main_conf}"
+    export PH_PADD_DNS_UNBOUND_CONF="${include_conf}"
+
+    run_padd_dns_unbound_probe "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-padd-dns"
+
+    assert_success
+    assert_output --partial "status=Running"
+    assert_output --partial "listener=127.0.0.1:5335"
+    assert_output --partial "dnssec=Hardened"
+    assert_output --partial "cache=75% hit"
+
+    unset PH_PADD_DNS_UNBOUND_MAIN_CONF
+    unset PH_PADD_DNS_UNBOUND_CONF
 }
 
 @test "os-update displays help" {
@@ -183,7 +266,8 @@ MOCK
     assert_success
     assert_output --partial "Usage:"
     assert_output --partial "ph-update"
-    assert_output --partial "Run os-update, refresh Pi-hole, and update PADD"
+    assert_output --partial "ph-update -r"
+    assert_output --partial "Run os-update, refresh Pi-hole, update PADD, and optionally restart Linux"
 }
 
 @test "ph-update runs os-update before self-elevating through sudo" {
@@ -216,6 +300,76 @@ MOCK
     assert_output --partial "sudo PATH=${BIN_SANDBOX}:/usr/bin:/bin"
     assert_output --partial "PH_UPDATE_SKIP_OS_UPDATE=1"
     assert_output --partial "executable_ph-update"
+}
+
+@test "ph-update preserves -r through self-elevating sudo" {
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+printf 'sudo %s\n' "$*"
+MOCK
+
+    cat > "${BIN_SANDBOX}/apt-get" <<'MOCK'
+#!/usr/bin/env bash
+printf 'apt-get %s\n' "$*"
+MOCK
+
+    cat > "${BIN_SANDBOX}/pihole" <<'MOCK'
+#!/usr/bin/env bash
+printf 'pihole %s\n' "$*"
+MOCK
+
+    cat > "${BIN_SANDBOX}/ph-padd" <<'MOCK'
+#!/usr/bin/env bash
+printf 'ph-padd %s\n' "$*"
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/apt-get" "${BIN_SANDBOX}/pihole" "${BIN_SANDBOX}/ph-padd"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-update" -r
+    assert_success
+    assert_output --partial "PH_UPDATE_SKIP_OS_UPDATE=1"
+    assert_output --partial "executable_ph-update -r"
+}
+
+@test "ph-update rejects -r on non-linux hosts" {
+    run env OSTYPE="darwin23" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-update" -r
+    assert_failure
+    assert_output --partial "-r/--restart is only supported on Linux"
+}
+
+@test "ph-update restarts Linux after a successful run when -r is set" {
+    local probe_script="${TEST_TMPDIR}/executable_ph-update"
+    ln -sf "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_os-update" "${TEST_TMPDIR}/executable_os-update"
+
+    sed 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-update" > "${probe_script}"
+    chmod +x "${probe_script}"
+
+    cat > "${BIN_SANDBOX}/pihole" <<'MOCK'
+#!/usr/bin/env bash
+printf 'pihole %s\n' "$*"
+MOCK
+
+    cat > "${BIN_SANDBOX}/ph-padd" <<'MOCK'
+#!/usr/bin/env bash
+printf 'ph-padd %s\n' "$*"
+MOCK
+
+    cat > "${BIN_SANDBOX}/shutdown" <<'MOCK'
+#!/usr/bin/env bash
+printf 'shutdown %s\n' "$*"
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/pihole" "${BIN_SANDBOX}/ph-padd" "${BIN_SANDBOX}/shutdown"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" PH_UPDATE_SKIP_OS_UPDATE=1 \
+        "${probe_script}" -r
+    assert_success
+    assert_output --partial "Pi-hole update and gravity refresh completed"
+    assert_output --partial "PADD update completed"
+    assert_output --partial "shutdown -r now"
 }
 
 @test "ph-update fails before os-update when pihole is unavailable" {
@@ -383,6 +537,109 @@ MOCK
     assert_output --partial "UNBOUND_CONF=${primary_conf}"
     assert_output --partial "interface=127.0.0.1"
     assert_output --partial "hide-version=yes"
+}
+
+@test "ph-test requests AD explicitly and prints a direct-fix tip when AD is hidden" {
+    local conf_file="${TEST_TMPDIR}/unbound.conf"
+    local dig_log="${TEST_TMPDIR}/dig.log"
+
+    cat > "${conf_file}" <<'CONF'
+server:
+    interface: 127.0.0.1
+    port: 5335
+CONF
+
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+
+path_assignment="${1}"
+script_path="${2}"
+shift 2
+
+export PATH="${path_assignment#PATH=}"
+
+tmp_script="$(mktemp)"
+awk '
+    /^# Self-elevate if not root \(preserve PATH for ~\/\.local\/bin commands\)$/ { skip=1; next }
+    skip && /^DNS_SERVER=/ { skip=0 }
+    /^main\(\) \{$/ {
+        print "main() {"
+        print "    init_pihole_vars"
+        print "    test_dnssec"
+        print "    flush_section"
+        print "    print_summary"
+        print "}"
+        in_main=1
+        next
+    }
+    in_main && /^}$/ {
+        in_main=0
+        next
+    }
+    !skip && !in_main {
+        print
+    }
+' "${script_path}" > "${tmp_script}"
+
+chmod +x "${tmp_script}"
+exec "${tmp_script}" "$@"
+MOCK
+
+    cat > "${BIN_SANDBOX}/dig" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${PH_TEST_DIG_LOG}"
+
+if [[ "$*" == *"dnssec-failed.org"* ]]; then
+    cat <<'OUT'
+;; ->>HEADER<<- opcode: QUERY, status: SERVFAIL, id: 1
+OUT
+    exit 0
+fi
+
+if [[ "$*" == *"google.com"* ]]; then
+    cat <<'OUT'
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1
+;; flags: qr rd ra; QUERY: 1, ANSWER: 1
+OUT
+    exit 0
+fi
+
+exit 0
+MOCK
+
+    cat > "${BIN_SANDBOX}/pgrep" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-x" && "${2:-}" == "pihole-FTL" ]]; then
+    exit 0
+fi
+exit 1
+MOCK
+
+    cat > "${BIN_SANDBOX}/find" <<'MOCK'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+    chmod +x \
+        "${BIN_SANDBOX}/sudo" \
+        "${BIN_SANDBOX}/dig" \
+        "${BIN_SANDBOX}/pgrep" \
+        "${BIN_SANDBOX}/find"
+
+    run env \
+        PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        PH_TEST_DIG_LOG="${dig_log}" \
+        PH_TEST_UNBOUND_CONF="${conf_file}" \
+        PH_TEST_UNBOUND_MAIN_CONF="${conf_file}" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-test"
+    assert_success
+    assert_output --partial "AD flag not exposed on direct query to 127.0.0.1:5335"
+    assert_output --partial "Re-test the direct resolver socket: dig @127.0.0.1 -p 5335 google.com +dnssec +adflag"
+
+    run cat "${dig_log}"
+    assert_success
+    assert_output --partial "@127.0.0.1 -p 5335 google.com +dnssec +adflag"
 }
 
 @test "ph-test still prints summary when stats collection fails" {
