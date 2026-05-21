@@ -67,10 +67,13 @@ for candidate in \
   fi
 done
 
+# Always source antidote when installed so `antidote bundle`, `antidote load`, etc. work in this shell.
+# (If we only sourced the static bundle below, startup would skip antidote.zsh and those commands would not exist.)
+[[ -f "${antidote_zsh}" ]] && source "${antidote_zsh}"
+
 if [[ -r "${zsh_plugins_static}" ]] && [[ "${zsh_plugins_static}" -nt "${zsh_plugins_file}" ]]; then
   source "${zsh_plugins_static}"
 elif [[ -f "${zsh_plugins_file}" ]] && [[ -f "${antidote_zsh}" ]]; then
-  source "${antidote_zsh}"
   mkdir -p "${zsh_plugins_static:h}"
   if antidote bundle <"${zsh_plugins_file}" >|"${zsh_plugins_static}.tmp"; then
     mv "${zsh_plugins_static}.tmp" "${zsh_plugins_static}"
