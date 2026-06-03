@@ -91,3 +91,17 @@ command -v starship >/dev/null 2>&1 && eval "$(starship init zsh)"
 zstyle ':completion:*' menu select
 
 # zprof
+
+# opencode
+export PATH=/Users/bsmith/.opencode/bin:$PATH
+
+# ollama
+alias oc="ollama launch opencode"
+
+# from llm-checker ollama-plan
+export OLLAMA_NUM_CTX=2048
+export OLLAMA_NUM_PARALLEL=1
+export OLLAMA_MAX_LOADED_MODELS=1
+export OLLAMA_MAX_QUEUE=4
+export OLLAMA_KEEP_ALIVE=15m
+export OLLAMA_FLASH_ATTENTION=0
