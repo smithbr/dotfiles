@@ -6,7 +6,8 @@ BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/common.sh
 source "${BASEDIR}/scripts/common.sh"
 
-CHEZMOI_SOURCE="${HOME}/.dotfiles/dotfiles"
+# Repo root; .chezmoiroot redirects chezmoi to the dotfiles/ subdir.
+CHEZMOI_SOURCE="${HOME}/.dotfiles"
 SHOW_ALL=0
 MANAGED_PATHS_CACHE=""
 declare -a extra_roots=()
@@ -26,7 +27,7 @@ By default this script:
 Pass one or more audit roots to widen the scan. For example:
   $(basename "$0") "${HOME}"
   $(basename "$0") --all
-  $(basename "$0") --source "${HOME}/src/dotfiles/dotfiles" "${HOME}/.config"
+  $(basename "$0") --source "${HOME}/src/dotfiles" "${HOME}/.config"
 EOF
 }
 

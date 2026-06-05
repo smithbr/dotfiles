@@ -124,7 +124,7 @@ teardown() {
         set -euo pipefail
         export HOME="'"${HOME}"'"
         source "'"${PROJECT_ROOT}"'/scripts/common.sh"
-        LOCAL_INSTALL_SSH_KEY_PATH="${HOME}/.ssh/id_rsa"
+        LOCAL_INSTALL_SSH_KEY_PATH="${HOME}/.ssh/id_ed25519"
 
         stat_mode() {
             if stat -f %Lp "$1" >/dev/null 2>&1; then
@@ -150,7 +150,7 @@ teardown() {
                 return 0
             fi
             key_comment="$(ssh_key_comment)"
-            ssh-keygen -q -t rsa -b 4096 -N "" -C "${key_comment}" -f "${LOCAL_INSTALL_SSH_KEY_PATH}"
+            ssh-keygen -q -t ed25519 -N "" -C "${key_comment}" -f "${LOCAL_INSTALL_SSH_KEY_PATH}"
             chmod 600 "${LOCAL_INSTALL_SSH_KEY_PATH}"
             chmod 644 "${LOCAL_INSTALL_SSH_KEY_PATH}.pub"
         }
@@ -180,7 +180,7 @@ teardown() {
         set -euo pipefail
         export HOME="'"${HOME}"'"
         source "'"${PROJECT_ROOT}"'/scripts/common.sh"
-        LOCAL_INSTALL_SSH_KEY_PATH="${HOME}/.ssh/id_rsa"
+        LOCAL_INSTALL_SSH_KEY_PATH="${HOME}/.ssh/id_ed25519"
 
         ssh_key_comment() {
             printf "%s@%s\n" "${USER:-$(id -un)}" "$(hostname -s 2>/dev/null || hostname)"
@@ -198,7 +198,7 @@ teardown() {
                 return 0
             fi
             key_comment="$(ssh_key_comment)"
-            ssh-keygen -q -t rsa -b 4096 -N "" -C "${key_comment}" -f "${LOCAL_INSTALL_SSH_KEY_PATH}"
+            ssh-keygen -q -t ed25519 -N "" -C "${key_comment}" -f "${LOCAL_INSTALL_SSH_KEY_PATH}"
             chmod 600 "${LOCAL_INSTALL_SSH_KEY_PATH}"
             chmod 644 "${LOCAL_INSTALL_SSH_KEY_PATH}.pub"
         }
@@ -220,7 +220,7 @@ teardown() {
         set -euo pipefail
         export HOME="'"${HOME}"'"
         source "'"${PROJECT_ROOT}"'/scripts/common.sh"
-        LOCAL_INSTALL_SSH_KEY_PATH="${HOME}/.ssh/id_rsa"
+        LOCAL_INSTALL_SSH_KEY_PATH="${HOME}/.ssh/id_ed25519"
 
         ssh_key_comment() {
             printf "%s@%s\n" "${USER:-$(id -un)}" "$(hostname -s 2>/dev/null || hostname)"
@@ -238,7 +238,7 @@ teardown() {
                 return 0
             fi
             key_comment="$(ssh_key_comment)"
-            ssh-keygen -q -t rsa -b 4096 -N "" -C "${key_comment}" -f "${LOCAL_INSTALL_SSH_KEY_PATH}"
+            ssh-keygen -q -t ed25519 -N "" -C "${key_comment}" -f "${LOCAL_INSTALL_SSH_KEY_PATH}"
             chmod 600 "${LOCAL_INSTALL_SSH_KEY_PATH}"
             chmod 644 "${LOCAL_INSTALL_SSH_KEY_PATH}.pub"
         }
@@ -407,10 +407,10 @@ MOCK
 
         [[ -L "${HOME}/.dotfiles" ]] || { echo "missing dotfiles symlink"; exit 1; }
         [[ "$(readlink "${HOME}/.dotfiles")" == "'"${PROJECT_ROOT}"'" ]] || { echo "bad dotfiles symlink"; exit 1; }
-        [[ -f "${HOME}/.ssh/id_rsa" ]] || { echo "missing private key"; exit 1; }
-        [[ -f "${HOME}/.ssh/id_rsa.pub" ]] || { echo "missing public key"; exit 1; }
+        [[ -f "${HOME}/.ssh/id_ed25519" ]] || { echo "missing private key"; exit 1; }
+        [[ -f "${HOME}/.ssh/id_ed25519.pub" ]] || { echo "missing public key"; exit 1; }
         grep -qx "brew install chezmoi" "${TEST_LOG}" || { echo "missing brew install chezmoi"; exit 1; }
-        grep -qx "chezmoi apply --source '"${PROJECT_ROOT}"'/dotfiles --force" "${TEST_LOG}" || {
+        grep -qx "chezmoi apply --source '"${PROJECT_ROOT}"' --force" "${TEST_LOG}" || {
             echo "missing chezmoi apply"
             cat "${TEST_LOG}"
             exit 1

@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: shellcheck + bats
+    # macOS runner so tests/run_tests.sh can use the Homebrew-installed bats
+    # libraries exactly as it does locally (it derives BATS_LIB_PATH from brew).
+    runs-on: macos-latest
+    # The bats suite shells out to TUI tools (tput/stty); give it a sane TERM so
+    # terminal-aware scripts behave as they do in an interactive shell.
+    env:
+      TERM: xterm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run test suite (shellcheck + bats)
+        run: bash tests/run_tests.sh

@@ -13,11 +13,13 @@ if [[ -z "${HOME:-}" ]]; then
     exit 1
 fi
 
-CHEZMOI_SOURCE="${BASEDIR}/dotfiles"
+# Point chezmoi at the repo root; .chezmoiroot redirects it to the dotfiles/ subdir.
+CHEZMOI_SOURCE="${BASEDIR}"
+# Resolved source path that `chezmoi source-path` reports, used by the sanity check below.
 CHEZMOI_DEFAULT_SOURCE="${HOME}/.dotfiles/dotfiles"
 CHEZMOI_CONFIG_DIR="${HOME}/.config/chezmoi"
 CHEZMOI_CONFIG_FILE="${CHEZMOI_CONFIG_DIR}/chezmoi.json"
-LOCAL_INSTALL_SSH_KEY_PATH="${HOME}/.ssh/id_rsa"
+LOCAL_INSTALL_SSH_KEY_PATH="${HOME}/.ssh/id_ed25519"
 HAS_GUM=false
 command -v gum >/dev/null 2>&1 && [[ -t 1 ]] && HAS_GUM=true
 
@@ -94,7 +96,7 @@ ensure_local_install_ssh_key() {
 
     key_comment="$(ssh_key_comment)"
     log_info "Creating local SSH key at ${LOCAL_INSTALL_SSH_KEY_PATH}"
-    ssh-keygen -q -t rsa -b 4096 -N "" -C "${key_comment}" -f "${LOCAL_INSTALL_SSH_KEY_PATH}"
+    ssh-keygen -q -t ed25519 -N "" -C "${key_comment}" -f "${LOCAL_INSTALL_SSH_KEY_PATH}"
     chmod 600 "${LOCAL_INSTALL_SSH_KEY_PATH}"
     chmod 644 "${LOCAL_INSTALL_SSH_KEY_PATH}.pub"
 }
@@ -113,7 +115,7 @@ copy_and_list_local_example_files() {
             cp "${target_path}" "${local_path}"
             log_info " Local config ${local_path} doesn't exist yet, creating one from example: ${local_path}"
         fi
-    done < <(find "${CHEZMOI_SOURCE}" -type f -name '*.local.example' -print0)
+    done < <(find "${BASEDIR}/dotfiles" -type f -name '*.local.example' -print0)
 
     review_message=$'Check these local config files:\n\n'
     review_message+=$'  - ~/.config/git/config.local\n'

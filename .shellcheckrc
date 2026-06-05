@@ -1,0 +1,3 @@
+# Follow `source`d files (with a `# shellcheck source=...` directive) so helper
+# functions defined in scripts/common.sh are analyzed in their callers' context.
+external-sources=true
