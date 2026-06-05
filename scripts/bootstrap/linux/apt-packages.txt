@@ -1,6 +1,7 @@
 build-essential
 curl
-zsh
-tcpdump
 dnsutils
 net-tools
+nethogs
+tcpdump
+zsh

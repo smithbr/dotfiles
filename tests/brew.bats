@@ -453,6 +453,64 @@ _parse_brewfile_line() {
 }
 
 # ---------------------------------------------------------------------------
+# Config-referenced tools must be installed by a Brewfile
+#
+# Guards against silent drift: if git or chezmoi config invokes an external
+# tool, the install must provide it. Each row maps a config file + the binary
+# it references to the Homebrew formula that supplies that binary (the names
+# differ for difftastic -> difft).
+# ---------------------------------------------------------------------------
+
+# Every brew/cask package declared across all Brewfiles, one short name per line.
+_all_brewfile_packages() {
+    local brewfile raw_line line
+    for brewfile in "${PROJECT_ROOT}"/homebrew/Brewfile.*; do
+        [[ -f "${brewfile}" ]] || continue
+        while IFS= read -r raw_line; do
+            line="${raw_line#"${raw_line%%[![:space:]]*}"}"
+            [[ "${line}" =~ ^(brew|cask)[[:space:]]+\"([^\"]+)\" ]] || continue
+            # Strip any tap prefix: daptify14/tap/chezit -> chezit
+            printf '%s\n' "${BASH_REMATCH[2]##*/}"
+        done < "${brewfile}"
+    done
+}
+
+# config-file (relative to repo) | binary referenced | formula expected to supply it
+_config_tool_map() {
+    cat <<'EOF'
+dotfiles/dot_config/chezmoi/chezmoi.json.tmpl|difft|difftastic
+dotfiles/dot_config/git/config|fzf|fzf
+dotfiles/dot_config/git/config|git-lfs|git-lfs
+EOF
+}
+
+@test "tools referenced by git/chezmoi config are provided by a Brewfile" {
+    local packages config_file binary formula missing=""
+    packages="$(_all_brewfile_packages)"
+
+    while IFS='|' read -r config_file binary formula; do
+        [[ -z "${config_file}" ]] && continue
+
+        # Keep the table honest: the binary must actually be referenced in the
+        # config, so this test fails loudly if a reference is renamed/removed.
+        if ! grep -qF "${binary}" "${PROJECT_ROOT}/${config_file}"; then
+            missing+="'${binary}' is no longer referenced in ${config_file}"$'\n'
+            continue
+        fi
+
+        # ...and some Brewfile must install the formula that provides it.
+        if ! grep -qxF "${formula}" <<<"${packages}"; then
+            missing+="${config_file} references '${binary}' but no Brewfile installs '${formula}'"$'\n'
+        fi
+    done < <(_config_tool_map)
+
+    if [[ -n "${missing}" ]]; then
+        printf '%s' "${missing}"
+        return 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # OS platform detection (from brew.sh case statement)
 # ---------------------------------------------------------------------------
 
@@ -555,7 +613,7 @@ MOCK
         ./homebrew/brew.sh
 
         [[ -f "${TEST_BUNDLE}" ]] || { echo "missing bundle file"; exit 1; }
-        grep -qx '"'"'brew "curl"'"'"' "${TEST_BUNDLE}" || { echo "missing curl"; exit 1; }
+        grep -qx '"'"'brew "wget"'"'"' "${TEST_BUNDLE}" || { echo "missing wget"; exit 1; }
         grep -qx '"'"'brew "gum"'"'"' "${TEST_BUNDLE}" || { echo "missing gum"; exit 1; }
         grep -qx '"'"'cask "font-hack-nerd-font"'"'"' "${TEST_BUNDLE}" || { echo "missing font cask"; exit 1; }
         grep -qx '"'"'cask "daptify14/tap/chezit"'"'"' "${TEST_BUNDLE}" || { echo "missing chezit cask"; exit 1; }
