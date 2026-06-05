@@ -7,5 +7,9 @@
     "format": "json",
     "mode": "file",
     "progress": true,
+    {{- /* "verbose" MUST stay false. With verbose=true, chezmoi runs the diff command
+           (difft) once per changed file; for newly-added files difft is invoked against a
+           nonexistent path and exits 2, which chezmoi treats as a hard error and silently
+           aborts the apply (files never get written). Run `chezmoi diff` for difft output. */}}
     "verbose": false
 }
