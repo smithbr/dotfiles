@@ -4,24 +4,36 @@ export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${HOME}/.cache}"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
 export XDG_DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-${HOME}/.local/run}"
+export XDG_BIN_HOME="${XDG_BIN_HOME:-${HOME}/.local/bin}"
 export XDG_STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
+export PATH="${XDG_BIN_HOME}:${PATH}"
 
 export ANTIDOTE_HOME="${XDG_CACHE_HOME}/antidote"
+export AWS_CLI_HISTORY_FILE="${XDG_STATE_HOME}/aws/cli/history.db"
+export AWS_CONFIG_FILE="${XDG_CONFIG_HOME}/aws/config"
+export AWS_DATA_PATH="${XDG_DATA_HOME}/aws/models"
+export AWS_SDK_LOAD_CONFIG=1
+export AWS_SHARED_CREDENTIALS_FILE="${XDG_CONFIG_HOME}/aws/credentials"
+export DOCKER_BIN="${XDG_BIN_HOME}/docker"
 export DOCKER_CONFIG="${XDG_CONFIG_HOME}/docker"
 export GNUPGHOME="${XDG_DATA_HOME}/gnupg"
+export HISTFILE="${XDG_STATE_HOME}/zsh/history"
 export MACHINE_STORAGE_PATH="${XDG_DATA_HOME}/docker-machine"
+export NODE_REPL_HISTORY="${XDG_STATE_HOME}/node/repl_history"
+export NPM_PREFIX="${XDG_DATA_HOME}/npm"
 export NPM_CONFIG_CACHE="${XDG_CACHE_HOME}/npm"
 export NPM_CONFIG_INIT_MODULE="${XDG_CONFIG_HOME}/npm/config/npm-init.js"
-export NPM_CONFIG_TMP="${XDG_RUNTIME_DIR}/npm"
+export NPM_CONFIG_USERCONFIG="${XDG_CONFIG_HOME}/npm/npmrc"
 export NVM_DIR="${XDG_CONFIG_HOME}/nvm"
-export PATH="${HOME}/.docker/bin:${HOME}/.local/bin:${PATH}"
+export OPENCODE_BIN_DIR="${XDG_BIN_HOME}/opencode"
+export OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME}/opencode"
+export OPENCODE_CONFIG="${OPENCODE_CONFIG_DIR}/opencode.json"
 export RUSTUP_HOME="${XDG_DATA_HOME}/rustup"
-export STARSHIP_CONFIG="${XDG_CONFIG_HOME}/starship/starship.toml"
 export STARSHIP_CACHE="${XDG_CACHE_HOME}/starship/cache"
+export STARSHIP_CONFIG="${XDG_CONFIG_HOME}/starship/starship.toml"
 export ZDOTDIR="${XDG_CONFIG_HOME}/zsh"
 
 # History
-export HISTFILE="${XDG_STATE_HOME}/zsh/history"
 export HISTSIZE=20000
 export SAVEHIST=20000
 setopt APPEND_HISTORY HIST_EXPIRE_DUPS_FIRST HIST_FIND_NO_DUPS HIST_IGNORE_ALL_DUPS
@@ -32,6 +44,20 @@ setopt HIST_VERIFY SHARE_HISTORY
 
 [[ -f "${XDG_CONFIG_HOME}/shell/aliases" ]] && source "${XDG_CONFIG_HOME}/shell/aliases"
 [[ -f "${XDG_CONFIG_HOME}/shell/functions" ]] && source "${XDG_CONFIG_HOME}/shell/functions"
+
+# ollama
+alias oc="ollama launch opencode"
+
+# from llm-checker ollama-plan
+export OLLAMA_NUM_CTX=2048
+export OLLAMA_NUM_PARALLEL=1
+export OLLAMA_MAX_LOADED_MODELS=1
+export OLLAMA_MAX_QUEUE=4
+export OLLAMA_KEEP_ALIVE=15m
+export OLLAMA_FLASH_ATTENTION=0
+
+# nvm
+source ${NVM_DIR}/nvm.sh --no-use
 
 # 1Password
 op_sock="${HOME}/.1password/agent.sock"
@@ -91,17 +117,3 @@ command -v starship >/dev/null 2>&1 && eval "$(starship init zsh)"
 zstyle ':completion:*' menu select
 
 # zprof
-
-# opencode
-export PATH=/Users/bsmith/.opencode/bin:$PATH
-
-# ollama
-alias oc="ollama launch opencode"
-
-# from llm-checker ollama-plan
-export OLLAMA_NUM_CTX=2048
-export OLLAMA_NUM_PARALLEL=1
-export OLLAMA_MAX_LOADED_MODELS=1
-export OLLAMA_MAX_QUEUE=4
-export OLLAMA_KEEP_ALIVE=15m
-export OLLAMA_FLASH_ATTENTION=0
