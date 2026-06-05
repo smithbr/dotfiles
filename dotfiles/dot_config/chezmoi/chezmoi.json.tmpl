@@ -2,13 +2,10 @@
     "sourceDir": "{{ .chezmoi.sourceDir }}",
     "color": true,
     "diff": {
-        "pager": "delta",
-        "pagerArgs": [
-            "--color-only"
-        ]
+        "command": "difft"
     },
     "format": "json",
     "mode": "file",
     "progress": true,
-    "verbose": true
+    "verbose": false
 }
