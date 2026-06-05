@@ -10,6 +10,7 @@ alias xdn="xdg-ninja --skip-ok --skip-unsupported"
 # shell
 alias cz="chezmoi"
 alias cza="chezmoi apply"
+alias czar="chezmoi apply --refresh-externals"
 alias czs="chezmoi status"
 alias czui="chezit"
 alias ddf="cd ~/.dotfiles"
