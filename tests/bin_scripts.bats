@@ -31,6 +31,9 @@ run_padd_api_probe() {
             skip=0
             next
         }
+        skip {
+            next
+        }
         { print }
     ' "${source_script}" > "${probe_script}"
 
