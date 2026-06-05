@@ -9,6 +9,3 @@ Library
 
 .DS_Store
 **/.DS_Store
-
-# Managed by the agents-private external (see .chezmoiexternal.toml)
-.config/agents
