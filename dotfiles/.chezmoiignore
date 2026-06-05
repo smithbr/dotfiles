@@ -9,3 +9,8 @@ Library
 
 .DS_Store
 **/.DS_Store
+
+# Secret-bearing AI configs — never manage (see root .gitignore)
+.claude.json
+.codex/auth.json
+.codex/config.toml
