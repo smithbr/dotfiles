@@ -1,0 +1,8 @@
+[".config/agents"]
+    type = "git-repo"
+    url = "git@github.com:smithbr/agents-private.git"
+    refreshPeriod = "168h"
+    [".config/agents".clone]
+        args = ["--depth", "1"]
+    [".config/agents".pull]
+        args = ["--ff-only"]
