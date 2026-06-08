@@ -3,3 +3,5 @@
 
 brew "allure"
 brew "k6"
+cask "cursor-cli"
+cask "cursor"
