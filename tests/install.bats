@@ -256,6 +256,52 @@ teardown() {
     assert_output --partial "PASS"
 }
 
+@test "ensure_local_install_ssh_key leaves an agent-managed public key untouched" {
+    run bash -c '
+        set -euo pipefail
+        export HOME="'"${HOME}"'"
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        LOCAL_INSTALL_SSH_KEY_PATH="${HOME}/.ssh/id_ed25519"
+
+        ssh_key_comment() {
+            printf "%s@%s\n" "${USER:-$(id -un)}" "$(hostname -s 2>/dev/null || hostname)"
+        }
+
+        ensure_local_install_ssh_key() {
+            local key_comment=""
+            mkdir -p "${HOME}/.ssh"
+            chmod 700 "${HOME}/.ssh"
+            if [[ -f "${LOCAL_INSTALL_SSH_KEY_PATH}" ]]; then
+                if [[ ! -f "${LOCAL_INSTALL_SSH_KEY_PATH}.pub" ]]; then
+                    ssh-keygen -y -f "${LOCAL_INSTALL_SSH_KEY_PATH}" > "${LOCAL_INSTALL_SSH_KEY_PATH}.pub"
+                    chmod 644 "${LOCAL_INSTALL_SSH_KEY_PATH}.pub"
+                fi
+                return 0
+            fi
+            if [[ -f "${LOCAL_INSTALL_SSH_KEY_PATH}.pub" ]]; then
+                return 0
+            fi
+            key_comment="$(ssh_key_comment)"
+            ssh-keygen -q -t ed25519 -N "" -C "${key_comment}" -f "${LOCAL_INSTALL_SSH_KEY_PATH}"
+            chmod 600 "${LOCAL_INSTALL_SSH_KEY_PATH}"
+            chmod 644 "${LOCAL_INSTALL_SSH_KEY_PATH}.pub"
+        }
+
+        # Simulate a 1Password-style layout: public key on disk, private half
+        # held by the agent (no private key file present).
+        mkdir -p "${HOME}/.ssh"
+        printf "ssh-ed25519 AAAAEXTERNALAGENTKEY agent@vault\n" > "${LOCAL_INSTALL_SSH_KEY_PATH}.pub"
+
+        ensure_local_install_ssh_key
+
+        [[ ! -f "${LOCAL_INSTALL_SSH_KEY_PATH}" ]] || { echo "FAIL: generated a private key"; exit 1; }
+        grep -q "AAAAEXTERNALAGENTKEY" "${LOCAL_INSTALL_SSH_KEY_PATH}.pub" || { echo "FAIL: clobbered the agent public key"; exit 1; }
+        echo "PASS"
+    '
+    assert_success
+    assert_output --partial "PASS"
+}
+
 # ---------------------------------------------------------------------------
 # install.sh exits when HOME is empty
 # ---------------------------------------------------------------------------
