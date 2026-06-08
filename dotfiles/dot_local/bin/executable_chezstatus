@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+#
+# chezstatus — a friendlier `chezmoi status`.
+#
+# chezmoi status prints two terse columns per path. This reads them and tells
+# you, for each out-of-sync file, which DIRECTION the change is:
+#
+#   INSIDE your dotfiles  (source repo is ahead)  -> chezmoi apply   (deploy)
+#   OUTSIDE, in $HOME     (you edited the live file) -> chezmoi re-add (capture)
+#   BOTH sides            (edited live AND source differs) -> you decide
+#
+# Column meanings (from `chezmoi status --help`):
+#   col 1 = last-written-by-chezmoi  ->  actual file in $HOME  (an OUTSIDE edit)
+#   col 2 = actual  ->  target, i.e. what `chezmoi apply` will do (source ahead)
+#
+# Usage:
+#   chezstatus [-d|--diff] [--builtin] [target ...]
+#
+#   -d, --diff     show a diff under each changed file
+#       --builtin  use chezmoi's built-in unified diff instead of the
+#                  configured diff tool (difftastic)
+#   target ...     limit to specific paths (forwarded to chezmoi status)
+
+set -euo pipefail
+
+use_diff=0
+use_builtin=0
+targets=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -d | --diff) use_diff=1 ;;
+        --builtin) use_builtin=1 ;;
+        -h | --help)
+            printf "chezstatus — a friendlier 'chezmoi status'\n\n"
+            printf 'Usage:\n  chezstatus [-d|--diff] [--builtin] [target ...]\n\n'
+            printf '  -d, --diff     show a diff under each changed file\n'
+            printf '      --builtin  use chezmoi'\''s built-in diff instead of difftastic\n'
+            printf '  target ...     limit to specific paths (forwarded to chezmoi status)\n'
+            exit 0
+            ;;
+        --)
+            shift
+            while [[ $# -gt 0 ]]; do
+                targets+=("$1")
+                shift
+            done
+            break
+            ;;
+        *) targets+=("$1") ;;
+    esac
+    shift
+done
+
+# Colors, disabled when stdout is not a tty or NO_COLOR is set.
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    use_color=1
+    c_reset=$'\e[0m'
+    c_dim=$'\e[2m'
+    c_bold=$'\e[1m'
+    c_apply=$'\e[36m' # cyan   — inside dotfiles, needs apply
+    c_readd=$'\e[33m' # yellow — outside dotfiles, needs re-add
+    c_both=$'\e[31m'  # red    — edited on both sides
+else
+    use_color=0
+    c_reset='' c_dim='' c_bold='' c_apply='' c_readd='' c_both=''
+fi
+
+# Width for diff wrapping: difftastic can't detect the terminal through the pipe
+# we indent it with, so tell it explicitly (leaving room for the indent).
+diff_cols="$(tput cols 2>/dev/null || echo 120)"
+[[ "${diff_cols}" =~ ^[0-9]+$ && "${diff_cols}" -gt 20 ]] && diff_cols=$((diff_cols - 6)) || diff_cols=100
+
+# Gather raw status. CHEZSTATUS_FAKE_STATUS is an internal test seam: when set
+# (even to empty) it stands in for the output of `chezmoi status`.
+if [[ -n "${CHEZSTATUS_FAKE_STATUS+x}" ]]; then
+    status_out="${CHEZSTATUS_FAKE_STATUS}"
+elif [[ ${#targets[@]} -gt 0 ]]; then
+    status_out="$(chezmoi status --no-pager -- "${targets[@]}")"
+else
+    status_out="$(chezmoi status --no-pager)"
+fi
+
+if [[ -z "${status_out//[$'\n\r ']/}" ]]; then
+    printf '%s✓ in sync%s — nothing to apply or re-add\n' "${c_apply}" "${c_reset}"
+    exit 0
+fi
+
+# Map a chezmoi status letter to a human word.
+describe() {
+    case "$1" in
+        A) printf 'added' ;;
+        D) printf 'deleted' ;;
+        M) printf 'modified' ;;
+        R) printf 'script' ;;
+        *) printf 'changed' ;;
+    esac
+}
+
+# Show the diff for one path, indented and in color. `reverse` flips the diff
+# so the "+" side is what you'd be capturing (used for re-add direction).
+#
+# Color is forced on (when our own stdout is a terminal) because we pipe the
+# diff through sed to indent it, which would otherwise make the diff tool think
+# it's writing to a file and drop color: DFT_COLOR for difftastic, --color=on
+# for chezmoi's built-in diff.
+show_diff() {
+    local rel="$1" reverse="$2"
+    local args=(diff)
+    local dft_color="never"
+    [[ "${use_color}" -eq 1 ]] && dft_color="always"
+
+    if [[ "${use_builtin}" -eq 1 ]]; then
+        args+=(--use-builtin-diff)
+        if [[ "${use_color}" -eq 1 ]]; then
+            args+=(--color=on)
+        else
+            args+=(--color=off)
+        fi
+    fi
+    [[ "${reverse}" -eq 1 ]] && args+=(--reverse)
+    args+=(--no-pager -- "${HOME}/${rel}")
+
+    # difftastic labels its header with the destination-relative path
+    # (e.g. ".config/lazygit/config.yml"). Rewrite that to the full source-repo
+    # path (~/.dotfiles/...) so it's clear where the managed file lives.
+    # Display labels for each side ("~" is literal here, not tilde expansion).
+    # difftastic shows two columns; their orientation depends on --reverse
+    # (verified empirically):
+    #   reverse off (apply):  left = $HOME,  right = dotfiles source
+    #   reverse on  (re-add): left = source, right = $HOME
+    local tilde="~" src
+    local home_disp="${tilde}/${rel}" src_disp
+    src="$(chezmoi source-path "${HOME}/${rel}" 2>/dev/null || true)"
+    if [[ "${src}" == "${HOME}/"* ]]; then
+        src_disp="${tilde}/${src#"${HOME}/"}"
+    else
+        src_disp="${home_disp}"
+    fi
+
+    local left_disp right_disp left_tag right_tag
+    if [[ "${reverse}" -eq 1 ]]; then
+        left_disp="${src_disp}" left_tag="dotfiles source"
+        right_disp="${home_disp}" right_tag="\$HOME"
+    else
+        left_disp="${home_disp}" left_tag="\$HOME"
+        right_disp="${src_disp}" right_tag="dotfiles source"
+    fi
+
+    if [[ "${use_builtin}" -eq 1 ]]; then
+        # Unified diff: name which file is "-" (old) and which is "+" (new).
+        printf '      %s- %s (%s)    + %s (%s)%s\n' "${c_dim}" \
+            "${left_disp}" "${left_tag}" "${right_disp}" "${right_tag}" "${c_reset}"
+        DFT_COLOR="${dft_color}" DFT_WIDTH="${diff_cols}" \
+            chezmoi "${args[@]}" 2>&1 | sed 's/^/      /' || true
+    else
+        # Side-by-side difft has no column labels, so replace its header line
+        # (line 1) with a two-line legend naming each column.
+        local lg1 lg2
+        lg1="${c_bold}◀ left${c_reset}   ${left_disp}  ${c_dim}(${left_tag})${c_reset}"
+        lg2="${c_bold}▶ right${c_reset}  ${right_disp}  ${c_dim}(${right_tag})${c_reset}"
+        DFT_COLOR="${dft_color}" DFT_WIDTH="${diff_cols}" \
+            chezmoi "${args[@]}" 2>&1 |
+            awk -v a="${lg1}" -v b="${lg2}" 'NR==1{print a; print b; next} {print}' |
+            sed 's/^/      /' || true
+    fi
+    printf '\n'
+}
+
+apply_lines=()
+readd_lines=()
+both_lines=()
+
+while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+    col1="${line:0:1}"
+    col2="${line:1:1}"
+    path="${line:3}"
+    [[ -z "${path}" ]] && continue
+    if [[ "${col1}" != " " && "${col2}" != " " ]]; then
+        both_lines+=("${col1}${col2}	${path}")
+    elif [[ "${col2}" != " " ]]; then
+        apply_lines+=("${col2}	${path}")
+    else
+        readd_lines+=("${col1}	${path}")
+    fi
+done <<<"${status_out}"
+
+total=$((${#apply_lines[@]} + ${#readd_lines[@]} + ${#both_lines[@]}))
+printf '%s%schezmoi: %d path(s) out of sync%s\n' "${c_bold}" "${c_apply}" "${total}" "${c_reset}"
+
+# Render one group: header, each path (and diff if requested), then the
+# command(s) to run underneath. `cmds` may hold multiple newline-separated
+# command lines (the BOTH group offers a choice).
+render_group() {
+    local color="$1" title="$2" reverse="$3" cmds="$4"
+    shift 4
+    local entries=("$@")
+    [[ ${#entries[@]} -eq 0 ]] && return 0
+
+    printf '\n  %s%s%s\n' "${color}" "${title}" "${c_reset}"
+    local entry code path
+    for entry in "${entries[@]}"; do
+        code="${entry%%	*}"
+        path="${entry#*	}"
+        printf '    %s%s%s  ~/%s  %s(%s)%s\n' \
+            "${color}" "${code}" "${c_reset}" "${path}" \
+            "${c_dim}" "$(describe "${code: -1}")" "${c_reset}"
+        if [[ "${use_diff}" -eq 1 ]]; then
+            show_diff "${path}" "${reverse}"
+        fi
+    done
+
+    # Blank line before the command(s). In diff mode show_diff already emitted
+    # one after the last file, so don't double it.
+    if [[ "${use_diff}" -eq 0 ]]; then
+        printf '\n'
+    fi
+    local cline
+    while IFS= read -r cline; do
+        printf '    %s%s%s\n' "${c_bold}" "${cline}" "${c_reset}"
+    done <<<"${cmds}"
+    return 0
+}
+
+render_group "${c_apply}" \
+    "↓ deploy from dotfiles" \
+    0 "cz apply" \
+    "${apply_lines[@]+"${apply_lines[@]}"}"
+
+render_group "${c_readd}" \
+    "↑ capture into dotfiles" \
+    1 "cz re-add" \
+    "${readd_lines[@]+"${readd_lines[@]}"}"
+
+# shellcheck disable=SC2016  # literal $HOME is intentional in the help text
+render_group "${c_both}" \
+    "⚠ edited on BOTH sides — you decide" \
+    1 "$(printf 'cz apply    # take the dotfiles version (discard your $HOME edit)\ncz re-add   # keep your $HOME edit (update the dotfiles source)')" \
+    "${both_lines[@]+"${both_lines[@]}"}"
+
+if [[ "${use_diff}" -eq 0 ]]; then
+    printf '\n%stip:%s re-run with -d to see a diff under each file, or append a path to the command shown.\n' \
+        "${c_dim}" "${c_reset}"
+fi

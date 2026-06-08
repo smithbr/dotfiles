@@ -8,10 +8,11 @@ alias xc="cd ~/.config"
 alias xdn="xdg-ninja --skip-ok --skip-unsupported"
 
 # shell
-alias cz="chezmoi"
+# `cz` is a function (see shell/functions) so `cz status` runs chezstatus.
 alias cza="chezmoi apply"
 alias czar="chezmoi apply --refresh-externals"
-alias czs="chezmoi status"
+alias czs="chezstatus"
+alias czd="chezstatus --diff"
 alias czui="chezit"
 alias ddf="cd ~/.dotfiles"
 alias ff="fastfetch -c all"

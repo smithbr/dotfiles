@@ -1,3 +1,16 @@
+# chezmoi: route `cz status`/`cz st` to chezstatus; pass everything else through
+cz() {
+    case "${1:-}" in
+        status | st)
+            shift
+            chezstatus "$@"
+            ;;
+        *)
+            command chezmoi "$@"
+            ;;
+    esac
+}
+
 # lazygit: change directory on exit
 lg() {
     export LAZYGIT_NEW_DIR_FILE=~/.lazygit/newdir
