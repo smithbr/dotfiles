@@ -94,6 +94,15 @@ ensure_local_install_ssh_key() {
         return 0
     fi
 
+    # A public key present without a private key on disk means the key is managed
+    # by an external SSH agent (e.g. 1Password keeps the private half in the vault
+    # and exposes only the .pub here as the IdentityFile). Generating a new keypair
+    # would clobber it and break SSH auth and commit signing, so leave it alone.
+    if [[ -f "${LOCAL_INSTALL_SSH_KEY_PATH}.pub" ]]; then
+        log_info "Found ${LOCAL_INSTALL_SSH_KEY_PATH}.pub with no private key on disk; assuming an external agent (e.g. 1Password) manages it, leaving it untouched"
+        return 0
+    fi
+
     key_comment="$(ssh_key_comment)"
     log_info "Creating local SSH key at ${LOCAL_INSTALL_SSH_KEY_PATH}"
     ssh-keygen -q -t ed25519 -N "" -C "${key_comment}" -f "${LOCAL_INSTALL_SSH_KEY_PATH}"
