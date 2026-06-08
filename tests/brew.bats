@@ -240,10 +240,17 @@ _parse_brewfile_line() {
     assert_output $'INSTALLED\nMISSING'
 }
 
-@test "optional_prompt_mode skips when no interactive terminal is available" {
+@test "optional_prompt_mode skips when no controlling terminal can be opened" {
     run bash -c '
+        has_interactive_tty() {
+            local tty_device="${BREW_TTY_DEVICE:-/dev/tty}"
+            ( : < "${tty_device}" ) 2>/dev/null || return 1
+            ( : > "${tty_device}" ) 2>/dev/null || return 1
+            return 0
+        }
+
         optional_prompt_mode() {
-            if [[ ! -t 0 || ! -t 1 || ! -r /dev/tty || ! -w /dev/tty ]]; then
+            if ! has_interactive_tty; then
                 printf "skip\n"
                 return
             fi
@@ -255,10 +262,40 @@ _parse_brewfile_line() {
             fi
         }
 
-        optional_prompt_mode
+        BREW_TTY_DEVICE="/nonexistent/tty" optional_prompt_mode
     '
     assert_success
     assert_output "skip"
+}
+
+@test "optional_prompt_mode prompts when a terminal device is openable even if stdout is piped" {
+    run bash -c '
+        has_interactive_tty() {
+            local tty_device="${BREW_TTY_DEVICE:-/dev/tty}"
+            ( : < "${tty_device}" ) 2>/dev/null || return 1
+            ( : > "${tty_device}" ) 2>/dev/null || return 1
+            return 0
+        }
+
+        optional_prompt_mode() {
+            if ! has_interactive_tty; then
+                printf "skip\n"
+                return
+            fi
+
+            if command -v gum >/dev/null 2>&1; then
+                printf "gum\n"
+            else
+                printf "read\n"
+            fi
+        }
+
+        # /dev/null is always openable for read and write, standing in for a
+        # usable terminal device; stdout here is a pipe (bats run captures it).
+        PATH="/nonexistent" BREW_TTY_DEVICE="/dev/null" optional_prompt_mode
+    '
+    assert_success
+    assert_output "read"
 }
 
 # ---------------------------------------------------------------------------
@@ -640,6 +677,9 @@ MOCK
         export TEST_LOG="${TEST_TMPDIR}/brew-macos.log"
         export PATH="${TEST_BIN}:/usr/bin:/bin"
         export OSTYPE="darwin24"
+        # Force the no-controlling-terminal path so the optional picker is
+        # skipped deterministically regardless of how the test harness is run.
+        export BREW_TTY_DEVICE="/nonexistent/tty"
 
         mkdir -p "${HOME}" "${TEST_BIN}"
         : > "${TEST_LOG}"

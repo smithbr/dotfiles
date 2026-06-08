@@ -151,9 +151,16 @@ optional_entry_is_installed() {
 }
 
 has_interactive_tty() {
-    if [[ ! -t 0 || ! -t 1 || ! -r /dev/tty || ! -w /dev/tty ]]; then
-        return 1
-    fi
+    # The optional-package picker reads and writes the terminal device directly
+    # (see the gum/read branches below), so a piped or redirected stdin/stdout is
+    # fine — what matters is whether a controlling terminal can actually be
+    # opened. Opening /dev/tty fails with ENXIO when there is no controlling
+    # terminal (cron, CI, nohup), which is exactly when we must skip. The device
+    # path is overridable so tests can force either outcome deterministically.
+    local tty_device="${BREW_TTY_DEVICE:-/dev/tty}"
+
+    ( : < "${tty_device}" ) 2>/dev/null || return 1
+    ( : > "${tty_device}" ) 2>/dev/null || return 1
 
     return 0
 }
