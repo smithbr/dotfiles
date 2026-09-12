@@ -1207,6 +1207,378 @@ MOCK
     assert_output --partial "Passed:"
 }
 
+@test "ph-backup displays help" {
+    run "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-backup" --help
+    assert_success
+    assert_output --partial "Usage:"
+    assert_output --partial "ph-backup [-o|--output DIR]"
+    assert_output --partial "/var/backups/ph-backup"
+}
+
+@test "ph-backup rejects unknown arguments before elevating" {
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+printf 'sudo %s\n' "$*"
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/sudo"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-backup" --bogus
+    assert_failure
+    assert_output --partial "Unknown argument: --bogus"
+    refute_output --partial "sudo "
+}
+
+@test "ph-backup refuses to run off Linux" {
+    run env OSTYPE="darwin23" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-backup"
+    assert_failure
+    assert_output --partial "only runs on the Linux host"
+}
+
+@test "ph-backup self-elevates through sudo and preserves the output directory" {
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+printf 'sudo %s\n' "$*"
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/sudo"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-backup" -o /mnt/nas/pihole
+    assert_success
+    assert_output --partial "sudo PATH=${BIN_SANDBOX}:/usr/bin:/bin"
+    assert_output --partial "executable_ph-backup -o /mnt/nas/pihole"
+}
+
+# ph-backup must run as root, so tests exercise a copy with the self-elevation
+# block stripped out. Mocks stand in for Pi-hole, Unbound, Tailscale, and the
+# GNU flags (stat -c, numfmt) that the Linux host provides but macOS does not.
+setup_ph_backup_sandbox() {
+    local teleporter_status="${1:-0}"
+
+    cat > "${BIN_SANDBOX}/pihole-FTL" <<MOCK
+#!/usr/bin/env bash
+case "\${1}" in
+    --teleporter)
+        [[ "${teleporter_status}" -eq 0 ]] || exit 1
+        # A real zip, so the restore map can enumerate its paths the way it
+        # does against Pi-hole's own export.
+        mkdir -p etc/pihole
+        printf 'toml\n' > etc/pihole/pihole.toml
+        printf 'hosts\n' > etc/hosts
+        zip -qr "pi-hole_pi_teleporter_2026-01-01.zip" etc
+        rm -rf etc
+        printf 'pi-hole_pi_teleporter_2026-01-01.zip\n'
+        ;;
+    --config) printf '["127.0.0.1#5335"]\n' ;;
+    sqlite3)
+        case "\${3}" in
+            *gravity*) printf '8843595\n' ;;
+            *) printf '9\n' ;;
+        esac
+        ;;
+esac
+MOCK
+
+    cat > "${BIN_SANDBOX}/pihole" <<'MOCK'
+#!/usr/bin/env bash
+[[ "${1}" == "-v" ]] && printf 'Core version is v6.1.4\n'
+MOCK
+
+    # Peer "m" carries Mullvad's shared-exit-node tag and must be filtered out.
+    cat > "${BIN_SANDBOX}/tailscale" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1}" == "status" && "${2}" == "--json" ]]; then
+    printf '{"Version":"1.90.2","BackendState":"Running","MagicDNSSuffix":"tail1.ts.net",'
+    printf '"CurrentTailnet":{"Name":"example.com"},'
+    printf '"Self":{"HostName":"pi","TailscaleIPs":["100.64.0.5"]},'
+    printf '"Peer":{"a":{"HostName":"mac","Online":true},"b":{"HostName":"nas","Online":false},'
+    printf '"m":{"HostName":"mullvad-lax","Online":true,"Tags":["tag:mullvad-exit-node"]}}}\n'
+fi
+MOCK
+
+    cat > "${BIN_SANDBOX}/unbound-checkconf" <<MOCK
+#!/usr/bin/env bash
+case "\${2}" in
+    config-file) printf '${TEST_TMPDIR}/etc/unbound/unbound.conf\n' ;;
+    interface) printf '127.0.0.1\n' ;;
+    port) printf '5335\n' ;;
+    auto-trust-anchor-file) printf '${TEST_TMPDIR}/var/lib/unbound/root.key\n' ;;
+    *) exit 0 ;;
+esac
+MOCK
+
+    cat > "${BIN_SANDBOX}/sqlite3" <<'MOCK'
+#!/usr/bin/env bash
+case "${2}" in
+    *gravity*) printf '128432\n' ;;
+    *) printf '7\n' ;;
+esac
+MOCK
+
+    cat > "${BIN_SANDBOX}/hostname" <<'MOCK'
+#!/usr/bin/env bash
+printf 'pi\n'
+MOCK
+
+    cat > "${BIN_SANDBOX}/stat" <<'MOCK'
+#!/usr/bin/env bash
+[[ "${1}" == "-c" && "${2}" == "%s" ]] && exec /usr/bin/stat -f%z "${3}"
+exec /usr/bin/stat "$@"
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/pihole-FTL" "${BIN_SANDBOX}/pihole" "${BIN_SANDBOX}/tailscale" \
+        "${BIN_SANDBOX}/unbound-checkconf" "${BIN_SANDBOX}/sqlite3" "${BIN_SANDBOX}/hostname" \
+        "${BIN_SANDBOX}/stat"
+
+    mkdir -p "${TEST_TMPDIR}/etc/unbound/unbound.conf.d" "${TEST_TMPDIR}/etc/pihole" \
+        "${TEST_TMPDIR}/var/lib/unbound" "${TEST_TMPDIR}/out"
+    printf 'server:\n  port: 5335\n' > "${TEST_TMPDIR}/etc/unbound/unbound.conf.d/pi-hole.conf"
+    printf 'gravity\n' > "${TEST_TMPDIR}/etc/pihole/gravity.db"
+    # The trust anchor lives outside the config directory, as on Debian.
+    printf 'anchor\n' > "${TEST_TMPDIR}/var/lib/unbound/root.key"
+
+    awk '
+        /^# Self-elevate if not root/ { skip = 1 }
+        skip && /^fi$/ { skip = 0; next }
+        skip { next }
+        { print }
+    ' "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-backup" > "${TEST_TMPDIR}/ph-backup"
+
+    chmod +x "${TEST_TMPDIR}/ph-backup"
+}
+
+run_ph_backup_probe() {
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        PH_BACKUP_SBIN_PATHS="" \
+        PH_BACKUP_UNBOUND_DIR="${TEST_TMPDIR}/etc/unbound" \
+        PH_BACKUP_PIHOLE_DIR="${TEST_TMPDIR}/etc/pihole" \
+        "${TEST_TMPDIR}/ph-backup" -o "${TEST_TMPDIR}/out"
+}
+
+@test "ph-backup archives the three backups plus a summary" {
+    setup_ph_backup_sandbox
+
+    run_ph_backup_probe
+    assert_success
+    assert_output --partial "Teleporter archive captured"
+    assert_output --partial "Tailscale state captured"
+    assert_output --partial "SUMMARY.md written"
+    assert_output --partial "Failed: 0"
+
+    local archive
+    archive="$(find "${TEST_TMPDIR}/out" -name 'ph-backup-pi-*.tar.gz' -print -quit)"
+    [[ -n "${archive}" ]]
+
+    run tar -tzf "${archive}"
+    assert_success
+    assert_output --partial "SUMMARY.md"
+    assert_output --partial "pi-hole_pi_teleporter_2026-01-01.zip"
+    assert_output --partial "unbound-"
+    assert_output --partial "tailscale-status-"
+}
+
+@test "ph-backup summary describes all three sources" {
+    setup_ph_backup_sandbox
+
+    run_ph_backup_probe
+    assert_success
+
+    local archive
+    archive="$(find "${TEST_TMPDIR}/out" -name 'ph-backup-pi-*.tar.gz' -print -quit)"
+
+    run tar -xzOf "${archive}" '*/SUMMARY.md'
+    assert_success
+    assert_output --partial "Core version is v6.1.4"
+    assert_output --partial "Gravity domains: 128432"
+    assert_output --partial '127.0.0.1#5335'
+    assert_output --partial "Backend state: Running"
+    assert_output --partial "Tailnet: example.com"
+    assert_output --partial "Peers: 2 total, 1 online"
+    assert_output --partial "Keep it private"
+}
+
+@test "ph-backup maps every archived path to a restore destination" {
+    setup_ph_backup_sandbox
+
+    run_ph_backup_probe
+    assert_success
+
+    local archive
+    archive="$(find "${TEST_TMPDIR}/out" -name 'ph-backup-pi-*.tar.gz' -print -quit)"
+
+    run tar -xzOf "${archive}" '*/SUMMARY.md'
+    assert_success
+    assert_output --partial "Restore map"
+
+    # Every path inside the Teleporter zip and the Unbound tarball is listed
+    # with the absolute path it belongs at.
+    assert_output --partial '| `etc/pihole/pihole.toml` | `/etc/pihole/pihole.toml` |'
+    assert_output --partial '| `etc/hosts` | `/etc/hosts` |'
+
+    # Unbound paths are stored relative to / so each maps to one destination.
+    local rel="${TEST_TMPDIR#/}"
+    assert_output --partial '| `'"${rel}"'/etc/unbound/unbound.conf.d/pi-hole.conf` | `'"${TEST_TMPDIR}"'/etc/unbound/unbound.conf.d/pi-hole.conf` |'
+    assert_output --partial '| `'"${rel}"'/var/lib/unbound/root.key` | `'"${TEST_TMPDIR}"'/var/lib/unbound/root.key` |'
+
+    # Artifacts that restore nowhere say so outright.
+    assert_output --partial "Restores to: nothing"
+}
+
+@test "ph-backup contents table names a destination for every file" {
+    setup_ph_backup_sandbox
+    printf 'server:\n' > "${TEST_TMPDIR}/etc/unbound/unbound.conf"
+
+    run_ph_backup_probe
+    assert_success
+
+    local archive
+    archive="$(find "${TEST_TMPDIR}/out" -name 'ph-backup-pi-*.tar.gz' -print -quit)"
+
+    run tar -xzOf "${archive}" '*/SUMMARY.md'
+    assert_success
+    assert_output --partial "| File | Size | Restores to |"
+
+    # Teleporter keeps /etc and /etc/pihole distinct; a top-level directory is
+    # too broad to stand in for its children.
+    assert_output --partial '| `/etc`, `/etc/pihole` |'
+
+    # Unbound collapses its subdirectory into the config root.
+    assert_output --partial '`'"${TEST_TMPDIR}"'/etc/unbound`, `'"${TEST_TMPDIR}"'/var/lib/unbound` |'
+
+    # The two files that restore nowhere are listed, not omitted.
+    assert_output --partial "| nothing — reference only |"
+    assert_output --partial '| `SUMMARY.md` | — | nothing — this file |'
+
+    # Checksums survive the move out of the contents table.
+    assert_output --partial "## Checksums"
+    assert_output --partial "sha256sum -c"
+}
+
+@test "ph-backup includes the DNSSEC trust anchor from outside the config dir" {
+    setup_ph_backup_sandbox
+
+    run_ph_backup_probe
+    assert_success
+
+    local archive inner
+    archive="$(find "${TEST_TMPDIR}/out" -name 'ph-backup-pi-*.tar.gz' -print -quit)"
+    inner="${TEST_TMPDIR}/inner"
+    mkdir -p "${inner}"
+    tar -xzf "${archive}" -C "${inner}"
+
+    run tar -tzf "$(find "${inner}" -name 'unbound-*.tar.gz' -print -quit)"
+    assert_success
+    assert_output --partial "${TEST_TMPDIR#/}/etc/unbound/unbound.conf.d/pi-hole.conf"
+    assert_output --partial "${TEST_TMPDIR#/}/var/lib/unbound/root.key"
+}
+
+@test "ph-backup drops Mullvad exit nodes from the Tailscale state" {
+    setup_ph_backup_sandbox
+
+    run_ph_backup_probe
+    assert_success
+
+    local archive inner state
+    archive="$(find "${TEST_TMPDIR}/out" -name 'ph-backup-pi-*.tar.gz' -print -quit)"
+    inner="${TEST_TMPDIR}/inner"
+    mkdir -p "${inner}"
+    tar -xzf "${archive}" -C "${inner}"
+    state="$(find "${inner}" -name 'tailscale-status-*.json' -print -quit)"
+
+    run jq -r '.Peer | keys | join(",")' "${state}"
+    assert_success
+    assert_output "a,b"
+
+    run tar -xzOf "${archive}" '*/SUMMARY.md'
+    assert_output --partial "Peers: 2 total"
+    assert_output --partial "Filtered out: 1 shared Mullvad exit nodes"
+}
+
+@test "ph-backup copies the archive off-box when a destination is given" {
+    setup_ph_backup_sandbox
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        PH_BACKUP_SBIN_PATHS="" \
+        PH_BACKUP_UNBOUND_DIR="${TEST_TMPDIR}/etc/unbound" \
+        PH_BACKUP_PIHOLE_DIR="${TEST_TMPDIR}/etc/pihole" \
+        "${TEST_TMPDIR}/ph-backup" -o "${TEST_TMPDIR}/out" --copy-to "${TEST_TMPDIR}/offbox"
+    assert_success
+    assert_output --partial "Archive copied to ${TEST_TMPDIR}/offbox"
+
+    run find "${TEST_TMPDIR}/offbox" -name 'ph-backup-pi-*.tar.gz'
+    assert_output --partial "ph-backup-pi-"
+}
+
+@test "ph-backup warns without failing when the off-box copy cannot be written" {
+    setup_ph_backup_sandbox
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        PH_BACKUP_SBIN_PATHS="" \
+        PH_BACKUP_UNBOUND_DIR="${TEST_TMPDIR}/etc/unbound" \
+        PH_BACKUP_PIHOLE_DIR="${TEST_TMPDIR}/etc/pihole" \
+        "${TEST_TMPDIR}/ph-backup" -o "${TEST_TMPDIR}/out" \
+        --copy-to "${TEST_TMPDIR}/etc/pihole/gravity.db/nope"
+    assert_success
+    assert_output --partial "Could not copy the archive"
+    assert_output --partial "Warnings: 1"
+}
+
+@test "ph-backup reads gravity stats through pihole-FTL when sqlite3 cannot" {
+    setup_ph_backup_sandbox
+
+    # The Pi has no sqlite3 package at all; a stub that returns nothing stands
+    # in for that, since the host running these tests has its own sqlite3.
+    cat > "${BIN_SANDBOX}/sqlite3" <<'MOCK'
+#!/usr/bin/env bash
+exit 1
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/sqlite3"
+
+    run_ph_backup_probe
+    assert_success
+
+    local archive
+    archive="$(find "${TEST_TMPDIR}/out" -name 'ph-backup-pi-*.tar.gz' -print -quit)"
+
+    run tar -xzOf "${archive}" '*/SUMMARY.md'
+    assert_success
+    assert_output --partial "Gravity domains: 8843595"
+    assert_output --partial "Enabled adlists: 9"
+    refute_output --partial "Gravity statistics: unavailable"
+}
+
+@test "ph-backup warns but still archives when Tailscale and Unbound are missing" {
+    setup_ph_backup_sandbox
+    rm "${BIN_SANDBOX}/tailscale"
+    rm -rf "${TEST_TMPDIR}/etc/unbound"
+
+    run_ph_backup_probe
+    assert_success
+    assert_output --partial "Could not capture Tailscale state"
+    assert_output --partial "Could not archive"
+    assert_output --partial "Warnings: 2"
+
+    local archive
+    archive="$(find "${TEST_TMPDIR}/out" -name 'ph-backup-pi-*.tar.gz' -print -quit)"
+    [[ -n "${archive}" ]]
+}
+
+@test "ph-backup writes no archive when the Teleporter export fails" {
+    setup_ph_backup_sandbox 1
+
+    run_ph_backup_probe
+    assert_failure
+    assert_output --partial "Teleporter export failed"
+    assert_output --partial "Run pihole-FTL --teleporter manually"
+
+    run find "${TEST_TMPDIR}/out" -name '*.tar.gz'
+    assert_output ""
+}
+
 @test "ts-test displays help" {
     run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ts-test" --help
     assert_success
