@@ -1,0 +1,1000 @@
+#!/usr/bin/env bash
+# ============================================================
+#  ph-backup — Snapshot Pi-hole, Unbound, and Tailscale config
+# ============================================================
+
+set -euo pipefail
+
+append_path_dir() {
+    local dir="${1}"
+    if [[ -n "${dir}" && ":${PATH}:" != *":${dir}:"* ]]; then
+        PATH="${PATH}:${dir}"
+    fi
+}
+
+# Add standard admin binary locations so Debian/Raspberry Pi installs remain
+# discoverable even when the invoking user's PATH omits sbin directories.
+IFS=':' read -r -a supplemental_path_dirs <<< "${PH_BACKUP_SBIN_PATHS:-/usr/local/sbin:/usr/sbin:/sbin}"
+for dir in "${supplemental_path_dirs[@]}"; do
+    append_path_dir "${dir}"
+done
+
+usage() {
+    local help_text
+
+    help_text="$(cat <<'EOF'
+# ph-backup
+
+Snapshot Pi-hole, Unbound, and Tailscale into a single dated tar.gz archive.
+
+## Contents
+
+| Artifact | Source |
+|----------|--------|
+| Teleporter archive | `pihole-FTL --teleporter` |
+| Unbound config | `tar` of `/etc/unbound` plus the DNSSEC trust anchor |
+| Tailscale state | `tailscale status --json`, shared exit nodes filtered out |
+| `SUMMARY.md` | Overview of all three, with a full restore map |
+
+## Options
+
+| Option | Description |
+|--------|-------------|
+| `-o DIR`, `--output DIR` | Write the archive to `DIR` (default `/var/backups/ph-backup`) |
+| `-c DEST`, `--copy-to DEST` | Also copy the archive to a path or `host:path` over scp |
+| `-h`, `--help` | Show this help |
+
+## Examples
+
+| Command | Description |
+|---------|-------------|
+| `ph-backup` | Back up to `/var/backups/ph-backup` |
+| `ph-backup -o /mnt/nas/pihole` | Back up to a mounted share |
+| `ph-backup -c nas:/backups` | Back up locally, then copy off-box over scp |
+EOF
+)"
+
+    if command -v gum >/dev/null 2>&1 && [[ -t 1 ]]; then
+        printf '%s\n' "${help_text}" | gum format
+        return
+    fi
+
+    cat <<'EOF'
+Usage:
+  ph-backup [-o|--output DIR] [-c|--copy-to DEST]
+  ph-backup --help
+
+Snapshot Pi-hole (Teleporter), Unbound (/etc/unbound), and Tailscale state,
+write a summary of all three, and roll them into a dated tar.gz archive.
+Defaults to /var/backups/ph-backup when no output directory is given.
+EOF
+}
+
+BACKUP_DIR="${PH_BACKUP_DIR:-/var/backups/ph-backup}"
+UNBOUND_DIR="${PH_BACKUP_UNBOUND_DIR:-/etc/unbound}"
+PIHOLE_DIR="${PH_BACKUP_PIHOLE_DIR:-/etc/pihole}"
+COPY_TO="${PH_BACKUP_COPY_TO:-}"
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            -h|-help|--help|help)
+                usage
+                exit 0
+                ;;
+            -o|--output)
+                [[ $# -ge 2 ]] || die "error: ${1} requires a directory argument."
+                BACKUP_DIR="${2}"
+                shift
+                ;;
+            --output=*)
+                BACKUP_DIR="${1#--output=}"
+                ;;
+            -c|--copy-to)
+                [[ $# -ge 2 ]] || die "error: ${1} requires a destination argument."
+                COPY_TO="${2}"
+                shift
+                ;;
+            --copy-to=*)
+                COPY_TO="${1#--copy-to=}"
+                ;;
+            *)
+                die "Unknown argument: ${1}"
+                ;;
+        esac
+        shift
+    done
+}
+
+die() {
+    printf '%s\n' "$1" >&2
+    exit 1
+}
+
+is_linux() {
+    case "${OSTYPE}" in
+        linux*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Parse before elevating so help and bad arguments never prompt for a password.
+parse_args "$@"
+
+if ! is_linux; then
+    die "error: ph-backup only runs on the Linux host where Pi-hole and Unbound live."
+fi
+
+# Self-elevate if not root (preserve PATH for ~/.local/bin commands)
+if [[ "${EUID}" -ne 0 ]]; then
+    exec sudo PATH="${PATH}" "${0}" "${@+"${@}"}"
+fi
+
+# Everything staged here holds Unbound control keys, so keep it owner-only.
+umask 077
+
+HAS_GUM=false
+command -v gum >/dev/null 2>&1 && [[ -t 1 ]] && HAS_GUM=true
+
+TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
+HOST_NAME="$(hostname -s 2>/dev/null || hostname)"
+SNAPSHOT_NAME="ph-backup-${HOST_NAME}-${TIMESTAMP}"
+STAGE_DIR=""
+SNAPSHOT_DIR=""
+ARCHIVE_PATH=""
+
+declare -a SUMMARY_RESULTS=()
+declare -a NEXT_STEPS=()
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
+
+TELEPORTER_FILE=""
+UNBOUND_FILE=""
+TAILSCALE_FILE=""
+TAILSCALE_DROPPED=0
+ANCHOR_DIR=""
+
+_header() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --bold --foreground 212 "$1"
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
+_box() {
+    local content="$1"
+
+    if [[ "${HAS_GUM}" == true ]]; then
+        printf '%s' "${content}" | gum style --border rounded --border-foreground 240 --margin "0 0" --padding "0 1"
+    else
+        printf '%s\n' "${content}" | sed 's/^/  /'
+    fi
+}
+
+_item() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 244 "  $1"
+    else
+        printf '  %s\n' "$1"
+    fi
+}
+
+add_result() {
+    local kind="$1"
+    local message="$2"
+
+    SUMMARY_RESULTS+=("${kind}"$'\t'"${message}")
+
+    case "${kind}" in
+        PASS) PASS_COUNT=$((PASS_COUNT + 1)) ;;
+        WARN) WARN_COUNT=$((WARN_COUNT + 1)) ;;
+        FAIL) FAIL_COUNT=$((FAIL_COUNT + 1)) ;;
+    esac
+}
+
+add_next_step() {
+    local step="$1"
+    local existing=""
+
+    for existing in "${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}"; do
+        [[ "${existing}" == "${step}" ]] && return 0
+    done
+
+    NEXT_STEPS+=("${step}")
+}
+
+cleanup() {
+    [[ -n "${STAGE_DIR}" && -d "${STAGE_DIR}" ]] && rm -rf "${STAGE_DIR}"
+    return 0
+}
+
+file_size() {
+    local path="$1"
+
+    if [[ ! -f "${path}" ]]; then
+        printf 'n/a'
+        return
+    fi
+
+    if command -v numfmt >/dev/null 2>&1; then
+        numfmt --to=iec --suffix=B "$(stat -c %s "${path}" 2>/dev/null || printf '0')"
+        return
+    fi
+
+    stat -c %s "${path}" 2>/dev/null || printf 'n/a'
+}
+
+file_hash() {
+    local path="$1"
+
+    [[ -f "${path}" ]] || { printf 'n/a'; return; }
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "${path}" | cut -d' ' -f1
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "${path}" | cut -d' ' -f1
+    else
+        printf 'n/a'
+    fi
+}
+
+check_deps() {
+    local missing=0
+    local section=""
+
+    printf '\n'
+    _header "Dependencies"
+
+    if ! command -v pihole-FTL >/dev/null 2>&1 && ! command -v pihole >/dev/null 2>&1; then
+        missing=1
+        add_result "FAIL" "Pi-hole is not installed on this host"
+        add_next_step "Run ph-backup on the host where Pi-hole is installed"
+        section+="FAIL  neither pihole-FTL nor pihole is on PATH"$'\n'
+    fi
+
+    if ! command -v tar >/dev/null 2>&1; then
+        missing=1
+        add_result "FAIL" "tar is unavailable"
+        add_next_step "Install tar: sudo apt install tar"
+        section+="FAIL  tar is unavailable"$'\n'
+    fi
+
+    if [[ "${missing}" -eq 0 ]]; then
+        _box "OK  Required commands are available"
+        return 0
+    fi
+
+    _box "${section%$'\n'}"
+    return 1
+}
+
+print_intro() {
+    local section=""
+
+    _header "ph-backup"
+    section+="Host: ${HOST_NAME}"$'\n'
+    section+="Snapshot: ${SNAPSHOT_NAME}"$'\n'
+    section+="Destination: ${BACKUP_DIR}"
+    _box "${section}"
+}
+
+# Pi-hole writes the Teleporter archive into the working directory and prints
+# its name, so run it inside an empty staging directory and collect what lands.
+backup_pihole() {
+    local work_dir="${SNAPSHOT_DIR}/pihole-export"
+    local found=""
+
+    mkdir -p "${work_dir}"
+
+    if command -v pihole-FTL >/dev/null 2>&1; then
+        (cd "${work_dir}" && pihole-FTL --teleporter) >/dev/null 2>&1 || return 1
+    else
+        (cd "${work_dir}" && pihole -a -t) >/dev/null 2>&1 || return 1
+    fi
+
+    found="$(find "${work_dir}" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) -print -quit)"
+    [[ -n "${found}" ]] || return 1
+
+    TELEPORTER_FILE="$(basename "${found}")"
+    mv "${found}" "${SNAPSHOT_DIR}/${TELEPORTER_FILE}"
+    rm -rf "${work_dir}"
+    return 0
+}
+
+# Store paths relative to / so the tarball restores with a single
+# `tar -xzf … -C /` and every entry maps to one obvious destination.
+backup_unbound() {
+    local -a paths=()
+
+    [[ -d "${UNBOUND_DIR}" ]] || return 1
+
+    paths+=("${UNBOUND_DIR#/}")
+
+    # Debian keeps the DNSSEC trust anchor and root hints in /var/lib/unbound,
+    # outside the config directory. A restore is incomplete without them.
+    ANCHOR_DIR="$(unbound_anchor_dir)"
+    if [[ -n "${ANCHOR_DIR}" ]]; then
+        paths+=("${ANCHOR_DIR#/}")
+    fi
+
+    UNBOUND_FILE="unbound-${TIMESTAMP}.tar.gz"
+
+    tar -czf "${SNAPSHOT_DIR}/${UNBOUND_FILE}" -C / "${paths[@]}" 2>/dev/null || return 1
+    return 0
+}
+
+# Mullvad's shared exit nodes appear as hundreds of peers and can outweigh the
+# rest of the file many times over. They belong to Mullvad, not this tailnet,
+# so drop them and record how many went.
+drop_shared_exit_nodes() {
+    local path="$1"
+    local filtered="${path}.filtered"
+    local before=""
+    local after=""
+
+    command -v jq >/dev/null 2>&1 || return 0
+
+    before="$(jq -r '.Peer // {} | length' "${path}" 2>/dev/null || true)"
+
+    jq '.Peer = ((.Peer // {}) | with_entries(
+            select(((.value.Tags // []) | any(startswith("tag:mullvad"))) | not)
+        ))' "${path}" >"${filtered}" 2>/dev/null || { rm -f "${filtered}"; return 0; }
+
+    [[ -s "${filtered}" ]] || { rm -f "${filtered}"; return 0; }
+
+    after="$(jq -r '.Peer // {} | length' "${filtered}" 2>/dev/null || true)"
+    [[ -n "${before}" && -n "${after}" ]] || { rm -f "${filtered}"; return 0; }
+
+    mv "${filtered}" "${path}"
+    TAILSCALE_DROPPED=$((before - after))
+    return 0
+}
+
+# Where Unbound keeps its trust anchor, when that is outside UNBOUND_DIR.
+# Prints nothing when the anchor is unknown or already inside the config dir.
+unbound_anchor_dir() {
+    local anchor=""
+    local dir=""
+
+    command -v unbound-checkconf >/dev/null 2>&1 || return 0
+
+    anchor="$(unbound-checkconf -o auto-trust-anchor-file 2>/dev/null || true)"
+    [[ -n "${anchor}" && "${anchor}" != "${UNBOUND_DIR}/"* ]] || return 0
+
+    dir="$(dirname "${anchor}")"
+    [[ -d "${dir}" ]] || return 0
+
+    printf '%s' "${dir}"
+}
+
+backup_tailscale() {
+    local json_path="${SNAPSHOT_DIR}/tailscale-status-${TIMESTAMP}.json"
+    local text_path="${SNAPSHOT_DIR}/tailscale-status-${TIMESTAMP}.txt"
+
+    command -v tailscale >/dev/null 2>&1 || return 1
+
+    if tailscale status --json >"${json_path}" 2>/dev/null && [[ -s "${json_path}" ]]; then
+        TAILSCALE_FILE="$(basename "${json_path}")"
+        drop_shared_exit_nodes "${json_path}"
+        return 0
+    fi
+
+    rm -f "${json_path}"
+
+    # A logged-out or down daemon still reports something useful in text form.
+    if tailscale status >"${text_path}" 2>&1 && [[ -s "${text_path}" ]]; then
+        TAILSCALE_FILE="$(basename "${text_path}")"
+        return 0
+    fi
+
+    rm -f "${text_path}"
+    return 1
+}
+
+# Read a single value out of the Tailscale status JSON. Uses jq when present
+# and falls back to a flat grep so the summary still says something useful.
+ts_value() {
+    local path="$1"
+    local key="$2"
+    local source="${SNAPSHOT_DIR}/${TAILSCALE_FILE}"
+    local value=""
+
+    [[ -n "${TAILSCALE_FILE}" && "${TAILSCALE_FILE}" == *.json ]] || { printf 'unknown'; return; }
+
+    if command -v jq >/dev/null 2>&1; then
+        value="$(jq -r "${path} // empty" "${source}" 2>/dev/null || true)"
+    else
+        value="$(grep -o "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "${source}" 2>/dev/null | head -1 | cut -d'"' -f4 || true)"
+    fi
+
+    printf '%s' "${value:-unknown}"
+}
+
+# Read from the gravity database. Pi-hole v6 embeds an sqlite3 shell inside
+# pihole-FTL, so a standalone sqlite3 package is not required. Callers must
+# confirm the database exists first: both shells create an empty one otherwise.
+gravity_query() {
+    local sql="$1"
+    local db="${PIHOLE_DIR}/gravity.db"
+    local result=""
+
+    if command -v sqlite3 >/dev/null 2>&1; then
+        result="$(sqlite3 "${db}" "${sql}" 2>/dev/null || true)"
+    fi
+
+    if [[ -z "${result}" ]] && command -v pihole-FTL >/dev/null 2>&1; then
+        result="$(pihole-FTL sqlite3 "${db}" "${sql}" 2>/dev/null || true)"
+    fi
+
+    printf '%s' "${result}"
+}
+
+summarize_pihole() {
+    local body=""
+    local versions=""
+    local upstreams=""
+    local gravity_db="${PIHOLE_DIR}/gravity.db"
+    local count=""
+
+    body+="- Teleporter archive: \`${TELEPORTER_FILE:-not captured}\`"$'\n'
+
+    if versions="$(pihole -v 2>/dev/null)"; then
+        body+="- Versions:"$'\n'
+        body+='```'$'\n'"${versions}"$'\n''```'$'\n'
+    else
+        body+="- Versions: unavailable (\`pihole -v\` failed)"$'\n'
+    fi
+
+    if command -v pihole-FTL >/dev/null 2>&1; then
+        upstreams="$(pihole-FTL --config dns.upstreams 2>/dev/null || true)"
+        body+="- Upstream DNS: \`${upstreams:-unknown}\`"$'\n'
+    fi
+
+    if [[ -r "${gravity_db}" ]]; then
+        count="$(gravity_query 'SELECT COUNT(*) FROM gravity;')"
+        body+="- Gravity domains: ${count:-unknown}"$'\n'
+        count="$(gravity_query 'SELECT COUNT(*) FROM adlist WHERE enabled = 1;')"
+        body+="- Enabled adlists: ${count:-unknown}"$'\n'
+        count="$(gravity_query 'SELECT COUNT(*) FROM domainlist;')"
+        body+="- Allow/deny entries: ${count:-unknown}"$'\n'
+        count="$(gravity_query 'SELECT COUNT(*) FROM client;')"
+        body+="- Known clients: ${count:-unknown}"$'\n'
+    else
+        body+="- Gravity statistics: unavailable (${gravity_db} not readable)"$'\n'
+    fi
+
+    printf '%s' "${body}"
+}
+
+summarize_unbound() {
+    local body=""
+    local version=""
+    local conf=""
+    local value=""
+    local key=""
+
+    if [[ -z "${UNBOUND_FILE}" ]]; then
+        printf '%s' "- Not captured: ${UNBOUND_DIR} is missing or unreadable."$'\n'
+        return
+    fi
+
+    body+="- Archive: \`${UNBOUND_FILE}\` (paths stored relative to \`/\`, ownership and modes preserved)"$'\n'
+    body+="- Config directory: \`${UNBOUND_DIR}\`"$'\n'
+
+    if [[ -n "${ANCHOR_DIR}" ]]; then
+        body+="- DNSSEC trust anchor directory: \`${ANCHOR_DIR}\` (included)"$'\n'
+    fi
+
+    if command -v unbound >/dev/null 2>&1; then
+        version="$(unbound -V 2>/dev/null | head -1 || true)"
+    fi
+    body+="- Version: ${version:-unknown}"$'\n'
+
+    if command -v unbound-checkconf >/dev/null 2>&1; then
+        # Older Unbound (1.17) refuses to print config-file, so fall back to
+        # the conventional path rather than reporting nothing.
+        conf="$(unbound-checkconf -o config-file 2>/dev/null || true)"
+        body+="- Config file: \`${conf:-${UNBOUND_DIR}/unbound.conf}\`"$'\n'
+
+        for key in interface port do-ip6 verbosity; do
+            # Options such as `interface` repeat, so flatten them onto one line.
+            value="$(unbound-checkconf -o "${key}" 2>/dev/null | tr '\n' ' ' || true)"
+            value="${value%"${value##*[![:space:]]}"}"
+            body+="- ${key}: \`${value:-unset}\`"$'\n'
+        done
+
+        if unbound-checkconf >/dev/null 2>&1; then
+            body+="- Config validation: passed at backup time"$'\n'
+        else
+            body+="- Config validation: **failed** at backup time (\`unbound-checkconf\`)"$'\n'
+        fi
+    else
+        body+="- unbound-checkconf unavailable, config details not inspected"$'\n'
+    fi
+
+    body+="- Files included:"$'\n'
+    body+='```'$'\n'
+    body+="$(tar -tzf "${SNAPSHOT_DIR}/${UNBOUND_FILE}" 2>/dev/null | head -50 || printf 'unavailable\n')"$'\n'
+    body+='```'$'\n'
+
+    printf '%s' "${body}"
+}
+
+# List the paths inside a zip. Pi-hole ships unzip; python3 covers hosts that
+# have had it removed.
+list_zip_entries() {
+    local zip_path="$1"
+
+    [[ -f "${zip_path}" ]] || return 0
+
+    if command -v unzip >/dev/null 2>&1; then
+        unzip -Z1 "${zip_path}" 2>/dev/null || true
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    for name in archive.namelist():
+        print(name)' "${zip_path}" 2>/dev/null || true
+    fi
+}
+
+# Condense a list of archive paths, read from stdin, into the distinct
+# directories they restore into. Used for the at-a-glance Contents table;
+# the restore map below carries the per-file detail.
+destination_summary() {
+    local entry=""
+    local dir=""
+    local known=""
+    local out=""
+    local -a seen=()
+
+    while IFS= read -r entry; do
+        [[ -n "${entry}" ]] || continue
+        # Directory entries restore alongside their contents, so skip them.
+        [[ "${entry}" == */ ]] && continue
+
+        dir="/$(dirname "${entry}")"
+        [[ "${dir}" == "/." ]] && dir="/"
+
+        for known in "${seen[@]+"${seen[@]}"}"; do
+            if [[ "${known}" == "${dir}" ]]; then
+                dir=""
+                break
+            fi
+        done
+
+        [[ -n "${dir}" ]] && seen+=("${dir}")
+    done
+
+    # Collapse children into their parent, so Unbound reads as /etc/unbound
+    # rather than /etc/unbound plus /etc/unbound/unbound.conf.d. A top-level
+    # directory is too broad to absorb anything: /etc would say nothing useful
+    # about a Teleporter export that lands in /etc/pihole.
+    local keep=0
+    local slashes=""
+    for dir in "${seen[@]+"${seen[@]}"}"; do
+        keep=1
+        for known in "${seen[@]+"${seen[@]}"}"; do
+            slashes="${known//[^\/]/}"
+            if [[ "${#slashes}" -ge 2 && "${dir}" != "${known}" && "${dir}" == "${known}/"* ]]; then
+                keep=0
+                break
+            fi
+        done
+        [[ "${keep}" -eq 1 ]] && out+="\`${dir}\`, "
+    done
+
+    printf '%s' "${out%, }"
+}
+
+# Spell out the destination of every path in the archive, so a restore never
+# has to guess. Teleporter entries are stored rooted at /, and the Unbound
+# tarball unpacks into the parent of the directory it was taken from.
+restore_map() {
+    local entry=""
+
+    cat <<EOF
+
+### 1. Pi-hole — \`${TELEPORTER_FILE:-not captured}\`
+EOF
+
+    if [[ -n "${TELEPORTER_FILE}" ]]; then
+        cat <<EOF
+
+Import with \`sudo pihole-FTL --teleporter ${TELEPORTER_FILE}\`, or Settings >
+Teleporter in the web UI. Afterwards run \`pihole -g\` to re-download the
+blocklists: the export carries your adlist definitions, not the domains
+themselves.
+
+| Inside the Teleporter zip | Restores to |
+|---|---|
+EOF
+        while IFS= read -r entry; do
+            [[ -n "${entry}" ]] || continue
+            cat <<EOF
+| \`${entry}\` | \`/${entry}\` |
+EOF
+        done < <(list_zip_entries "${SNAPSHOT_DIR}/${TELEPORTER_FILE}")
+    else
+        printf '\nNothing captured for Pi-hole in this run.\n'
+    fi
+
+    cat <<EOF
+
+### 2. Unbound — \`${UNBOUND_FILE:-not captured}\`
+EOF
+
+    if [[ -n "${UNBOUND_FILE}" ]]; then
+        cat <<EOF
+
+Extract with \`sudo tar -xzf ${UNBOUND_FILE} -C /\`, then
+\`sudo unbound-checkconf\` and \`sudo systemctl restart unbound\`. Every path is
+stored relative to \`/\`, and ownership and modes are preserved by the tarball.
+
+| Inside the tarball | Restores to |
+|---|---|
+EOF
+        while IFS= read -r entry; do
+            [[ -n "${entry}" ]] || continue
+            cat <<EOF
+| \`${entry}\` | \`/${entry}\` |
+EOF
+        done < <(tar -tzf "${SNAPSHOT_DIR}/${UNBOUND_FILE}" 2>/dev/null || true)
+
+        if [[ -n "${ANCHOR_DIR}" ]]; then
+            cat <<EOF
+
+> \`${ANCHOR_DIR}\` is included because the DNSSEC trust anchor lives there
+> rather than in \`${UNBOUND_DIR}\`. If it is ever lost, \`unbound-anchor\`
+> rebuilds it.
+EOF
+        fi
+    else
+        printf '\nNothing captured for Unbound in this run.\n'
+    fi
+
+    cat <<EOF
+
+### 3. Tailscale — \`${TAILSCALE_FILE:-not captured}\`
+
+**Restores to: nothing.** This is a record of the tailnet at backup time, for
+reference while rebuilding. Tailscale's own restorable state is the node key in
+\`/var/lib/tailscale/tailscaled.state\`, deliberately excluded because it is a
+secret; re-authenticate the machine with \`sudo tailscale up\` instead.
+
+### 4. \`SUMMARY.md\`
+
+**Restores to: nothing.** This file.
+EOF
+}
+
+summarize_tailscale() {
+    local body=""
+    local peers=""
+    local online=""
+
+    if [[ -z "${TAILSCALE_FILE}" ]]; then
+        printf '%s' "- Not captured: tailscale is unavailable or returned no state."$'\n'
+        return
+    fi
+
+    body+="- State file: \`${TAILSCALE_FILE}\`"$'\n'
+
+    if [[ "${TAILSCALE_FILE}" != *.json ]]; then
+        body+="- JSON state was unavailable; plain \`tailscale status\` output captured instead."$'\n'
+        printf '%s' "${body}"
+        return
+    fi
+
+    body+="- Client version: $(ts_value '.Version' 'Version')"$'\n'
+    body+="- Backend state: $(ts_value '.BackendState' 'BackendState')"$'\n'
+    body+="- Tailnet: $(ts_value '.CurrentTailnet.Name' 'Name')"$'\n'
+    body+="- MagicDNS suffix: $(ts_value '.MagicDNSSuffix' 'MagicDNSSuffix')"$'\n'
+    body+="- This node: $(ts_value '.Self.HostName' 'HostName') ($(ts_value '.Self.TailscaleIPs[0]' 'TailscaleIPs'))"$'\n'
+
+    if command -v jq >/dev/null 2>&1; then
+        peers="$(jq -r '.Peer // {} | length' "${SNAPSHOT_DIR}/${TAILSCALE_FILE}" 2>/dev/null || true)"
+        online="$(jq -r '[.Peer // {} | .[] | select(.Online)] | length' "${SNAPSHOT_DIR}/${TAILSCALE_FILE}" 2>/dev/null || true)"
+        body+="- Peers: ${peers:-unknown} total, ${online:-unknown} online"$'\n'
+        body+="- Exit node in use: $(jq -r 'if .ExitNodeStatus then .ExitNodeStatus.ID else "none" end' "${SNAPSHOT_DIR}/${TAILSCALE_FILE}" 2>/dev/null || printf 'unknown')"$'\n'
+
+        if [[ "${TAILSCALE_DROPPED}" -gt 0 ]]; then
+            body+="- Filtered out: ${TAILSCALE_DROPPED} shared Mullvad exit nodes, which belong to Mullvad rather than this tailnet"$'\n'
+        fi
+    fi
+
+    printf '%s' "${body}"
+}
+
+write_summary() {
+    local summary="${SNAPSHOT_DIR}/SUMMARY.md"
+    local name=""
+
+    {
+        cat <<EOF
+# ${SNAPSHOT_NAME}
+
+| Field | Value |
+|---|---|
+| Host | ${HOST_NAME} |
+| Taken | $(date -Iseconds) |
+| Kernel | $(uname -srm) |
+| Uptime | $(uptime -p 2>/dev/null || printf 'unknown') |
+
+## Contents
+
+Every file in this archive and where it restores to. Per-path detail is in the
+restore map at the end.
+
+| File | Size | Restores to |
+|---|---|---|
+EOF
+
+        if [[ -n "${TELEPORTER_FILE}" ]]; then
+            cat <<EOF
+| \`${TELEPORTER_FILE}\` | $(file_size "${SNAPSHOT_DIR}/${TELEPORTER_FILE}") | $(list_zip_entries "${SNAPSHOT_DIR}/${TELEPORTER_FILE}" | destination_summary) |
+EOF
+        fi
+
+        if [[ -n "${UNBOUND_FILE}" ]]; then
+            cat <<EOF
+| \`${UNBOUND_FILE}\` | $(file_size "${SNAPSHOT_DIR}/${UNBOUND_FILE}") | $(tar -tzf "${SNAPSHOT_DIR}/${UNBOUND_FILE}" 2>/dev/null | destination_summary) |
+EOF
+        fi
+
+        if [[ -n "${TAILSCALE_FILE}" ]]; then
+            cat <<EOF
+| \`${TAILSCALE_FILE}\` | $(file_size "${SNAPSHOT_DIR}/${TAILSCALE_FILE}") | nothing — reference only |
+EOF
+        fi
+
+        cat <<'EOF'
+| `SUMMARY.md` | — | nothing — this file |
+EOF
+
+        printf '\n## Pi-hole\n\n'
+        summarize_pihole
+        printf '\n## Unbound\n\n'
+        summarize_unbound
+        printf '\n## Tailscale\n\n'
+        summarize_tailscale
+
+        cat <<EOF
+
+## Restore map
+
+Where every file in this archive belongs on a restored machine.
+
+Unpack the container first — nothing in it is restored from where it sits:
+
+\`\`\`
+tar -xzf ${SNAPSHOT_NAME}.tar.gz
+cd ${SNAPSHOT_NAME}/
+\`\`\`
+EOF
+
+        restore_map
+
+        cat <<'EOF'
+
+## Checksums
+
+Run `sha256sum -c` against this list from inside the unpacked directory to
+confirm nothing was corrupted in transit.
+
+```
+EOF
+        for name in "${TELEPORTER_FILE}" "${UNBOUND_FILE}" "${TAILSCALE_FILE}"; do
+            [[ -n "${name}" ]] || continue
+            printf '%s  %s\n' "$(file_hash "${SNAPSHOT_DIR}/${name}")" "${name}"
+        done
+        printf '```\n'
+
+        cat <<'EOF'
+
+> This archive contains Unbound control keys. Keep it private.
+EOF
+    } > "${summary}"
+
+    [[ -s "${summary}" ]]
+}
+
+create_archive() {
+    mkdir -p "${BACKUP_DIR}"
+    chmod 700 "${BACKUP_DIR}" 2>/dev/null || true
+
+    ARCHIVE_PATH="${BACKUP_DIR}/${SNAPSHOT_NAME}.tar.gz"
+
+    tar -czf "${ARCHIVE_PATH}" -C "${STAGE_DIR}" "${SNAPSHOT_NAME}" || return 1
+
+    chmod 600 "${ARCHIVE_PATH}"
+
+    # Hand the archive to the human who invoked sudo so it can be copied off-box.
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        chown "${SUDO_USER}" "${ARCHIVE_PATH}" 2>/dev/null || true
+        chown "${SUDO_USER}" "${BACKUP_DIR}" 2>/dev/null || true
+    fi
+
+    [[ -s "${ARCHIVE_PATH}" ]]
+}
+
+# A backup that only exists on the machine it came from is not a backup. The
+# destination is either a path (mount, USB, NAS) or an scp target. Remote
+# copies run as the invoking user so they use that user's SSH keys and agent
+# rather than root's, which usually has neither.
+copy_offbox() {
+    [[ -n "${ARCHIVE_PATH}" && -s "${ARCHIVE_PATH}" ]] || return 1
+
+    if [[ "${COPY_TO}" == *:* ]]; then
+        command -v scp >/dev/null 2>&1 || return 1
+
+        if [[ -n "${SUDO_USER:-}" ]]; then
+            sudo -u "${SUDO_USER}" scp -q "${ARCHIVE_PATH}" "${COPY_TO}" || return 1
+            return 0
+        fi
+
+        scp -q "${ARCHIVE_PATH}" "${COPY_TO}" || return 1
+        return 0
+    fi
+
+    mkdir -p "${COPY_TO}" || return 1
+    cp "${ARCHIVE_PATH}" "${COPY_TO}/" || return 1
+    return 0
+}
+
+run_step() {
+    local title="$1"
+    local success_message="$2"
+    local failure_message="$3"
+    local next_step="$4"
+    local running_message="$5"
+    local severity="$6"
+    shift 6
+
+    printf '\n'
+    _header "${title}"
+    _item "${running_message}"
+
+    if "$@"; then
+        _box "OK  ${success_message}"
+        add_result "PASS" "${success_message}"
+        return 0
+    fi
+
+    _box "${severity}  ${failure_message}"$'\n'"Fix: ${next_step}"
+    add_result "${severity}" "${failure_message}"
+    add_next_step "${next_step}"
+    return 1
+}
+
+print_summary() {
+    local entry=""
+    local kind=""
+    local message=""
+    local summary_body=""
+    local step=""
+    local steps_body=""
+
+    printf '\n'
+    _header "Summary"
+
+    summary_body="passed: ${PASS_COUNT}"$'\n'"warnings: ${WARN_COUNT}"$'\n'"failed: ${FAIL_COUNT}"
+    for entry in "${SUMMARY_RESULTS[@]}"; do
+        kind="${entry%%$'\t'*}"
+        message="${entry#*$'\t'}"
+        summary_body+=$'\n'
+        summary_body+="${kind}  ${message}"
+    done
+
+    _box "${summary_body}"
+    printf '\n'
+
+    if [[ -n "${ARCHIVE_PATH}" && -s "${ARCHIVE_PATH}" ]]; then
+        _box "Archive: ${ARCHIVE_PATH}"$'\n'"Size: $(file_size "${ARCHIVE_PATH}")"
+        printf '\n'
+    fi
+
+    for step in "${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}"; do
+        steps_body+="- ${step}"$'\n'
+    done
+    if [[ -n "${steps_body}" ]]; then
+        _header "Next Steps"
+        _box "${steps_body%$'\n'}"
+        printf '\n'
+    fi
+
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 76 --bold "Passed: ${PASS_COUNT}"
+        if [[ "${WARN_COUNT}" -gt 0 ]]; then
+            gum style --foreground 214 --bold "Warnings: ${WARN_COUNT}"
+        fi
+        if [[ "${FAIL_COUNT}" -gt 0 ]]; then
+            gum style --foreground 196 --bold "Failed: ${FAIL_COUNT}"
+        fi
+    else
+        printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
+    fi
+
+    [[ "${FAIL_COUNT}" -eq 0 ]]
+}
+
+main() {
+    trap cleanup EXIT
+
+    print_intro
+
+    check_deps || {
+        print_summary || true
+        return 1
+    }
+
+    STAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ph-backup.XXXXXX")"
+    SNAPSHOT_DIR="${STAGE_DIR}/${SNAPSHOT_NAME}"
+    mkdir -p "${SNAPSHOT_DIR}"
+
+    run_step \
+        "Pi-hole" \
+        "Teleporter archive captured" \
+        "Teleporter export failed" \
+        "Run pihole-FTL --teleporter manually to inspect the failure" \
+        "Running pihole-FTL --teleporter" \
+        "FAIL" \
+        backup_pihole || true
+
+    run_step \
+        "Unbound" \
+        "${UNBOUND_DIR} archived" \
+        "Could not archive ${UNBOUND_DIR}" \
+        "Confirm ${UNBOUND_DIR} exists and is readable by root" \
+        "Creating tar.gz of ${UNBOUND_DIR}" \
+        "WARN" \
+        backup_unbound || true
+
+    run_step \
+        "Tailscale" \
+        "Tailscale state captured" \
+        "Could not capture Tailscale state" \
+        "Check tailscale status and that tailscaled is running" \
+        "Running tailscale status --json" \
+        "WARN" \
+        backup_tailscale || true
+
+    run_step \
+        "Summary" \
+        "SUMMARY.md written" \
+        "Could not write SUMMARY.md" \
+        "Inspect the staging directory permissions under ${TMPDIR:-/tmp}" \
+        "Summarizing captured state" \
+        "FAIL" \
+        write_summary || true
+
+    if [[ "${FAIL_COUNT}" -gt 0 ]]; then
+        print_summary || true
+        return 1
+    fi
+
+    run_step \
+        "Archive" \
+        "Backup archive written to ${BACKUP_DIR}" \
+        "Could not write the backup archive" \
+        "Confirm ${BACKUP_DIR} is writable" \
+        "Rolling snapshot into ${BACKUP_DIR}" \
+        "FAIL" \
+        create_archive || true
+
+    if [[ -n "${COPY_TO}" ]]; then
+        run_step \
+            "Off-box copy" \
+            "Archive copied to ${COPY_TO}" \
+            "Could not copy the archive to ${COPY_TO}" \
+            "Confirm ${COPY_TO} is writable, or reachable over ssh as ${SUDO_USER:-root}" \
+            "Copying archive to ${COPY_TO}" \
+            "WARN" \
+            copy_offbox || true
+    fi
+
+    print_summary || return 1
+}
+
+main
