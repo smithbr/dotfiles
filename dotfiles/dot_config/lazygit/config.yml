@@ -15,7 +15,7 @@ gui:
       - "#ccd0da" # Latte
 os:
   editPreset: "vscode"
-  promptToReturnFromSubprocess: false
+  promptToReturnFromSubprocess: true
 keybinding:
   universal:
     quitWithoutChangingDirectory: "q"
