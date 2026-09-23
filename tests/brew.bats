@@ -667,6 +667,171 @@ MOCK
     assert_output --partial "Installing core Homebrew packages..."
 }
 
+@test "is_font_cask recognizes font casks by short name" {
+    run bash -c '
+        brew_entry_short_name() { printf "%s\n" "${1##*/}"; }
+        is_font_cask() { [[ "$(brew_entry_short_name "$1")" == font-* ]]; }
+
+        is_font_cask "font-hack-nerd-font" && echo "FONT" || echo "NOT_FONT"
+        is_font_cask "daptify14/tap/chezit" && echo "FONT" || echo "NOT_FONT"
+    '
+    assert_success
+    assert_output $'FONT\nNOT_FONT'
+}
+
+@test "remove_conflicting_font_cask_files deletes only listed font artifacts" {
+    run bash -c '
+        set -euo pipefail
+
+        export HOME="'"${TEST_TMPDIR}"'/home"
+        export fonts_dir="${HOME}/Library/Fonts"
+        mkdir -p "${fonts_dir}"
+        touch "${fonts_dir}/0xProtoNerdFont-Bold.ttf"
+        touch "${fonts_dir}/KeepMe.ttf"
+
+        brew_entry_short_name() { printf "%s\n" "${1##*/}"; }
+        font_cask_fonts_dir() { printf "%s\n" "${fonts_dir}"; }
+        font_cask_font_basenames() { printf "%s\n" "0xProtoNerdFont-Bold.ttf"; }
+        log_warn() { printf "warn: %s\n" "$*"; }
+
+        remove_conflicting_font_cask_files() {
+            local cask="$1"
+            local font_basename=""
+            local target_dir=""
+
+            target_dir="$(font_cask_fonts_dir)"
+            while IFS= read -r font_basename; do
+                [[ -n "${font_basename}" ]] || continue
+                [[ -e "${target_dir}/${font_basename}" ]] || continue
+                log_warn "Removing conflicting font ${target_dir}/${font_basename} before installing ${cask}"
+                rm -f "${target_dir}/${font_basename}"
+            done < <(font_cask_font_basenames "${cask}")
+        }
+
+        remove_conflicting_font_cask_files "font-0xproto-nerd-font"
+
+        [[ ! -e "${fonts_dir}/0xProtoNerdFont-Bold.ttf" ]]
+        [[ -e "${fonts_dir}/KeepMe.ttf" ]]
+    '
+    assert_success
+}
+
+@test "prepare_font_casks_for_install skips brew-managed font casks" {
+    run bash -c '
+        set -euo pipefail
+
+        export removed=0
+        brew_entry_short_name() { printf "%s\n" "${1##*/}"; }
+        is_font_cask() { [[ "$(brew_entry_short_name "$1")" == font-* ]]; }
+        entry_is_brew_managed() { [[ "$2" == "font-hack-nerd-font" ]]; }
+        remove_conflicting_font_cask_files() { removed=1; }
+
+        prepare_font_casks_for_install() {
+            local pkg_name=""
+            for pkg_name in "$@"; do
+                [[ -n "${pkg_name}" ]] || continue
+                is_font_cask "${pkg_name}" || continue
+                if entry_is_brew_managed cask "${pkg_name}"; then
+                    continue
+                fi
+                remove_conflicting_font_cask_files "${pkg_name}"
+            done
+        }
+
+        prepare_font_casks_for_install "font-hack-nerd-font" "font-0xproto-nerd-font"
+        [[ "${removed}" -eq 1 ]]
+    '
+    assert_success
+}
+
+@test "brew.sh --help prints usage and exits without touching brew" {
+    run bash -c '
+        cd "'"${PROJECT_ROOT}"'"
+        ./homebrew/brew.sh --help
+    '
+    assert_success
+    assert_output --partial "Usage: brew.sh"
+    assert_output --partial "--verbose"
+}
+
+@test "brew.sh rejects unknown options" {
+    run bash -c '
+        cd "'"${PROJECT_ROOT}"'"
+        ./homebrew/brew.sh --bogus-flag
+    '
+    assert_failure
+    assert_output --partial "Unknown option: --bogus-flag"
+}
+
+@test "brew.sh --verbose passes --verbose through to brew bundle install and skips the spinner" {
+    run bash -c '
+        set -euo pipefail
+
+        export HOME="'"${TEST_TMPDIR}"'/sandbox-home"
+        export TEST_ROOT="'"${TEST_TMPDIR}"'/brew-verbose"
+        export TEST_BIN="${TEST_ROOT}/bin"
+        export TEST_LOG="${TEST_TMPDIR}/brew-verbose.log"
+        export TEST_BUNDLE="${TEST_TMPDIR}/bundle-verbose.txt"
+        export PATH="${TEST_BIN}:/usr/bin:/bin"
+        export OSTYPE="linux-gnu"
+
+        mkdir -p "${HOME}" "${TEST_BIN}"
+        : > "${TEST_LOG}"
+
+        cat > "${TEST_BIN}/gum" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "GUM WAS CALLED: $*" >&2
+exit 1
+MOCK
+        chmod +x "${TEST_BIN}/gum"
+
+        cat > "${TEST_BIN}/brew" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf "brew %s\n" "$*" >> "${TEST_LOG}"
+
+case "${1:-}" in
+    --prefix)
+        printf "%s\n" "${TEST_ROOT}"
+        ;;
+    list)
+        case "${2:-}" in
+            --formula)
+                printf "git\n"
+                ;;
+            --cask)
+                exit 0
+                ;;
+        esac
+        ;;
+    tap)
+        exit 0
+        ;;
+    bundle)
+        if [[ "${2:-}" == "install" ]]; then
+            bundle_file="${3#--file=}"
+            cp "${bundle_file}" "${TEST_BUNDLE}"
+            [[ "${4:-}" == "--verbose" ]] || { echo "missing --verbose on bundle install" >&2; exit 1; }
+            exit 0
+        fi
+        ;;
+esac
+
+exit 0
+MOCK
+
+        chmod +x "${TEST_BIN}/brew"
+
+        cd "'"${PROJECT_ROOT}"'"
+        ./homebrew/brew.sh --verbose
+
+        [[ -f "${TEST_BUNDLE}" ]] || { echo "missing bundle file"; exit 1; }
+    '
+    assert_success
+    refute_output --partial "GUM WAS CALLED"
+}
+
 @test "brew.sh links the 1Password SSH agent socket on macOS when op is available" {
     run bash -c '
         set -euo pipefail

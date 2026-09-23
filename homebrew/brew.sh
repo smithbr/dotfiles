@@ -5,6 +5,42 @@ set -euo pipefail
 BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${BASEDIR}/scripts/common.sh"
 
+usage() {
+    cat <<'EOF'
+Usage: brew.sh [OPTIONS]
+
+Options:
+  -v, --verbose   Stream full brew/gum output instead of a spinner
+  -d, --debug     Verbose output plus shell command tracing (set -x)
+  -h, --help      Show this help message and exit
+EOF
+}
+
+VERBOSE="${VERBOSE:-0}"
+while [[ $# -gt 0 ]]; do
+    case "${1}" in
+        -v|--verbose)
+            VERBOSE=1
+            ;;
+        -d|--debug)
+            VERBOSE=1
+            export HOMEBREW_DEBUG=1
+            set -x
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            log_error "Unknown option: ${1}"
+            usage
+            exit 1
+            ;;
+    esac
+    shift
+done
+export VERBOSE
+
 require_non_root
 
 case "${OSTYPE}" in
@@ -178,6 +214,92 @@ optional_prompt_mode() {
     fi
 }
 
+is_font_cask() {
+    local pkg_name="$1"
+
+    [[ "$(brew_entry_short_name "${pkg_name}")" == font-* ]]
+}
+
+font_cask_fonts_dir() {
+    if [[ "${os_name}" == "Darwin" ]]; then
+        printf '%s\n' "${HOME}/Library/Fonts"
+        return 0
+    fi
+
+    printf '%s\n' "${HOME}/.local/share/fonts"
+}
+
+font_cask_font_basenames() {
+    local cask="$1"
+    local short_name=""
+    local ruby_bin=""
+
+    short_name="$(brew_entry_short_name "${cask}")"
+    ruby_bin="$(command -v ruby 2>/dev/null || true)"
+    [[ -n "${ruby_bin}" ]] || return 1
+
+    brew info --cask --json=v2 "${short_name}" 2>/dev/null | "${ruby_bin}" -rjson -e '
+      data = JSON.parse(STDIN.read)
+      data[0]["artifacts"].each do |artifact|
+        next unless artifact["font"]
+
+        artifact["font"].each { |path| puts File.basename(path) }
+      end
+    ' 2>/dev/null
+}
+
+remove_conflicting_font_cask_files() {
+    local cask="$1"
+    local fonts_dir=""
+    local font_basename=""
+
+    fonts_dir="$(font_cask_fonts_dir)"
+    [[ -d "${fonts_dir}" ]] || return 0
+
+    while IFS= read -r font_basename; do
+        [[ -n "${font_basename}" ]] || continue
+        [[ -e "${fonts_dir}/${font_basename}" ]] || continue
+        log_warn "Removing conflicting font ${fonts_dir}/${font_basename} before installing ${cask}"
+        rm -f "${fonts_dir}/${font_basename}"
+    done < <(font_cask_font_basenames "${cask}")
+}
+
+prepare_font_casks_for_install() {
+    local pkg_name=""
+
+    for pkg_name in "$@"; do
+        [[ -n "${pkg_name}" ]] || continue
+        is_font_cask "${pkg_name}" || continue
+
+        if entry_is_brew_managed cask "${pkg_name}"; then
+            continue
+        fi
+
+        # Drop any broken cask registration so brew bundle can reinstall cleanly.
+        brew uninstall --cask --force "$(brew_entry_short_name "${pkg_name}")" 2>/dev/null || true
+        remove_conflicting_font_cask_files "${pkg_name}"
+    done
+}
+
+prepare_font_casks_from_brewfile() {
+    local brewfile="$1"
+    local -a font_casks=()
+    local line=""
+    local pkg_name=""
+
+    [[ -f "${brewfile}" ]] || return 0
+
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        [[ "${line}" =~ ^cask[[:space:]]+\"([^\"]+)\" ]] || continue
+        pkg_name="${BASH_REMATCH[1]}"
+        is_font_cask "${pkg_name}" && font_casks+=("${pkg_name}")
+    done < "${brewfile}"
+
+    if [[ "${#font_casks[@]}" -gt 0 ]]; then
+        prepare_font_casks_for_install "${font_casks[@]}"
+    fi
+}
+
 install_filtered_brewfile() {
     local source_brewfile="$1"
     local prompt_label="$2"
@@ -223,7 +345,10 @@ install_filtered_brewfile() {
     done < "${source_brewfile}"
 
     if [[ "${selected_count}" -gt 0 ]]; then
-        spin "Installing ${prompt_label}s..." brew bundle install --file="${tmp_brewfile}"
+        prepare_font_casks_from_brewfile "${tmp_brewfile}"
+        local -a bundle_cmd=(brew bundle install --file="${tmp_brewfile}")
+        [[ "${VERBOSE:-0}" -eq 1 ]] && bundle_cmd+=(--verbose)
+        spin "Installing ${prompt_label}s..." "${bundle_cmd[@]}"
         refresh_brew_state
     else
         log_info "All ${prompt_label}s already installed"
@@ -377,7 +502,10 @@ prompt_optional_brewfile() {
     esac
 
     if [[ "${selected_optional}" -gt 0 ]]; then
-        spin "Installing ${prompt_label}s..." brew bundle install --file="${tmp_optional_brewfile}"
+        prepare_font_casks_from_brewfile "${tmp_optional_brewfile}"
+        local -a bundle_cmd=(brew bundle install --file="${tmp_optional_brewfile}")
+        [[ "${VERBOSE:-0}" -eq 1 ]] && bundle_cmd+=(--verbose)
+        spin "Installing ${prompt_label}s..." "${bundle_cmd[@]}"
         refresh_brew_state
         log_info "Installed ${selected_optional} ${prompt_label}(s)"
     else
@@ -392,6 +520,8 @@ fi
 
 ensure_1password_agent_symlink
 
-spin "Cleaning up Homebrew..." brew cleanup --prune=all
+declare -a cleanup_cmd=(brew cleanup --prune=all)
+[[ "${VERBOSE:-0}" -eq 1 ]] && cleanup_cmd+=(--verbose)
+spin "Cleaning up Homebrew..." "${cleanup_cmd[@]}"
 log_info "Removing Homebrew cache"
 rm -rf "$(brew --cache)"

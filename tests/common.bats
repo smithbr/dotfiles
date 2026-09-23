@@ -267,3 +267,32 @@ MOCK
     assert_success
     assert_output --partial "gum spin --spinner dot --title Loading... --padding=0 1 -- echo payload"
 }
+
+@test "spin bypasses gum and streams output when VERBOSE=1" {
+    cat > "${TEST_TMPDIR}/bin/gum" <<'MOCK'
+#!/usr/bin/env bash
+echo "gum $*"
+MOCK
+    chmod +x "${TEST_TMPDIR}/bin/gum"
+
+    run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"':${PATH}"
+        export VERBOSE=1
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        spin "Loading..." echo "payload"
+    '
+    assert_success
+    refute_output --partial "gum spin"
+    assert_output --partial "payload"
+}
+
+@test "spin in verbose mode surfaces the real failure output before reporting failed" {
+    run bash -c '
+        export VERBOSE=1
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        spin "Should fail..." bash -c "echo boom >&2; exit 1"
+    ' 2>&1
+    assert_failure
+    assert_output --partial "boom"
+    assert_output --partial "Should fail... failed"
+}
