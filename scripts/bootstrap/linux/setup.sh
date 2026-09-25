@@ -162,7 +162,15 @@ prompt_optional_linux_bootstraps() {
         rm -f "${tmp_gum_output}"
     else
         for idx in "${!pending_names[@]}"; do
-            read -r -p "Install ${prompt_label} ${pending_names[${idx}]}? [Y/n] " reply
+            # A closed or exhausted stdin (CI, curl | bash, `< /dev/null`) makes
+            # read return non-zero, which under `set -e` aborted the whole
+            # bootstrap before chezmoi ever ran. Treat end-of-input as "install
+            # nothing else" rather than inheriting the empty-reply default of
+            # yes, which would pull in optional packages nobody asked for.
+            if ! read -r -p "Install ${prompt_label} ${pending_names[${idx}]}? [Y/n] " reply; then
+                log_info "No input available; skipping remaining ${prompt_label}s"
+                break
+            fi
             if [[ -z "${reply}" || "${reply}" =~ ^[Yy]$ ]]; then
                 printf '%s\n' "${idx}" >> "${tmp_optional_entries}"
             fi
