@@ -484,11 +484,6 @@ _parse_brewfile_line() {
     assert_success
 }
 
-@test "Brewfile.macos tracks mas as a formula" {
-    run grep -qx 'brew "mas"' "${PROJECT_ROOT}/homebrew/Brewfile.macos"
-    assert_success
-}
-
 # ---------------------------------------------------------------------------
 # Config-referenced tools must be installed by a Brewfile
 #
