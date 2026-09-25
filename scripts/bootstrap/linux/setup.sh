@@ -68,9 +68,6 @@ optional_linux_entry_is_installed() {
         tailscale)
             command -v tailscale >/dev/null 2>&1
             ;;
-        opencode)
-            command -v opencode >/dev/null 2>&1
-            ;;
         *)
             return 1
             ;;
@@ -103,7 +100,6 @@ prompt_optional_linux_bootstraps() {
     local -a optional_entries=(
         "docker|Docker|docker.sh"
         "tailscale|Tailscale|tailscale.sh"
-        "opencode|OpenCode|opencode.sh"
     )
     local -a pending_names=()
     local -a pending_scripts=()

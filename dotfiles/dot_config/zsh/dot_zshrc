@@ -25,9 +25,6 @@ export NPM_CONFIG_CACHE="${XDG_CACHE_HOME}/npm"
 export NPM_CONFIG_INIT_MODULE="${XDG_CONFIG_HOME}/npm/config/npm-init.js"
 export NPM_CONFIG_USERCONFIG="${XDG_CONFIG_HOME}/npm/npmrc"
 export NVM_DIR="${XDG_CONFIG_HOME}/nvm"
-export OPENCODE_BIN_DIR="${XDG_BIN_HOME}/opencode"
-export OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME}/opencode"
-export OPENCODE_CONFIG="${OPENCODE_CONFIG_DIR}/opencode.json"
 export RUSTUP_HOME="${XDG_DATA_HOME}/rustup"
 export STARSHIP_CACHE="${XDG_CACHE_HOME}/starship/cache"
 export STARSHIP_CONFIG="${XDG_CONFIG_HOME}/starship/starship.toml"
@@ -44,17 +41,6 @@ setopt HIST_VERIFY SHARE_HISTORY
 
 [[ -f "${XDG_CONFIG_HOME}/shell/aliases" ]] && source "${XDG_CONFIG_HOME}/shell/aliases"
 [[ -f "${XDG_CONFIG_HOME}/shell/functions" ]] && source "${XDG_CONFIG_HOME}/shell/functions"
-
-# ollama
-alias oc="ollama launch opencode"
-
-# from llm-checker ollama-plan
-export OLLAMA_NUM_CTX=2048
-export OLLAMA_NUM_PARALLEL=1
-export OLLAMA_MAX_LOADED_MODELS=1
-export OLLAMA_MAX_QUEUE=4
-export OLLAMA_KEEP_ALIVE=15m
-export OLLAMA_FLASH_ATTENTION=0
 
 # nvm
 source ${NVM_DIR}/nvm.sh --no-use

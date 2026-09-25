@@ -41,7 +41,7 @@ This is process-level isolation, not a real container or VM.
 
 - Validates `scripts/bootstrap/linux/apt-packages.txt`
 - Verifies Linux bootstrap guard clauses for missing `apt-get`
-- Verifies idempotency guards for `docker`, `tailscale`, and `opencode`
+- Verifies idempotency guards for `docker` and `tailscale`
 - Checks shell script shebangs, strict mode, `common.sh` sourcing, and `BASEDIR` conventions
 
 [`bin_scripts.bats`](/Users/bran/.dotfiles/tests/bin_scripts.bats)
