@@ -10,6 +10,11 @@
 #
 # Move anything like that aside first so the content stays recoverable. chezmoi
 # then creates the symlink onto a clear path.
+#
+# Only a full `chezmoi apply` runs this. Passing target paths (chezmoi apply
+# ~/.claude) filters run_ scripts out of the target state while still creating
+# the symlink, so a partial apply replaces the path unguarded. install.sh runs
+# a full apply, so the install path is covered.
 
 set -euo pipefail
 
