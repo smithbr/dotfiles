@@ -19,6 +19,10 @@ cask "google-chrome"
 cask "helium-browser"
 
 # Development Tools
+brew "colima"
+brew "docker"
+brew "docker-compose"
+brew "docker-credential-helper"
 brew "mactop"
 cask "cmux"
 cask "ghostty"
