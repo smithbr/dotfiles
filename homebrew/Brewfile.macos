@@ -25,7 +25,6 @@ cask "google-chrome"
 
 # Development Tools
 brew "mactop"
-brew "mas"
 cask "cmux"
 cask "ghostty"
 cask "github"
