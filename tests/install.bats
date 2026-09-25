@@ -16,87 +16,109 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# Argument parsing (--skip-system, --skip-brew, passthrough)
+# Argument parsing
 # ---------------------------------------------------------------------------
 
-@test "install.sh parses --skip-system flag" {
-    run bash -c '
-        run_system_bootstrap=1
-        run_brew=1
-        declare -a chezmoi_args=()
-        set -- --skip-system
-        while [[ $# -gt 0 ]]; do
-            case "${1}" in
-                --skip-system) run_system_bootstrap=0 ;;
-                --skip-brew)   run_brew=0 ;;
-                *)             chezmoi_args+=("$1") ;;
-            esac
-            shift
-        done
-        echo "system=${run_system_bootstrap} brew=${run_brew} args=${chezmoi_args[*]:-}"
-    '
+# Extract the real option parser from install.sh so these tests exercise the
+# shipped code instead of a copy of it that can drift.
+parser_snippet() {
+    sed -n '/^VERBOSE="${VERBOSE:-0}"$/,/^export VERBOSE$/p' "${PROJECT_ROOT}/install.sh"
+}
+
+run_parser() {
+    run bash -c "
+        usage() { printf 'USAGE\n'; }
+        $(parser_snippet)
+        printf 'dry=%s system=%s brew=%s shell=%s verbose=%s args=%s\n' \
+            \"\${dry_run}\" \"\${run_system_bootstrap}\" \"\${run_brew}\" \
+            \"\${run_shell_setup}\" \"\${VERBOSE}\" \"\${chezmoi_args[*]:-}\"
+    " bash "$@"
+}
+
+@test "install.sh defaults to running every step" {
+    run_parser
     assert_success
-    assert_output "system=0 brew=1 args="
+    assert_output "dry=0 system=1 brew=1 shell=1 verbose=0 args="
+}
+
+@test "install.sh parses --skip-system flag" {
+    run_parser --skip-system
+    assert_success
+    assert_output "dry=0 system=0 brew=1 shell=1 verbose=0 args="
 }
 
 @test "install.sh parses --skip-brew flag" {
-    run bash -c '
-        run_system_bootstrap=1
-        run_brew=1
-        declare -a chezmoi_args=()
-        set -- --skip-brew
-        while [[ $# -gt 0 ]]; do
-            case "${1}" in
-                --skip-system) run_system_bootstrap=0 ;;
-                --skip-brew)   run_brew=0 ;;
-                *)             chezmoi_args+=("$1") ;;
-            esac
-            shift
-        done
-        echo "system=${run_system_bootstrap} brew=${run_brew} args=${chezmoi_args[*]:-}"
-    '
+    run_parser --skip-brew
     assert_success
-    assert_output "system=1 brew=0 args="
+    assert_output "dry=0 system=1 brew=0 shell=1 verbose=0 args="
+}
+
+@test "install.sh parses --skip-shell flag" {
+    run_parser --skip-shell
+    assert_success
+    assert_output "dry=0 system=1 brew=1 shell=0 verbose=0 args="
+}
+
+@test "install.sh parses --dry-run and -n" {
+    run_parser --dry-run
+    assert_success
+    assert_output --partial "dry=1"
+
+    run_parser -n
+    assert_success
+    assert_output --partial "dry=1"
+}
+
+@test "install.sh parses --verbose and -v" {
+    run_parser --verbose
+    assert_success
+    assert_output --partial "verbose=1"
+
+    run_parser -v
+    assert_success
+    assert_output --partial "verbose=1"
+}
+
+@test "install.sh --debug turns on verbose output" {
+    run_parser --debug
+    assert_success
+    assert_output --partial "verbose=1"
+}
+
+@test "install.sh --help prints usage and exits successfully" {
+    run_parser --help
+    assert_success
+    assert_output "USAGE"
+
+    run_parser -h
+    assert_success
+    assert_output "USAGE"
 }
 
 @test "install.sh passes unknown args to chezmoi_args" {
-    run bash -c '
-        run_system_bootstrap=1
-        run_brew=1
-        declare -a chezmoi_args=()
-        set -- --skip-system --verbose --dry-run
-        while [[ $# -gt 0 ]]; do
-            case "${1}" in
-                --skip-system) run_system_bootstrap=0 ;;
-                --skip-brew)   run_brew=0 ;;
-                *)             chezmoi_args+=("$1") ;;
-            esac
-            shift
-        done
-        echo "system=${run_system_bootstrap} brew=${run_brew} args=${chezmoi_args[*]:-}"
-    '
+    run_parser --skip-system --verbose --force
     assert_success
-    assert_output "system=0 brew=1 args=--verbose --dry-run"
+    assert_output "dry=0 system=0 brew=1 shell=1 verbose=1 args=--force"
+}
+
+@test "install.sh passes everything after -- to chezmoi_args" {
+    run_parser --skip-brew -- --skip-system --force
+    assert_success
+    assert_output "dry=0 system=1 brew=0 shell=1 verbose=0 args=--skip-system --force"
 }
 
 @test "install.sh supports both --skip-system and --skip-brew together" {
-    run bash -c '
-        run_system_bootstrap=1
-        run_brew=1
-        declare -a chezmoi_args=()
-        set -- --skip-system --skip-brew
-        while [[ $# -gt 0 ]]; do
-            case "${1}" in
-                --skip-system) run_system_bootstrap=0 ;;
-                --skip-brew)   run_brew=0 ;;
-                *)             chezmoi_args+=("$1") ;;
-            esac
-            shift
-        done
-        echo "system=${run_system_bootstrap} brew=${run_brew}"
-    '
+    run_parser --skip-system --skip-brew
     assert_success
-    assert_output "system=0 brew=0"
+    assert_output "dry=0 system=0 brew=0 shell=1 verbose=0 args="
+}
+
+@test "install.sh --help works without any setup" {
+    run "${PROJECT_ROOT}/install.sh" --help
+    assert_success
+    assert_output --partial "Usage: install.sh [OPTIONS]"
+    assert_output --partial "--skip-brew"
+    assert_output --partial "--dry-run"
 }
 
 # ---------------------------------------------------------------------------
@@ -735,4 +757,112 @@ MOCK
     '
     assert_success
     refute_output --partial "WARN chezmoi sourceDir is not set to"
+}
+
+@test "install.sh --dry-run reports changes without touching the system" {
+    run bash -c '
+        set -euo pipefail
+
+        export HOME="'"${TEST_TMPDIR}"'/dryrun-home"
+        export TEST_BIN="'"${TEST_TMPDIR}"'/bin"
+        export TEST_LOG="'"${TEST_TMPDIR}"'/actions.log"
+        export USER="sandbox-user"
+        export SHELL="${TEST_BIN}/zsh"
+
+        mkdir -p "${HOME}" "${TEST_BIN}"
+        : > "${TEST_LOG}"
+        export PATH="${TEST_BIN}:/usr/bin:/bin"
+
+        cat > "${TEST_BIN}/hostname" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+echo "sandbox-host"
+MOCK
+
+        cat > "${TEST_BIN}/find" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+        cat > "${TEST_BIN}/zsh" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+exit 0
+MOCK
+
+        cat > "${TEST_BIN}/grep" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+if [[ "${*: -1}" == "/etc/shells" ]]; then
+    exit 0
+fi
+exec /usr/bin/grep "$@"
+MOCK
+
+        # Mutating commands only record that they ran; a dry run must not call them.
+        cat > "${TEST_BIN}/ssh-keygen" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+printf "ssh-keygen %s\n" "$*" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BIN}/brew" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+printf "brew %s\n" "$*" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BIN}/chsh" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+printf "chsh %s\n" "$*" >> "${TEST_LOG}"
+MOCK
+
+        cat > "${TEST_BIN}/chezmoi" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "--source" ]]; then
+    source_dir="$2"
+    shift 2
+    case "${1:-}" in
+        status)
+            exit 0
+            ;;
+        apply)
+            shift
+            printf "chezmoi apply --source %s %s\n" "${source_dir}" "$*" >> "${TEST_LOG}"
+            exit 0
+            ;;
+        dump-config)
+            exit 0
+            ;;
+    esac
+fi
+
+case "${1:-}" in
+    source-path)
+        printf "%s\n" "${HOME}/.dotfiles/dotfiles"
+        ;;
+    *)
+        printf "chezmoi %s\n" "$*" >> "${TEST_LOG}"
+        ;;
+esac
+MOCK
+
+        chmod +x "${TEST_BIN}/hostname" "${TEST_BIN}/find" "${TEST_BIN}/zsh" "${TEST_BIN}/grep" "${TEST_BIN}/ssh-keygen" "${TEST_BIN}/brew" "${TEST_BIN}/chsh" "${TEST_BIN}/chezmoi"
+
+        cd "'"${PROJECT_ROOT}"'"
+        ./install.sh --dry-run
+
+        [[ ! -e "${HOME}/.dotfiles" ]] || { echo "FAIL: created the dotfiles symlink"; exit 1; }
+        [[ ! -e "${HOME}/.ssh" ]] || { echo "FAIL: created the .ssh directory"; exit 1; }
+        grep -qx "chezmoi apply --source '"${PROJECT_ROOT}"' --dry-run" "${TEST_LOG}" || {
+            echo "FAIL: chezmoi apply did not receive --dry-run"
+            cat "${TEST_LOG}"
+            exit 1
+        }
+        ! grep -q "^ssh-keygen " "${TEST_LOG}" || { echo "FAIL: ran ssh-keygen"; exit 1; }
+        ! grep -q "^brew " "${TEST_LOG}" || { echo "FAIL: ran brew"; exit 1; }
+        ! grep -q "^chsh " "${TEST_LOG}" || { echo "FAIL: ran chsh"; exit 1; }
+    '
+    assert_success
+    assert_output --partial "Would link "
+    assert_output --partial "Would create an SSH key at "
+    assert_output --partial "Dry run: skipping the system bootstrap script."
+    assert_output --partial "Dry run: skipping Homebrew install/update/bundle."
 }
