@@ -346,6 +346,7 @@ install_filtered_brewfile() {
 
     if [[ "${selected_count}" -gt 0 ]]; then
         prepare_font_casks_from_brewfile "${tmp_brewfile}"
+        trust_tapped_brewfile_entries "${tmp_brewfile}"
         local -a bundle_cmd=(brew bundle install --file="${tmp_brewfile}")
         [[ "${VERBOSE:-0}" -eq 1 ]] && bundle_cmd+=(--verbose)
         spin "Installing ${prompt_label}s..." "${bundle_cmd[@]}"
@@ -355,6 +356,35 @@ install_filtered_brewfile() {
     fi
 
     rm -f "${tmp_brewfile}"
+}
+
+# Homebrew 7 refuses to load formulae and casks from untrusted third-party taps,
+# so a tap-qualified Brewfile line would be skipped rather than installed. Trust
+# each entry individually instead of the whole tap, which would also cover every
+# future formula that tap ships. Failures are non-fatal: older Homebrew has no
+# `trust` subcommand, and bundle should still get its chance to run.
+brew_supports_trust() {
+    brew trust --help >/dev/null 2>&1
+}
+
+trust_tapped_brewfile_entries() {
+    local brewfile="$1"
+    local pkg_type pkg_name flag
+
+    [[ -f "${brewfile}" ]] || return 0
+    brew_supports_trust || return 0
+
+    while read -r pkg_type pkg_name; do
+        case "${pkg_type}" in
+            cask) flag="--cask" ;;
+            brew) flag="--formula" ;;
+            *) continue ;;
+        esac
+
+        if ! brew trust "${flag}" "${pkg_name}" >/dev/null 2>&1; then
+            log_warn "Could not trust ${pkg_name}; brew may skip it"
+        fi
+    done < <(sed -nE 's/^[[:space:]]*(brew|cask)[[:space:]]+"([^"]*\/[^"]*)".*/\1 \2/p' "${brewfile}")
 }
 
 ensure_1password_agent_symlink() {
@@ -503,6 +533,7 @@ prompt_optional_brewfile() {
 
     if [[ "${selected_optional}" -gt 0 ]]; then
         prepare_font_casks_from_brewfile "${tmp_optional_brewfile}"
+        trust_tapped_brewfile_entries "${tmp_optional_brewfile}"
         local -a bundle_cmd=(brew bundle install --file="${tmp_optional_brewfile}")
         [[ "${VERBOSE:-0}" -eq 1 ]] && bundle_cmd+=(--verbose)
         spin "Installing ${prompt_label}s..." "${bundle_cmd[@]}"
