@@ -474,6 +474,11 @@ _parse_brewfile_line() {
     assert_output "NO_DUPLICATES"
 }
 
+@test "Brewfile.macos leaves Claude Code to the native installer" {
+    run grep -Eq '^cask "claude-code' "${PROJECT_ROOT}/homebrew/Brewfile.macos"
+    assert_failure
+}
+
 @test "Brewfile.macos tracks mactop as a formula" {
     run grep -qx 'brew "mactop"' "${PROJECT_ROOT}/homebrew/Brewfile.macos"
     assert_success

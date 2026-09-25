@@ -467,6 +467,57 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
+# macos/claude-code.sh — native installer
+# ---------------------------------------------------------------------------
+
+_run_claude_code_script() {
+    run bash -c '
+        set -euo pipefail
+
+        export HOME="'"${TEST_TMPDIR}"'/home"
+        export TEST_BIN="'"${TEST_TMPDIR}"'/bin"
+        export TEST_LOG="'"${TEST_TMPDIR}"'/claude.log"
+        export PATH="${TEST_BIN}:/usr/bin:/bin"
+        mkdir -p "${HOME}" "${TEST_BIN}"
+        : > "${TEST_LOG}"
+
+        cat > "${TEST_BIN}/curl" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+printf "curl %s\n" "$*" >> "${TEST_LOG}"
+printf "echo installer-ran >> \"\${TEST_LOG}\"\n"
+MOCK
+        chmod +x "${TEST_BIN}/curl"
+
+        '"$1"'
+
+        cd "'"${PROJECT_ROOT}"'"
+        ./scripts/bootstrap/macos/claude-code.sh
+        cat "${TEST_LOG}"
+    '
+}
+
+@test "claude-code.sh runs the native installer when claude is missing" {
+    _run_claude_code_script ":"
+    assert_success
+    assert_output --partial "Installing Claude Code..."
+    assert_output --partial "curl -fsSL https://claude.ai/install.sh"
+    assert_output --partial "installer-ran"
+}
+
+@test "claude-code.sh skips when the native build is already installed" {
+    _run_claude_code_script 'mkdir -p "${HOME}/.local/bin"; printf "#!/usr/bin/env bash\n" > "${HOME}/.local/bin/claude"; chmod +x "${HOME}/.local/bin/claude"'
+    assert_success
+    assert_output --partial "Claude Code already installed, skipping"
+    refute_output --partial "curl "
+}
+
+@test "claude-code.sh warns when the Homebrew cask is still installed" {
+    _run_claude_code_script 'mkdir -p "${HOME}/.local/bin"; printf "#!/usr/bin/env bash\n" > "${HOME}/.local/bin/claude"; chmod +x "${HOME}/.local/bin/claude"; printf "#!/usr/bin/env bash\n[[ \"\$*\" == \"list --cask claude-code@latest\" ]]\n" > "${TEST_BIN}/brew"; chmod +x "${TEST_BIN}/brew"'
+    assert_success
+    assert_output --partial "brew uninstall --cask claude-code@latest"
+}
+
+# ---------------------------------------------------------------------------
 # macos/setup.sh — mocked execution flow
 # ---------------------------------------------------------------------------
 
@@ -559,6 +610,7 @@ MOCK
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/tailscale.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/opencode.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/setup.sh" \
+            "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/claude-code.sh" \
             "'"${PROJECT_ROOT}"'/homebrew/brew.sh"; do
             first_line="$(head -1 "${f}")"
             if [[ "${first_line}" != "#!/usr/bin/env bash" ]]; then
@@ -583,6 +635,7 @@ MOCK
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/tailscale.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/opencode.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/setup.sh" \
+            "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/claude-code.sh" \
             "'"${PROJECT_ROOT}"'/homebrew/brew.sh"; do
             if ! grep -q "set -euo pipefail" "${f}"; then
                 echo "MISSING strict mode: ${f}"
@@ -609,6 +662,7 @@ MOCK
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/tailscale.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/opencode.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/setup.sh" \
+            "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/claude-code.sh" \
             "'"${PROJECT_ROOT}"'/homebrew/brew.sh"; do
             if ! grep -q "source.*common\.sh" "${f}"; then
                 echo "MISSING source common.sh: ${f}"
@@ -635,6 +689,7 @@ MOCK
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/tailscale.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/opencode.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/setup.sh" \
+            "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/claude-code.sh" \
             "'"${PROJECT_ROOT}"'/homebrew/brew.sh"; do
             if ! grep -q "BASEDIR=" "${f}"; then
                 echo "MISSING BASEDIR: ${f}"
