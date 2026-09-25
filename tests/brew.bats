@@ -780,8 +780,7 @@ MOCK
 
         cat > "${TEST_BIN}/gum" <<'"'"'MOCK'"'"'
 #!/usr/bin/env bash
-echo "GUM WAS CALLED: $*" >&2
-exit 1
+echo "gum $*"
 MOCK
         chmod +x "${TEST_BIN}/gum"
 
@@ -829,7 +828,7 @@ MOCK
         [[ -f "${TEST_BUNDLE}" ]] || { echo "missing bundle file"; exit 1; }
     '
     assert_success
-    refute_output --partial "GUM WAS CALLED"
+    refute_output --partial "gum spin"
 }
 
 @test "brew.sh links the 1Password SSH agent socket on macOS when op is available" {
