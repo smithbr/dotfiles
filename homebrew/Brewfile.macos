@@ -16,6 +16,7 @@ cask "brave-browser"
 cask "comet"
 cask "firefox"
 cask "google-chrome"
+cask "helium-browser"
 
 # Development Tools
 brew "mactop"
@@ -27,9 +28,9 @@ cask "yaak"
 
 # Productivity
 cask "appcleaner"
+cask "homebrew-app"
 cask "obsidian"
 cask "utm"
-cask "homebrew-app"
 
 # Security and Networking
 cask "1password"
