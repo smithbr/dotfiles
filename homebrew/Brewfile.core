@@ -12,11 +12,9 @@ brew "fresh-editor"
 brew "fzf"
 brew "gh"
 brew "git-delta"
-brew "git"
 brew "git-lfs"
 brew "glances"
 brew "go"
-brew "htop"
 brew "jq"
 brew "lazygit"
 brew "superradcompany/tap/microsandbox"
@@ -27,7 +25,6 @@ brew "ripgrep"
 brew "shellcheck"
 brew "skills"
 brew "uv"
-brew "wget"
 brew "xdg-ninja", args:["--HEAD"]
 
 # Shell Enhancements
@@ -40,7 +37,6 @@ brew "gum"
 brew "nerdfetch"
 brew "onefetch"
 brew "starship"
-brew "tree"
 
 # Fonts
 cask "font-0xproto-nerd-font"

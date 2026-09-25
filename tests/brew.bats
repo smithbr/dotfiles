@@ -622,7 +622,7 @@ case "${1:-}" in
     list)
         case "${2:-}" in
             --formula)
-                printf "git\n"
+                printf "jq\n"
                 ;;
             --cask)
                 exit 0
@@ -650,11 +650,11 @@ MOCK
         ./homebrew/brew.sh
 
         [[ -f "${TEST_BUNDLE}" ]] || { echo "missing bundle file"; exit 1; }
-        grep -qx '"'"'brew "wget"'"'"' "${TEST_BUNDLE}" || { echo "missing wget"; exit 1; }
+        grep -qx '"'"'brew "shellcheck"'"'"' "${TEST_BUNDLE}" || { echo "missing shellcheck"; exit 1; }
         grep -qx '"'"'brew "gum"'"'"' "${TEST_BUNDLE}" || { echo "missing gum"; exit 1; }
         grep -qx '"'"'cask "font-hack-nerd-font"'"'"' "${TEST_BUNDLE}" || { echo "missing font cask"; exit 1; }
         grep -qx '"'"'cask "daptify14/tap/chezit"'"'"' "${TEST_BUNDLE}" || { echo "missing chezit cask"; exit 1; }
-        if grep -qx '"'"'brew "git"'"'"' "${TEST_BUNDLE}"; then
+        if grep -qx '"'"'brew "jq"'"'"' "${TEST_BUNDLE}"; then
             echo "installed formula was not filtered"
             exit 1
         fi
