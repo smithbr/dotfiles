@@ -9,11 +9,6 @@ brew "wget"
 # AI Apps
 cask "chatgpt"
 cask "claude"
-cask "codex-app"
-cask "codex"
-brew "ollama"
-brew "opencode"
-cask "opencode-desktop"
 
 # Browsers
 brew "agent-browser"
