@@ -6,6 +6,78 @@ BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck disable=SC1091
 source "${BASEDIR}/scripts/common.sh"
 
+usage() {
+    cat <<'EOF'
+Usage: install.sh [OPTIONS] [-- CHEZMOI_ARGS...]
+
+Sets this machine up: links the repo into place, ensures an SSH key exists,
+runs the OS bootstrap and Homebrew, then applies the dotfiles with chezmoi.
+
+Options:
+  -n, --dry-run      Report what would change without touching the system
+  -v, --verbose      Stream command output instead of collecting it into boxes
+  -d, --debug        Verbose output plus shell command tracing (set -x)
+  -h, --help         Show this help message and exit
+      --skip-system  Skip the OS bootstrap (scripts/bootstrap/<os>/setup.sh)
+      --skip-brew    Skip the Homebrew install/update/bundle step
+      --skip-shell   Skip adding zsh to /etc/shells and chsh
+
+Unrecognised arguments are passed through to `chezmoi apply`, as is everything
+after `--`, e.g. install.sh --skip-brew -- --force --exclude=scripts
+EOF
+}
+
+VERBOSE="${VERBOSE:-0}"
+dry_run=0
+run_system_bootstrap=1
+run_brew=1
+run_shell_setup=1
+declare -a chezmoi_args=()
+while [[ $# -gt 0 ]]; do
+    case "${1}" in
+        -n|--dry-run)
+            dry_run=1
+            ;;
+        -v|--verbose)
+            VERBOSE=1
+            ;;
+        -d|--debug)
+            VERBOSE=1
+            set -x
+            ;;
+        --skip-system)
+            run_system_bootstrap=0
+            ;;
+        --skip-brew)
+            run_brew=0
+            ;;
+        --skip-shell)
+            run_shell_setup=0
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --)
+            shift
+            while [[ $# -gt 0 ]]; do
+                chezmoi_args+=("$1")
+                shift
+            done
+            break
+            ;;
+        *)
+            chezmoi_args+=("$1")
+            ;;
+    esac
+    shift
+done
+export VERBOSE
+
+if [[ "${dry_run}" -eq 1 ]]; then
+    chezmoi_args+=(--dry-run)
+fi
+
 require_non_root
 
 if [[ -z "${HOME:-}" ]]; then
@@ -59,6 +131,11 @@ run_boxed() {
     local output=""
     local status=0
 
+    if [[ "${VERBOSE}" -eq 1 ]]; then
+        "$@" || status=$?
+        return "${status}"
+    fi
+
     tmp_output="$(mktemp "${TMPDIR:-/tmp}/install-output.XXXXXX")"
     if ! "$@" > "${tmp_output}" 2>&1; then
         status=$?
@@ -81,6 +158,17 @@ ssh_key_comment() {
 
 ensure_local_install_ssh_key() {
     local key_comment=""
+
+    if [[ "${dry_run}" -eq 1 ]]; then
+        if [[ ! -f "${LOCAL_INSTALL_SSH_KEY_PATH}" && ! -f "${LOCAL_INSTALL_SSH_KEY_PATH}.pub" ]]; then
+            log_info "Would create an SSH key at ${LOCAL_INSTALL_SSH_KEY_PATH}"
+        elif [[ -f "${LOCAL_INSTALL_SSH_KEY_PATH}" && ! -f "${LOCAL_INSTALL_SSH_KEY_PATH}.pub" ]]; then
+            log_info "Would restore the public key for ${LOCAL_INSTALL_SSH_KEY_PATH}"
+        else
+            log_info "SSH key at ${LOCAL_INSTALL_SSH_KEY_PATH} is already in place"
+        fi
+        return 0
+    fi
 
     mkdir -p "${HOME}/.ssh"
     chmod 700 "${HOME}/.ssh"
@@ -121,8 +209,12 @@ copy_and_list_local_example_files() {
         local_path="${target_path%.example}"
 
         if [[ ! -e "${local_path}" && ! -L "${local_path}" ]]; then
-            cp "${target_path}" "${local_path}"
-            log_info " Local config ${local_path} doesn't exist yet, creating one from example: ${local_path}"
+            if [[ "${dry_run}" -eq 1 ]]; then
+                log_info " Would create ${local_path} from example ${target_path}"
+            else
+                cp "${target_path}" "${local_path}"
+                log_info " Local config ${local_path} doesn't exist yet, creating one from example: ${local_path}"
+            fi
         fi
     done < <(find "${BASEDIR}/dotfiles" -type f -name '*.local.example' -print0)
 
@@ -146,6 +238,11 @@ ensure_dotfiles_repo_link() {
         fi
     fi
 
+    if [[ "${dry_run}" -eq 1 ]]; then
+        log_info "Would link ${BASEDIR} to ${HOME}/.dotfiles"
+        return 0
+    fi
+
     spin "Linking dotfiles repo..." ln -sfn "${BASEDIR}" "${HOME}/.dotfiles"
 }
 
@@ -155,6 +252,11 @@ ensure_chezmoi() {
 
     chezmoi_path="$(command -v chezmoi || true)"
     if [[ -n "${chezmoi_path}" ]]; then
+        return 0
+    fi
+
+    if [[ "${dry_run}" -eq 1 ]]; then
+        log_warn "chezmoi is not installed; would install it before applying"
         return 0
     fi
 
@@ -208,10 +310,28 @@ run_chezmoi_apply() {
         apply_cmd+=("${chezmoi_args[@]}")
     fi
 
-    "${apply_cmd[@]}"
+    if "${apply_cmd[@]}"; then
+        return 0
+    fi
+
+    # The .config/agents external clones a private repo over SSH. On a first run
+    # this host's key isn't registered with GitHub yet, so the clone fails and
+    # takes the rest of the apply down with it -- leaving no shell config at all.
+    # Retry without externals so the machine ends up usable, and say what is
+    # needed to finish.
+    log_warn "chezmoi apply failed; retrying without externals"
+    "${apply_cmd[@]}" --exclude=externals
+
+    log_warn "Applied without externals. Register this host's SSH key with GitHub, then re-run:"
+    log_warn "  chezmoi --source ${CHEZMOI_SOURCE} apply"
 }
 
 apply_dotfiles() {
+    if ! command -v chezmoi >/dev/null 2>&1; then
+        log_warn "chezmoi is not installed; skipping apply"
+        return 0
+    fi
+
     log_info "Applying dotfiles from ${CHEZMOI_SOURCE}"
     log_pending_chezmoi_changes
 
@@ -221,24 +341,6 @@ apply_dotfiles() {
 }
 
 cd "${BASEDIR}"
-
-run_system_bootstrap=1
-run_brew=1
-declare -a chezmoi_args=()
-while [[ $# -gt 0 ]]; do
-    case "${1}" in
-        --skip-system)
-            run_system_bootstrap=0
-            ;;
-        --skip-brew)
-            run_brew=0
-            ;;
-        *)
-            chezmoi_args+=("$1")
-            ;;
-    esac
-    shift
-done
 
 begin_section "Repository"
 _item "Running dotfiles repo link check"
@@ -252,30 +354,38 @@ run_boxed ensure_local_install_ssh_key
 
 if [[ "${run_system_bootstrap}" -eq 1 ]]; then
     begin_section "System Bootstrap"
-    case "${OSTYPE}" in
-        darwin*)
-            _item "Running chmod +x scripts/bootstrap/macos/setup.sh"
-            _item "Running ./scripts/bootstrap/macos/setup.sh"
-            chmod +x scripts/bootstrap/macos/setup.sh
-            ./scripts/bootstrap/macos/setup.sh
-            ;;
-        linux*)
-            _item "Running chmod +x scripts/bootstrap/linux/setup.sh"
-            _item "Running ./scripts/bootstrap/linux/setup.sh"
-            chmod +x scripts/bootstrap/linux/setup.sh
-            ./scripts/bootstrap/linux/setup.sh
-            ;;
-    esac
-    _box "System bootstrap completed."
+    if [[ "${dry_run}" -eq 1 ]]; then
+        _box "Dry run: skipping the system bootstrap script."
+    else
+        case "${OSTYPE}" in
+            darwin*)
+                _item "Running chmod +x scripts/bootstrap/macos/setup.sh"
+                _item "Running ./scripts/bootstrap/macos/setup.sh"
+                chmod +x scripts/bootstrap/macos/setup.sh
+                ./scripts/bootstrap/macos/setup.sh
+                ;;
+            linux*)
+                _item "Running chmod +x scripts/bootstrap/linux/setup.sh"
+                _item "Running ./scripts/bootstrap/linux/setup.sh"
+                chmod +x scripts/bootstrap/linux/setup.sh
+                ./scripts/bootstrap/linux/setup.sh
+                ;;
+        esac
+        _box "System bootstrap completed."
+    fi
 fi
 
 if [[ "${run_brew}" -eq 1 ]]; then
     begin_section "Homebrew"
-    _item "Running chmod +x homebrew/brew.sh"
-    _item "Running ./homebrew/brew.sh"
-    chmod +x homebrew/brew.sh
-    ./homebrew/brew.sh
-    _box "Homebrew setup completed."
+    if [[ "${dry_run}" -eq 1 ]]; then
+        _box "Dry run: skipping Homebrew install/update/bundle."
+    else
+        _item "Running chmod +x homebrew/brew.sh"
+        _item "Running ./homebrew/brew.sh"
+        chmod +x homebrew/brew.sh
+        ./homebrew/brew.sh
+        _box "Homebrew setup completed."
+    fi
 fi
 
 begin_section "Configuration"
@@ -284,12 +394,17 @@ _item "Running brew install chezmoi or the standalone installer when needed"
 run_boxed ensure_chezmoi
 
 # Remove invalid config so chezmoi apply can regenerate it from the template
-if [[ -f "${CHEZMOI_CONFIG_FILE}" ]] && ! chezmoi --source "${CHEZMOI_SOURCE}" dump-config &>/dev/null; then
+if [[ -f "${CHEZMOI_CONFIG_FILE}" ]] && command -v chezmoi >/dev/null 2>&1 \
+    && ! chezmoi --source "${CHEZMOI_SOURCE}" dump-config &>/dev/null; then
     _item "Running chezmoi --source ${CHEZMOI_SOURCE} dump-config"
-    _item "Running rm -f ${CHEZMOI_CONFIG_FILE}"
-    log_warn "Removing invalid ${CHEZMOI_CONFIG_FILE}"
-    rm -f "${CHEZMOI_CONFIG_FILE}"
-    _box "Removed invalid ${CHEZMOI_CONFIG_FILE}."
+    if [[ "${dry_run}" -eq 1 ]]; then
+        _box "Would remove invalid ${CHEZMOI_CONFIG_FILE}."
+    else
+        _item "Running rm -f ${CHEZMOI_CONFIG_FILE}"
+        log_warn "Removing invalid ${CHEZMOI_CONFIG_FILE}"
+        rm -f "${CHEZMOI_CONFIG_FILE}"
+        _box "Removed invalid ${CHEZMOI_CONFIG_FILE}."
+    fi
 fi
 
 _item "Running chezmoi status"
@@ -304,19 +419,28 @@ if [[ "${chezmoi_source_path}" != "${CHEZMOI_DEFAULT_SOURCE}" ]] \
     log_warn "chezmoi sourceDir is not set to ${CHEZMOI_DEFAULT_SOURCE}"
 fi
 
-zsh_path="$(command -v zsh || true)"
+zsh_path=""
+if [[ "${run_shell_setup}" -eq 1 ]]; then
+    zsh_path="$(command -v zsh || true)"
+fi
 if [[ -n "${zsh_path}" ]]; then
     if ! grep -qxF "${zsh_path}" /etc/shells; then
-        if command -v sudo >/dev/null 2>&1; then
+        if ! command -v sudo >/dev/null 2>&1; then
+            log_warn "sudo not found; could not update /etc/shells"
+        elif [[ "${dry_run}" -eq 1 ]]; then
+            _item "Would add ${zsh_path} to /etc/shells"
+        else
             _item "Running printf '%s\\n' '${zsh_path}' | sudo tee -a /etc/shells >/dev/null"
             bash -c "printf '%s\n' '${zsh_path}' | sudo tee -a /etc/shells >/dev/null"
-        else
-            log_warn "sudo not found; could not update /etc/shells"
         fi
     fi
     if [[ "${SHELL}" != "${zsh_path}" ]]; then
-        _item "Running chsh -s ${zsh_path}"
-        chsh -s "${zsh_path}"
+        if [[ "${dry_run}" -eq 1 ]]; then
+            _item "Would run chsh -s ${zsh_path}"
+        else
+            _item "Running chsh -s ${zsh_path}"
+            chsh -s "${zsh_path}"
+        fi
     fi
     _box "Shell setup completed."
 fi
@@ -325,7 +449,7 @@ begin_section "Finish"
 _item "Running local example file scan"
 run_boxed copy_and_list_local_example_files
 
-if [[ -n "${zsh_path:-}" ]]; then
+if [[ -n "${zsh_path:-}" && "${dry_run}" -eq 0 ]]; then
     _box "Run 'exec -l \$SHELL' (or open a new terminal) to reload your shell"
 fi
 
