@@ -179,11 +179,44 @@ optional_entry_is_installed() {
     local pkg_type="$1"
     local pkg_name="$2"
 
+    if [[ "${pkg_type}" == "native" ]]; then
+        native_entry_is_installed "${pkg_name}"
+        return
+    fi
+
     if entry_is_brew_managed "${pkg_type}" "${pkg_name}"; then
         return 0
     fi
 
     return 1
+}
+
+# Optional apps installed with the vendor's own installer instead of Homebrew,
+# offered in the same picker as Brewfile.macos. Each maps to a script under
+# scripts/bootstrap/macos/.
+declare -a NATIVE_OPTIONAL_ENTRIES=(
+    "claude-code"
+)
+
+native_entry_is_installed() {
+    local pkg_name="$1"
+
+    case "${pkg_name}" in
+        claude-code)
+            [[ -x "${HOME}/.local/bin/claude" ]]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+run_native_install() {
+    local pkg_name="$1"
+    local script="${BASEDIR}/scripts/bootstrap/macos/${pkg_name}.sh"
+
+    chmod +x "${script}"
+    "${script}"
 }
 
 has_interactive_tty() {
@@ -422,6 +455,8 @@ prompt_optional_brewfile() {
     local prompt_label="$2"
     local tmp_optional_brewfile
     local selected_optional=0
+    local selected_brew=0
+    local -a selected_native=()
     local -a optional_entries=()
     local -a optional_names=()
     local raw_line
@@ -429,7 +464,6 @@ prompt_optional_brewfile() {
     local pkg_type
     local pkg_name
     local idx
-    local entry
     local reply
     local display_entry
     local pending_count=0
@@ -467,11 +501,31 @@ prompt_optional_brewfile() {
         pending_count=$((pending_count + 1))
     done < "${optional_brewfile}"
 
+    for pkg_name in "${NATIVE_OPTIONAL_ENTRIES[@]}"; do
+        optional_entry_is_installed native "${pkg_name}" && continue
+        optional_entries+=("native \"${pkg_name}\"")
+        optional_names+=("${pkg_name}")
+        pending_count=$((pending_count + 1))
+    done
+
     if [[ "${pending_count}" -eq 0 ]]; then
         log_info "All ${prompt_label}s already installed"
         rm -f "${tmp_optional_brewfile}"
         return
     fi
+
+    # Native entries run their installer script; everything else goes to brew bundle.
+    select_optional_entry() {
+        local idx="$1"
+
+        if [[ "${optional_entries[${idx}]}" == native\ * ]]; then
+            selected_native+=("${optional_names[${idx}]}")
+        else
+            printf '%s\n' "${optional_entries[${idx}]}" >> "${tmp_optional_brewfile}"
+            selected_brew=$((selected_brew + 1))
+        fi
+        selected_optional=$((selected_optional + 1))
+    }
 
     prompt_mode="$(optional_prompt_mode)"
 
@@ -507,8 +561,7 @@ prompt_optional_brewfile() {
                 [[ -z "${selected_name}" ]] && continue
                 for idx in "${!optional_names[@]}"; do
                     if [[ "${optional_names[${idx}]}" == "${selected_name}" ]]; then
-                        printf '%s\n' "${optional_entries[${idx}]}" >> "${tmp_optional_brewfile}"
-                        selected_optional=$((selected_optional + 1))
+                        select_optional_entry "${idx}"
                         break
                     fi
                 done
@@ -519,25 +572,31 @@ prompt_optional_brewfile() {
             log_info "Optional Homebrew packages available. Press Enter to install a package, or n to skip."
 
             for idx in "${!optional_entries[@]}"; do
-                entry="${optional_entries[${idx}]}"
                 display_entry="${optional_names[${idx}]}"
                 printf "Install %s %s? [Y/n] " "${prompt_label}" "${display_entry}" > /dev/tty
                 read -r reply < /dev/tty
                 if [[ -z "${reply}" || "${reply}" =~ ^[Yy]$ ]]; then
-                    printf '%s\n' "${entry}" >> "${tmp_optional_brewfile}"
-                    selected_optional=$((selected_optional + 1))
+                    select_optional_entry "${idx}"
                 fi
             done
             ;;
     esac
 
     if [[ "${selected_optional}" -gt 0 ]]; then
-        prepare_font_casks_from_brewfile "${tmp_optional_brewfile}"
-        trust_tapped_brewfile_entries "${tmp_optional_brewfile}"
-        local -a bundle_cmd=(brew bundle install --file="${tmp_optional_brewfile}")
-        [[ "${VERBOSE:-0}" -eq 1 ]] && bundle_cmd+=(--verbose)
-        spin "Installing ${prompt_label}s..." "${bundle_cmd[@]}"
-        refresh_brew_state
+        if [[ "${selected_brew}" -gt 0 ]]; then
+            prepare_font_casks_from_brewfile "${tmp_optional_brewfile}"
+            trust_tapped_brewfile_entries "${tmp_optional_brewfile}"
+            local -a bundle_cmd=(brew bundle install --file="${tmp_optional_brewfile}")
+            [[ "${VERBOSE:-0}" -eq 1 ]] && bundle_cmd+=(--verbose)
+            spin "Installing ${prompt_label}s..." "${bundle_cmd[@]}"
+            refresh_brew_state
+        fi
+        # Guarded: bash 3.2 treats an empty array expansion as unbound under set -u.
+        if [[ "${#selected_native[@]}" -gt 0 ]]; then
+            for pkg_name in "${selected_native[@]}"; do
+                run_native_install "${pkg_name}"
+            done
+        fi
         log_info "Installed ${selected_optional} ${prompt_label}(s)"
     else
         log_info "No ${prompt_label}s selected"
