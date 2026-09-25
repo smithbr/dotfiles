@@ -17,7 +17,8 @@ It also ensures `shellcheck` is installed, then lints the repo's shell scripts b
 
 This repo can use the versioned hooks in [`.githooks`](/Users/bran/.dotfiles/.githooks):
 
-- `pre-push` runs the full test suite via [`run_tests.sh`](/Users/bran/.dotfiles/tests/run_tests.sh)
+- `pre-push` runs the full test suite via [`run_tests.sh`](/Users/bran/.dotfiles/tests/run_tests.sh), then a
+  container install via [`sandbox-install.sh`](/Users/bran/.dotfiles/tests/sandbox-install.sh)
 
 To enable them locally:
 
@@ -25,6 +26,34 @@ To enable them locally:
 git config core.hooksPath .githooks
 chmod +x .githooks/pre-push
 ```
+
+## Sandbox Install
+
+[`sandbox-install.sh`](/Users/bran/.dotfiles/tests/sandbox-install.sh) runs `install.sh` inside a throwaway Debian
+container. It is the only check that sees a genuinely bare machine: no `git`,
+no `curl`, no `zsh`, and stdin closed. The Bats suite mocks all of that away, so
+regressions in the non-interactive bootstrap path are invisible to it.
+
+It needs a container runtime. On macOS:
+
+```bash
+brew install colima docker && colima start
+```
+
+Run it directly with:
+
+```bash
+./tests/sandbox-install.sh
+```
+
+Notes:
+
+- It tests `HEAD`, not the working tree, so commit before running it.
+- Homebrew and `chsh` are skipped: Linux aarch64 has no brew bottles, and `chsh`
+  needs a password the container user does not have.
+- `pre-push` only runs it when the pushed commits touch `install.sh`, `scripts/`,
+  `dotfiles/`, or `homebrew/`. Set `SKIP_SANDBOX_INSTALL=1` to bypass it, and it
+  skips itself when `docker` is absent.
 
 ## Isolation Model
 
