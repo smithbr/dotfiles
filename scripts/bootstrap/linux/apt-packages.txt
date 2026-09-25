@@ -1,7 +1,11 @@
 build-essential
 curl
 dnsutils
+git
+htop
 net-tools
 nethogs
 tcpdump
+tree
+wget
 zsh
