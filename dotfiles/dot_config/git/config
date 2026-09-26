@@ -28,6 +28,8 @@
     cleanup = !git branch --no-color | fzf -m | xargs -I {} git branch -D '{}'
     clean-all = !git reset --hard && git clean -xfd
     recent = branch --sort=-committerdate
+[ghq]
+    root = ~/Developer
 [filter "lfs"]
 	clean = git-lfs clean -- %f
 	smudge = git-lfs smudge -- %f
