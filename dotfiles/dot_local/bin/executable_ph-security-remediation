@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/bin
+umask 077
+
+usage() {
+    cat <<'EOF'
+Usage:
+  ph-security-remediation [--help]
+  sudo /absolute/path/to/ph-security-remediation --apply --user USER --host HOSTNAME [--upgrade-packages]
+
+Without --apply, print the plan and exit without changing the system.
+For Debian hosts running a native Pi-hole v6 installation with standard web ports.
+
+Changes:
+  Back up affected files and privileged audit details under /root.
+  Fix permissions on the legacy padd-unbound and update-script sudoers files.
+  Remove the legacy passwordless update-script rule only if its contents match.
+  Remove USER from the Docker group; existing sessions must end to revoke access.
+  Redirect HTTP to existing HTTPS and briefly restart Pi-hole.
+  Install system package upgrades only with --upgrade-packages.
+
+DNS, firewall, and SSH configuration are not changed. This is partial hardening,
+not a complete security audit. Backups contain private configuration and must
+not be published. HTTPS checks verify service availability, not certificate trust.
+If a step fails, earlier changes may remain; only failed web changes roll back
+automatically. Review the private backups before restoring individual settings.
+Do not grant this user-managed script passwordless sudo access.
+EOF
+}
+
+apply_changes=false
+upgrade_packages=false
+target_user=''
+target_host=''
+while (( $# > 0 )); do
+    case "${1}" in
+        --help|-h) usage; exit 0 ;;
+        --apply) apply_changes=true; shift ;;
+        --upgrade-packages) upgrade_packages=true; shift ;;
+        --user|--host)
+            if (( $# < 2 )) || [[ -z "${2}" || "${2}" == --* ]]; then
+                printf 'Missing value for %s\n' "${1}" >&2
+                exit 1
+            fi
+            case "${1}" in
+                --user) target_user="${2}" ;;
+                --host) target_host="${2}" ;;
+            esac
+            shift 2
+            ;;
+        *) printf 'Unknown argument: %s\n' "${1}" >&2; exit 1 ;;
+    esac
+done
+
+if [[ "${apply_changes}" == false ]]; then
+    usage
+    exit 0
+fi
+if [[ ! "${target_user}" =~ ^[a-z_][a-z0-9_-]*[$]?$ || -z "${target_host}" ]]; then
+    printf '%s\n' '--apply requires an explicit valid --user and --host.' >&2
+    exit 1
+fi
+if [[ "${target_host}" != "$(hostname)" ]]; then
+    printf 'Host mismatch; no changes made.\n' >&2
+    exit 1
+fi
+if (( EUID != 0 )); then
+    printf 'Applying changes requires sudo; retain the explicit --apply, --user and --host arguments.\n' >&2
+    exit 1
+fi
+target_uid="$(id -u -- "${target_user}")"
+if [[ "${target_uid}" == 0 ]]; then
+    printf 'The target must be a non-root account.\n' >&2
+    exit 1
+fi
+if [[ "$(id -gn -- "${target_user}")" == docker ]]; then
+    printf '%s\n' "Docker is the target account's primary group; change it manually before remediation." >&2
+    exit 1
+fi
+
+for required in visudo python3 gpasswd apt-get pihole-FTL curl dig systemctl nft sshd; do
+    command -v "${required}" >/dev/null
+done
+
+old_ports="$(python3 -I - "${target_user}" <<'PY'
+import pathlib
+import pwd
+import re
+import sys
+import tomllib
+
+account = pwd.getpwnam(sys.argv[1])
+if not pathlib.Path('/etc/debian_version').is_file():
+    raise SystemExit('This script supports Debian-family hosts only.')
+if pathlib.Path('/etc/pihole/pihole.toml').is_symlink():
+    raise SystemExit('Symlinked Pi-hole configuration requires manual review before backup.')
+with open('/etc/pihole/pihole.toml', 'rb') as source:
+    ports = tomllib.load(source)['webserver']['port']
+if ports not in ('80o,443os,[::]:80o,[::]:443os', '80r,443s,[::]:80r,[::]:443s'):
+    raise SystemExit('Custom web bindings detected; review manually to avoid widening exposure.')
+for name in ('padd-unbound', 'update-script'):
+    rule = pathlib.Path('/etc/sudoers.d') / name
+    if rule.is_symlink():
+        raise SystemExit(f'Refusing to modify symlink: {rule}')
+    if rule.exists() and (not rule.is_file() or rule.stat().st_uid != 0):
+        raise SystemExit(f'Expected a root-owned regular file: {rule}')
+rule = pathlib.Path('/etc/sudoers.d/update-script')
+if rule.exists():
+    lines = [line.strip() for line in rule.read_text().splitlines()
+             if line.strip() and not line.lstrip().startswith('#')]
+    script = str(pathlib.Path(account.pw_dir) / '.config/pihole/update.sh')
+    expected = re.escape(account.pw_name) + r'\s+ALL\s*=\s*\(ALL(?:\s*:\s*ALL)?\)\s*NOPASSWD:\s*' + re.escape(script)
+    if len(lines) != 1 or not re.fullmatch(expected, lines[0]):
+        raise SystemExit('Unexpected update-script sudoers rule; review manually. No changes made.')
+print(ports)
+PY
+)"
+curl --noproxy '*' -fksS --max-time 5 -o /dev/null https://127.0.0.1/admin/
+
+backup_dir="$(mktemp -d /root/pihole-security-backup.XXXXXXXX)"
+printf 'Backups: %s\n' "${backup_dir}"
+cp -a /etc/group /etc/gshadow /etc/pihole/pihole.toml "${backup_dir}/"
+sshd -T > "${backup_dir}/sshd-effective-before.txt"
+nft list ruleset > "${backup_dir}/firewall-before.nft"
+mkdir "${backup_dir}/sudoers-before"
+for sudoers_file in /etc/sudoers.d/padd-unbound /etc/sudoers.d/update-script; do
+    if [[ -L "${sudoers_file}" ]]; then
+        printf 'Refusing to change symlink: %s\n' "${sudoers_file}" >&2
+        exit 1
+    fi
+    if [[ -f "${sudoers_file}" ]]; then
+        cp -a "${sudoers_file}" "${backup_dir}/sudoers-before/"
+        chmod 0440 "${sudoers_file}"
+    fi
+done
+visudo -c
+
+python3 -I - "${backup_dir}" "${target_user}" <<'PY'
+import pathlib
+import pwd
+import re
+import shutil
+import subprocess
+import sys
+
+rule = pathlib.Path('/etc/sudoers.d/update-script')
+if rule.exists():
+    lines = [line.strip() for line in rule.read_text().splitlines()
+             if line.strip() and not line.lstrip().startswith('#')]
+    account = pwd.getpwnam(sys.argv[2])
+    script = str(pathlib.Path(account.pw_dir) / '.config/pihole/update.sh')
+    expected = re.escape(account.pw_name) + r'\s+ALL\s*=\s*\(ALL(?:\s*:\s*ALL)?\)\s*NOPASSWD:\s*' + re.escape(script)
+    if len(lines) != 1 or not re.fullmatch(expected, lines[0]):
+        raise SystemExit('Unexpected sudoers rule: stopped without changing sudoers. Review /etc/sudoers.d/update-script.')
+    backup = pathlib.Path(sys.argv[1]) / rule.name
+    shutil.copy2(rule, backup)
+    rule.unlink()
+    if subprocess.run(['/usr/sbin/visudo', '-c']).returncode:
+        shutil.copy2(backup, rule)
+        raise SystemExit('Sudoers validation failed; original rule restored.')
+    print('Removed passwordless access to the user-writable update script.')
+else:
+    print('Update-script sudoers rule already absent.')
+PY
+
+if id -nG -- "${target_user}" | tr ' ' '\n' | grep -qx docker; then
+    gpasswd -d "${target_user}" docker
+fi
+printf 'Existing sessions retain Docker access until they end; reconnect after completion.\n'
+
+restore_web_ports() {
+    local failure_status="${1}"
+
+    trap - ERR HUP INT TERM
+    printf 'Web change failed or was interrupted; restoring original port configuration.\n' >&2
+    if ! pihole-FTL --config webserver.port "${old_ports}" || ! systemctl restart pihole-FTL; then
+        printf 'Automatic rollback failed. Restore webserver.port using the private backup at %s.\n' "${backup_dir}" >&2
+    fi
+    exit "${failure_status}"
+}
+
+verify_web() {
+    local redirect
+    local attempt
+    for ((attempt = 0; attempt < 15; attempt++)); do
+        if redirect="$(curl --noproxy '*' -fsS --max-time 3 -o /dev/null -w '%{redirect_url}' http://127.0.0.1/admin/ 2>/dev/null)" &&
+            [[ "${redirect}" == https://* ]] &&
+            curl --noproxy '*' -fksS --max-time 3 -o /dev/null https://127.0.0.1/admin/; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+trap 'restore_web_ports "$?"' ERR
+trap 'restore_web_ports 129' HUP
+trap 'restore_web_ports 130' INT
+trap 'restore_web_ports 143' TERM
+pihole-FTL --config webserver.port '80r,443s,[::]:80r,[::]:443s'
+systemctl restart pihole-FTL
+verify_web
+trap - ERR HUP INT TERM
+printf 'HTTP now redirects to HTTPS; HTTPS responds. Certificate trust was not tested.\n'
+
+if [[ "${upgrade_packages}" == true ]]; then
+    apt-get -o APT::Update::Error-Mode=any update
+    apt-get upgrade -y
+fi
+
+systemctl is-active pihole-FTL
+verify_web
+for query in pi.hole example.com; do
+    dns_result="$(dig @127.0.0.1 "${query}" +time=3 +tries=1)"
+    printf '%s\n' "${dns_result}" > "${backup_dir}/dns-${query}.txt"
+    if [[ "${dns_result}" != *'status: NOERROR'* ]]; then
+        printf 'DNS verification failed for %s.\n' "${query}" >&2
+        exit 1
+    fi
+done
+sshd -T > "${backup_dir}/sshd-effective-after.txt"
+nft list ruleset > "${backup_dir}/firewall-after.nft"
+# The shell is already root, so it can write this private report.
+# shellcheck disable=SC2024
+sudo -l -U "${target_user}" > "${backup_dir}/sudo-after.txt"
+printf '\nFirst-stage remediation complete. Backups: %s\n' "${backup_dir}"
+printf 'DNS configuration was preserved. Firewall and SSH changes require review of the private reports.\n'
+if [[ -f /var/run/reboot-required ]]; then
+    cat /var/run/reboot-required
+fi
