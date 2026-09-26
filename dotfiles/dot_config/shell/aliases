@@ -1,5 +1,4 @@
 # navigation
-alias bat="glow"
 alias cdd="cd ~/.dotfiles"
 alias h="history"
 alias lsa="ls -FGlAhp"

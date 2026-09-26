@@ -1,0 +1,4 @@
+# Match Ghostty's Catppuccin themes; `auto` follows the terminal background.
+--theme=auto
+--theme-light="Catppuccin Latte"
+--theme-dark="Catppuccin Frappe"
