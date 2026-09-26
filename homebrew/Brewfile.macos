@@ -32,7 +32,6 @@ cask "yaak"
 
 # Productivity
 cask "appcleaner"
-cask "homebrew-app"
 cask "obsidian"
 cask "utm"
 
