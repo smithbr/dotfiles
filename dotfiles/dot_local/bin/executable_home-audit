@@ -1,0 +1,233 @@
+#!/usr/bin/env bash
+#
+# home-audit — sort the dotfiles directly in $HOME into what to do with them.
+#
+# Read-only. Each top-level ~/.* entry lands in one bucket:
+#
+#   JUNK      OS litter and backup copies (.DS_Store, *.bak, .zcompdump, ...)
+#   LEFTOVER  your environment already redirects this tool to an XDG path, or
+#             nothing installed owns it and it has not changed in --days
+#   MOVE      the tool supports XDG; the note says how (from xdg-ninja's data)
+#   REVIEW    owner unclear, or owner installed but untouched in --days
+#   KEEP      managed by chezmoi, required, in active use, or cannot move
+#
+# XDG knowledge comes from xdg-ninja's program database; chezmoi's managed
+# list marks what the dotfiles repo owns. To archive what you decide against,
+# run ~/.dotfiles/scripts/chezmoi-abandoned.sh --cleanup.
+#
+# Usage:
+#   home-audit [--days N] [--home PATH] [--all]
+#
+#   --days N     inactivity threshold in days (default 90)
+#   --home PATH  audit another home directory (default $HOME)
+#   --all        also list KEEP entries
+#
+# Environment:
+#   HOME_AUDIT_PROGRAMS  xdg-ninja programs directory (auto-detected)
+
+set -euo pipefail
+
+days=90
+home_dir="${HOME}"
+show_all=0
+
+usage() {
+    sed -n '3,/^$/{s/^# \{0,1\}//;p;}' "$0"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --days)
+            [[ $# -ge 2 && "$2" =~ ^[0-9]+$ ]] || { echo "home-audit: --days needs a number" >&2; exit 2; }
+            days="$2"
+            shift 2
+            ;;
+        --home)
+            [[ $# -ge 2 && -d "$2" ]] || { echo "home-audit: --home needs a directory" >&2; exit 2; }
+            home_dir="${2%/}"
+            shift 2
+            ;;
+        --all) show_all=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "home-audit: unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+
+# Present on every macOS/Linux home or owned by this dotfiles setup.
+required_names=" .Trash .ssh .gnupg .config .local .cache .dotfiles .zshenv .CFUserTextEncoding .localized "
+
+find_programs_dir() {
+    local dir prefix=""
+    if [[ -n "${HOME_AUDIT_PROGRAMS:-}" ]]; then
+        printf '%s\n' "${HOME_AUDIT_PROGRAMS}"
+        return
+    fi
+    command -v brew >/dev/null 2>&1 && prefix="$(brew --prefix 2>/dev/null || true)"
+    for dir in "${prefix:+${prefix}/share/xdg-ninja/programs}" /usr/local/share/xdg-ninja/programs /usr/share/xdg-ninja/programs; do
+        [[ -n "${dir}" && -d "${dir}" ]] && { printf '%s\n' "${dir}"; return; }
+    done
+}
+
+# name<TAB>program<TAB>movable<TAB>VAR,VAR<TAB>hint for every $HOME/.name entry.
+xdg_db=""
+programs_dir="$(find_programs_dir)"
+if [[ -n "${programs_dir}" ]] && command -v jq >/dev/null 2>&1; then
+    xdg_db="$(jq -r '
+        .name as $prog | .files[]
+        | select(.path | test("^\\$HOME/\\.[^/]+$"))
+        | [ (.path | sub("^\\$HOME/"; "")),
+            $prog,
+            (.movable | tostring),
+            ([.help | scan("export ([A-Z_][A-Z0-9_]*)=")[]] | join(",")),
+            ((.help | split("\n") | map(select(test("^export ")))) as $e
+              | if ($e | length) > 0 then ($e | join("; "))
+                else (.help | split("\n") | map(select(length > 0)) | first // "" | gsub("[*`]"; "")) end)
+          ] | @tsv' "${programs_dir}"/*.json 2>/dev/null || true)"
+fi
+
+managed=""
+if command -v chezmoi >/dev/null 2>&1; then
+    managed="$(chezmoi managed --path-style=absolute 2>/dev/null || true)"
+fi
+
+is_managed() {
+    local path="$1"
+    [[ -n "${managed}" ]] && grep -qxF -e "${path}" -e "${path}/" <<<"${managed}" && return 0
+    [[ -n "${managed}" ]] && grep -qF "${path}/" <<<"${managed}"
+}
+
+# True when something at or under the path changed within $days.
+recently_active() {
+    local hit
+    hit="$(find "$1" -maxdepth 2 -mtime "-${days}" -print 2>/dev/null | head -n 1 || true)"
+    [[ -n "${hit}" ]]
+}
+
+find_owner() {
+    local name="$1" program="$2" base candidate app
+    base="$(printf '%s' "${name#.}" | tr '[:upper:]' '[:lower:]')"
+    for candidate in "${program}" "${base}" "${base%%[-_.]*}"; do
+        [[ -n "${candidate}" ]] || continue
+        if command -v "${candidate}" >/dev/null 2>&1; then
+            printf '%s\n' "${candidate}"
+            return
+        fi
+    done
+    if [[ "$(uname -s)" == Darwin ]]; then
+        for app in /Applications/*.app "${home_dir}/Applications"/*.app; do
+            [[ -e "${app}" ]] || continue
+            candidate="$(basename "${app}" .app | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
+            if [[ "${candidate}" == *"${base%%[-_.]*}"* ]]; then
+                basename "${app}"
+                return
+            fi
+        done
+    fi
+}
+
+size_of() {
+    du -sk "$1" 2>/dev/null | awk '{ kb = $1; if (kb >= 1048576) printf "%.1fG", kb/1048576; else if (kb >= 1024) printf "%.0fM", kb/1024; else printf "%dK", kb }' || true
+}
+
+declare -a junk=() leftover=() move=() review=() keep=()
+
+add() {
+    local bucket="$1" path="$2" note="$3" line
+    # shellcheck disable=SC2088 # literal ~ for display
+    line="$(printf '%s\t%s\t%s' "~/${path#"${home_dir}"/}" "$([[ "${bucket}" == keep ]] || size_of "${path}")" "${note}")"
+    case "${bucket}" in
+        junk) junk+=("${line}") ;;
+        leftover) leftover+=("${line}") ;;
+        move) move+=("${line}") ;;
+        review) review+=("${line}") ;;
+        keep) keep+=("${line}") ;;
+    esac
+}
+
+shopt -s dotglob nullglob
+for path in "${home_dir}"/.*; do
+    name="${path##*/}"
+    [[ "${name}" == "." || "${name}" == ".." ]] && continue
+
+    case "${name}" in
+        .DS_Store | *.bak | *.backup | *.old | *.orig | *.swp | *~ | .zcompdump*)
+            add junk "${path}" "backup copy or OS litter"
+            continue
+            ;;
+    esac
+
+    if is_managed "${path}"; then
+        add keep "${path}" "managed by chezmoi"
+        continue
+    fi
+    if [[ "${required_names}" == *" ${name} "* ]]; then
+        add keep "${path}" "required"
+        continue
+    fi
+
+    entry="$(awk -F'\t' -v n="${name}" '$1 == n { print; exit }' <<<"${xdg_db}")"
+    program="" movable="" vars="" hint=""
+    [[ -n "${entry}" ]] && IFS=$'\t' read -r _ program movable vars hint <<<"${entry}"
+
+    if [[ "${movable}" == true ]]; then
+        redirected=""
+        IFS=',' read -r -a var_list <<<"${vars}"
+        for var in ${var_list[@]+"${var_list[@]}"}; do
+            value="${!var:-}"
+            if [[ -n "${value}" && "${value}" != "${path}" && "${value}" != "${path}/"* ]]; then
+                redirected="${var}"
+                break
+            fi
+        done
+        if [[ -n "${redirected}" ]]; then
+            add leftover "${path}" "${program}: \$${redirected} already points to ${!redirected}"
+        else
+            add move "${path}" "${program}: ${hint:-supports XDG}"
+        fi
+        continue
+    fi
+    if [[ "${movable}" == false ]]; then
+        add keep "${path}" "${program}: no XDG support"
+        continue
+    fi
+
+    owner="$(find_owner "${name}" "${program}")"
+    if recently_active "${path}"; then
+        if [[ -n "${owner}" ]]; then
+            add keep "${path}" "in use by ${owner}"
+        else
+            add review "${path}" "active, but no installed owner found"
+        fi
+    elif [[ -n "${owner}" ]]; then
+        add review "${path}" "${owner} installed, but untouched ${days}+ days"
+    else
+        add leftover "${path}" "no installed owner, untouched ${days}+ days"
+    fi
+done
+
+bold="" dim="" reset=""
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    bold=$'\033[1m' dim=$'\033[2m' reset=$'\033[0m'
+fi
+
+print_bucket() {
+    local title="$1" desc="$2"
+    shift 2
+    [[ $# -gt 0 ]] || return 0
+    printf '\n%s%s (%d)%s %s%s%s\n' "${bold}" "${title}" "$#" "${reset}" "${dim}" "${desc}" "${reset}"
+    printf '%s\n' "$@" | awk -F'\t' '{ printf "  %-28s %6s  %s\n", $1, $2, $3 }'
+}
+
+printf '%sHome audit%s %s(%s, inactive = %s+ days)%s\n' "${bold}" "${reset}" "${dim}" "${home_dir}" "${days}" "${reset}"
+[[ -n "${xdg_db}" ]] || printf '%snote: xdg-ninja data or jq not found; XDG checks skipped%s\n' "${dim}" "${reset}"
+[[ -n "${managed}" ]] || printf '%snote: chezmoi unavailable; managed files not recognised%s\n' "${dim}" "${reset}"
+
+print_bucket JUNK "safe to delete" ${junk[@]+"${junk[@]}"}
+print_bucket LEFTOVER "likely safe to archive" ${leftover[@]+"${leftover[@]}"}
+print_bucket MOVE "tool supports XDG" ${move[@]+"${move[@]}"}
+print_bucket REVIEW "check by hand" ${review[@]+"${review[@]}"}
+if [[ "${show_all}" -eq 1 ]]; then
+    print_bucket KEEP "" ${keep[@]+"${keep[@]}"}
+else
+    printf '\n%s%d kept (managed, required, in use, or not movable); --all lists them%s\n' "${dim}" "${#keep[@]}" "${reset}"
+fi
