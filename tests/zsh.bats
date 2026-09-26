@@ -5,7 +5,7 @@ load test_helper
 @test "top-level zshenv shim points zsh at XDG config" {
     run bash -c '
         set -euo pipefail
-        file="'"${PROJECT_ROOT}"'/dotfiles/dot_zshenv"
+        file="'"${PROJECT_ROOT}"'/stow/common/.zshenv"
 
         [[ -f "${file}" ]] || { echo "missing ${file}"; exit 1; }
         grep -qxF "export XDG_CONFIG_HOME=\"\${XDG_CONFIG_HOME:-\${HOME}/.config}\"" "${file}" || {
@@ -32,7 +32,7 @@ load test_helper
 @test "zprofile bootstraps brew for macOS and Linux" {
     run bash -c '
         set -euo pipefail
-        file="'"${PROJECT_ROOT}"'/dotfiles/dot_config/zsh/dot_zprofile"
+        file="'"${PROJECT_ROOT}"'/stow/common/.config/zsh/.zprofile"
 
         [[ -f "${file}" ]] || { echo "missing ${file}"; exit 1; }
         grep -qxF "if [[ -x /opt/homebrew/bin/brew ]]; then" "${file}" || {
@@ -67,7 +67,7 @@ load test_helper
 @test "zshrc uses ZDOTDIR for local overrides and plugins" {
     run bash -c '
         set -euo pipefail
-        file="'"${PROJECT_ROOT}"'/dotfiles/dot_config/zsh/dot_zshrc"
+        file="'"${PROJECT_ROOT}"'/stow/common/.config/zsh/.zshrc"
 
         [[ -f "${file}" ]] || { echo "missing ${file}"; exit 1; }
         grep -qF "\${ZDOTDIR}/.zshrc.local" "${file}" || {
@@ -95,7 +95,7 @@ load test_helper
 run_nvm_block() {
     local block="${TEST_TMPDIR}/nvm_block.zsh"
     awk '/^# nvm/ { on = 1 } on { print } on && /^unset nvm_sh$/ { exit }' \
-        "${PROJECT_ROOT}/dotfiles/dot_config/zsh/dot_zshrc" > "${block}"
+        "${PROJECT_ROOT}/stow/common/.config/zsh/.zshrc" > "${block}"
     [[ -s "${block}" ]] || { echo "nvm block not found"; return 1; }
     run env -i PATH="/usr/bin:/bin" NVM_DIR="${TEST_TMPDIR}/nvm" "$@" \
         zsh -f -c "source '${block}'; print -r -- \"loaded=\${NVM_LOADED:-no}\""

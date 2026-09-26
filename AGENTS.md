@@ -14,24 +14,28 @@ These rules apply throughout this repository.
 - `--skip-brew`: skip Homebrew installation, updates, and bundles.
 - `--skip-shell`: skip adding zsh to `/etc/shells` and running `chsh`.
 
-Unrecognized arguments and everything after `--` are passed to `chezmoi apply`:
+Unrecognized arguments and everything after `--` are passed to `stow` through `scripts/link.sh`:
 
 ```bash
-~/.dotfiles/install.sh --skip-brew -- --force --exclude=scripts
+~/.dotfiles/install.sh --skip-brew -- --verbose=2
 ```
+
+`scripts/link.sh` is the linking step on its own: `link.sh` links, `link.sh status` lists missing, replaced, foreign, and broken links, `link.sh managed` prints every path the repo owns, and `--dry-run`, `--refresh` (pull `~/.config/agents` now), and `--destination PATH` adjust a run. Stow's `--target` and `--dir` are rejected; use `--destination`.
 
 ## Source and deployment boundaries
 
-- `.chezmoiroot` selects `dotfiles/` as the managed source tree. Edit source files there rather than their deployed copies in the home directory. Repository tooling belongs outside that tree.
-- Preserve chezmoi attributes (`dot_`, `private_`, `executable_`, `symlink_`, `create_`, and `.tmpl`) when moving or renaming entries; they affect destination paths, permissions, and update behavior.
-- For template or platform-specific changes, inspect the rendered destination and the relevant conditions in `dotfiles/.chezmoiignore`. Keep shared editor configuration in `dotfiles/.chezmoitemplates/` rather than duplicating it in platform wrappers.
-- Changes to managed paths must preserve existing user data. When replacing a real file or directory with a symlink, retain the backup behavior in `dotfiles/run_before_backup-agent-symlinks.sh` and cover the transition in `tests/agent_symlinks.bats`.
+- `stow/<package>/` mirrors the home directory under real file names; `common` always links, and `darwin` or `linux` links on that platform. Linking uses `--no-folding`, so directories in `~` stay real and only files are symlinks. Repository tooling belongs outside `stow/`.
+- `seed/<package>/` holds files an application rewrites itself (Docker's and gh's config). They are copied once with mode 600 when missing and never overwritten; do not move them into `stow/`.
+- Shared editor settings live once in `editors/`; the platform packages hold relative symlinks to them. Edit `editors/`, not the links.
+- Links into the private agents checkout (`~/.config/agents`) and the directories kept at mode 700 are listed in `AGENT_LINKS` and `PRIVATE_DIRS` in `scripts/link.sh`. Git keeps only the executable bit, so any other permission must be applied there.
+- Changes to managed paths must preserve existing user data. `scripts/link.sh` replaces a real file only when it matches the repo and otherwise moves it to `~/.local/state/dotfiles/clobbered/<timestamp>/` first; keep that behavior and cover transitions in `tests/link.bats`.
+- An application that saves by replacing its config file turns the link into a real file and silently detaches it from the repo. `link.sh status` and the file review report these as `replaced`.
 
 ## Installation behavior
 
 - Bootstrap must work before the managed shell configuration and Homebrew tools are available. Establish prerequisites before use; do not rely on the developer's current PATH, aliases, or installed utilities.
 - Keep repeated installs safe: avoid duplicate configuration entries, needless reinstalls, or overwriting local overrides. For changes to installation state, check both a fresh setup and an already-configured setup.
-- Preserve `install.sh`'s dry-run and skip flags and argument forwarding to chezmoi. Dry-run must not install packages, change the login shell, or write destination files.
+- Preserve `install.sh`'s dry-run and skip flags and argument forwarding to stow. Dry-run must not install packages, change the login shell, or write destination files.
 - A closed stdin or absent TTY must not hang bootstrap or accidentally opt into optional installs. Exercise EOF explicitly when changing prompts; account for `set -e` when `read` fails.
 - Shared paths must work on macOS and Debian/Ubuntu. Check BSD/GNU utility differences and the shell available at the affected install stage before adding flags or shell features. Keep OS-specific operations in their platform branch.
 - Reuse `scripts/common.sh` for logging, privilege handling, and command presentation. Required command failures must remain failures through wrappers and pipelines, with useful diagnostics.
@@ -55,6 +59,6 @@ Unrecognized arguments and everything after `--` are passed to `chezmoi apply`:
 
 - Installation ends with a file review. It lists unmanaged dotfiles directly under the destination home, unmanaged neighbors of managed files, broken managed links, and saved migration backups. Unmanaged does not mean unused; credentials, private agent directories, managed paths, and expected local overrides are excluded from cleanup.
 - Interactive installs offer one numbered selection (or `all`) to archive reviewed candidates. Enter skips cleanup. Closed stdin, non-interactive installs, and dry runs only report; they never archive. Failed inventory queries disable cleanup and report an incomplete review.
-- Run `./scripts/chezmoi-abandoned.sh --cleanup` to repeat the review and selection without reinstalling. Use `--source PATH` for another source tree and `--destination PATH` for another destination. Extra positional roots expand the recursive scan; `--all` shows normally hidden runtime state but does not select it for cleanup.
-- `home-audit` (deployed to `~/.local/bin`) is the read-only triage view of top-level `~/.*` entries: JUNK, LEFTOVER (the environment already redirects the tool, or no installed owner and inactive past `--days`), MOVE (XDG-capable per xdg-ninja data), REVIEW, and KEEP (managed, required, in use, or not movable). It never changes files; archive decisions go through `chezmoi-abandoned.sh --cleanup`.
+- Run `./scripts/file-review.sh --cleanup` to repeat the review and selection without reinstalling. Use `--source PATH` for another source tree and `--destination PATH` for another destination. Extra positional roots expand the recursive scan; `--all` shows normally hidden runtime state but does not select it for cleanup.
+- `home-audit` (deployed to `~/.local/bin`) is the read-only triage view of top-level `~/.*` entries: JUNK, LEFTOVER (the environment already redirects the tool, or no installed owner and inactive past `--days`), MOVE (XDG-capable per xdg-ninja data), REVIEW, and KEEP (managed, required, in use, or not movable). It never changes files; archive decisions go through `file-review.sh --cleanup`.
 - Cleanup moves selected paths into `~/.local/state/dotfiles/cleanup/<timestamp>.<suffix>/` with private permissions and original relative paths. It never permanently deletes them or follows symlinked parents. Restore needed files to their original paths after checking for conflicts. Existing migration backups are reported separately and are not cleanup candidates.

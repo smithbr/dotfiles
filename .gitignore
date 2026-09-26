@@ -3,6 +3,6 @@
 *.log
 
 # AI tool secrets — keep out of git entirely (1Password/env only)
-dotfiles/*dot_claude.json
-dotfiles/dot_codex/*auth.json
-dotfiles/dot_codex/*config.toml
+stow/*/.claude.json
+stow/*/.codex/auth.json
+stow/*/.codex/config.toml

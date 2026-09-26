@@ -22,11 +22,11 @@ brew "pnpm"
 brew "ripgrep"
 brew "shellcheck"
 brew "skills"
+brew "stow"
 brew "superradcompany/tap/microsandbox"
 brew "uv"
 brew "xdg-ninja", args:["--HEAD"]
 cask "1password-cli"
-cask "daptify14/tap/chezit"
 
 # Shell Enhancements
 brew "antidote"

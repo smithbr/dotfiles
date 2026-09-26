@@ -115,8 +115,10 @@ check() {
 
 check "apt installed git"            bash -lc 'command -v git'
 check "apt installed zsh"            bash -lc 'command -v zsh'
-check "~/.zshenv applied"            test -f /home/tester/.zshenv
-check "~/.config/zsh/.zshrc applied" test -f /home/tester/.config/zsh/.zshrc
+check "apt installed stow"           bash -lc 'command -v stow'
+check "~/.zshenv linked"             test -L /home/tester/.zshenv -a -f /home/tester/.zshenv
+check "~/.config/zsh/.zshrc linked"  test -L /home/tester/.config/zsh/.zshrc -a -f /home/tester/.config/zsh/.zshrc
+check "~/.config is a real dir"      test ! -L /home/tester/.config
 check "zsh login exports XDG paths"  zsh -lc '[[ "${XDG_CONFIG_HOME}" == "${HOME}/.config" ]]'
 check "no optional installs ran"     bash -lc '! command -v docker && ! command -v tailscale'
 

@@ -22,6 +22,14 @@ ensure_shellcheck() {
     fi
 }
 
+# The link suite drives the real GNU Stow against scratch directories.
+ensure_stow() {
+    if ! formula_installed "stow"; then
+        printf 'Installing test dependency: stow\n'
+        brew install stow
+    fi
+}
+
 # GNU parallel is required for Bats' --jobs flag (parallel test execution).
 # Being installed is not enough: the keg stays unlinked when another formula
 # already owns one of its binaries (e.g. sem-cli owns bin/sem), so `parallel`
@@ -67,7 +75,7 @@ run_shellcheck() {
 
     while IFS= read -r file; do
         shellcheck_files+=("${file}")
-    done < <(git ls-files -- '*.sh' '*.bash' 'dotfiles/dot_local/bin/*')
+    done < <(git ls-files -- '*.sh' '*.bash' 'stow/*/.local/bin/*')
 
     if [[ "${#shellcheck_files[@]}" -eq 0 ]]; then
         printf 'No shell scripts found for shellcheck\n'
@@ -79,6 +87,7 @@ run_shellcheck() {
 }
 
 ensure_shellcheck
+ensure_stow
 ensure_parallel
 ensure_bats_dependencies
 

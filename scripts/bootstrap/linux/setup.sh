@@ -160,7 +160,7 @@ prompt_optional_linux_bootstraps() {
         for idx in "${!pending_names[@]}"; do
             # A closed or exhausted stdin (CI, curl | bash, `< /dev/null`) makes
             # read return non-zero, which under `set -e` aborted the whole
-            # bootstrap before chezmoi ever ran. Treat end-of-input as "install
+            # bootstrap before the dotfiles were ever linked. Treat end-of-input as "install
             # nothing else" rather than inheriting the empty-reply default of
             # yes, which would pull in optional packages nobody asked for.
             if ! read -r -p "Install ${prompt_label} ${pending_names[${idx}]}? [Y/n] " reply; then

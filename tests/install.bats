@@ -31,7 +31,7 @@ run_parser() {
         $(parser_snippet)
         printf 'dry=%s system=%s brew=%s shell=%s verbose=%s args=%s\n' \
             \"\${dry_run}\" \"\${run_system_bootstrap}\" \"\${run_brew}\" \
-            \"\${run_shell_setup}\" \"\${VERBOSE}\" \"\${chezmoi_args[*]:-}\"
+            \"\${run_shell_setup}\" \"\${VERBOSE}\" \"\${link_args[*]:-}\"
     " bash "$@"
 }
 
@@ -95,16 +95,16 @@ run_parser() {
     assert_output "USAGE"
 }
 
-@test "install.sh passes unknown args to chezmoi_args" {
-    run_parser --skip-system --verbose --force
+@test "install.sh passes unknown args through to stow" {
+    run_parser --skip-system --verbose --adopt
     assert_success
-    assert_output "dry=0 system=0 brew=1 shell=1 verbose=1 args=--force"
+    assert_output "dry=0 system=0 brew=1 shell=1 verbose=1 args=--adopt"
 }
 
-@test "install.sh passes everything after -- to chezmoi_args" {
-    run_parser --skip-brew -- --skip-system --force
+@test "install.sh passes everything after -- through to stow" {
+    run_parser --skip-brew -- --skip-system --adopt
     assert_success
-    assert_output "dry=0 system=1 brew=0 shell=1 verbose=0 args=--skip-system --force"
+    assert_output "dry=0 system=1 brew=0 shell=1 verbose=0 args=--skip-system --adopt"
 }
 
 @test "install.sh supports both --skip-system and --skip-brew together" {
@@ -392,7 +392,8 @@ EOF
         export HOME="'"${TEST_TMPDIR}"'/sandbox-home"
         export TEST_BIN="'"${TEST_TMPDIR}"'/bin"
         export TEST_LOG="'"${TEST_TMPDIR}"'/actions.log"
-        export TEST_CHEZMOI_STUB="'"${TEST_TMPDIR}"'/chezmoi.stub"
+        export TEST_STOW_STUB="'"${TEST_TMPDIR}"'/stow.stub"
+        export AGENTS_REPO_URL="file://'"${TEST_TMPDIR}"'/no-agents-repo"
         export USER="sandbox-user"
         export SHELL="${TEST_BIN}/zsh"
 
@@ -460,37 +461,9 @@ printf "PRIVATE KEY\n" > "${file}"
 printf "ssh-rsa sandbox-public\n" > "${file}.pub"
 MOCK
 
-        cat > "${TEST_CHEZMOI_STUB}" <<'"'"'MOCK'"'"'
+        cat > "${TEST_STOW_STUB}" <<'"'"'MOCK'"'"'
 #!/usr/bin/env bash
-set -euo pipefail
-
-if [[ "${1:-}" == "--source" ]]; then
-    source_dir="$2"
-    shift 2
-    case "${1:-}" in
-        status)
-            printf "M %s/.config/zsh/.zshrc\n" "${HOME}"
-            exit 0
-            ;;
-        apply)
-            shift
-            printf "chezmoi apply --source %s %s\n" "${source_dir}" "$*" >> "${TEST_LOG}"
-            exit 0
-            ;;
-        dump-config)
-            exit 0
-            ;;
-    esac
-fi
-
-case "${1:-}" in
-    source-path)
-        printf "%s\n" "${HOME}/.dotfiles/dotfiles"
-        ;;
-    *)
-        printf "chezmoi %s\n" "$*" >> "${TEST_LOG}"
-        ;;
-esac
+printf "stow %s\n" "$*" >> "${TEST_LOG}"
 MOCK
 
         cat > "${TEST_BIN}/brew" <<'"'"'MOCK'"'"'
@@ -499,38 +472,38 @@ set -euo pipefail
 
 printf "brew %s\n" "$*" >> "${TEST_LOG}"
 
-if [[ "${1:-}" == "install" && "${2:-}" == "chezmoi" ]]; then
-    cp "${TEST_CHEZMOI_STUB}" "${TEST_BIN}/chezmoi"
-    chmod +x "${TEST_BIN}/chezmoi"
+if [[ "${1:-}" == "install" && "${2:-}" == "stow" ]]; then
+    cp "${TEST_STOW_STUB}" "${TEST_BIN}/stow"
+    chmod +x "${TEST_BIN}/stow"
     exit 0
 fi
 
 exit 0
 MOCK
 
-        chmod +x "${TEST_BIN}/hostname" "${TEST_BIN}/find" "${TEST_BIN}/zsh" "${TEST_BIN}/grep" "${TEST_BIN}/ssh-keygen" "${TEST_BIN}/brew" "${TEST_CHEZMOI_STUB}"
+        chmod +x "${TEST_BIN}/hostname" "${TEST_BIN}/find" "${TEST_BIN}/zsh" "${TEST_BIN}/grep" "${TEST_BIN}/ssh-keygen" "${TEST_BIN}/brew" "${TEST_STOW_STUB}"
 
         cd "'"${PROJECT_ROOT}"'"
-        ./install.sh --skip-system --skip-brew --force
+        ./install.sh --skip-system --skip-brew --adopt
 
         [[ -L "${HOME}/.dotfiles" ]] || { echo "missing dotfiles symlink"; exit 1; }
         [[ "$(readlink "${HOME}/.dotfiles")" == "'"${PROJECT_ROOT}"'" ]] || { echo "bad dotfiles symlink"; exit 1; }
         [[ -f "${HOME}/.ssh/id_ed25519" ]] || { echo "missing private key"; exit 1; }
         [[ -f "${HOME}/.ssh/id_ed25519.pub" ]] || { echo "missing public key"; exit 1; }
-        grep -qx "brew install chezmoi" "${TEST_LOG}" || { echo "missing brew install chezmoi"; exit 1; }
-        grep -qx "chezmoi apply --source '"${PROJECT_ROOT}"' --force" "${TEST_LOG}" || {
-            echo "missing chezmoi apply"
+        grep -qx "brew install stow" "${TEST_LOG}" || { echo "missing brew install stow"; exit 1; }
+        grep -q "^stow --dir '"${PROJECT_ROOT}"'/stow --target ${HOME} --no-folding --restow .* --adopt common " "${TEST_LOG}" || {
+            echo "missing stow run"
             cat "${TEST_LOG}"
             exit 1
         }
-        [[ ! -e "${HOME}/.local/bin/chezmoi" ]] || { echo "unexpected curl install path used"; exit 1; }
+        [[ "$(readlink "${HOME}/.claude/settings.json")" == "${HOME}/.config/agents/tools/claude/settings.json" ]] || { echo "missing agent link"; exit 1; }
     '
     assert_success
-    assert_output --partial "Installing chezmoi with Homebrew"
-    assert_output --partial "Applying dotfiles from "
-    assert_output --partial "Checking pending chezmoi changes"
-    assert_output --partial "chezmoi reports 1 pending change(s) before apply"
-    assert_output --partial "chezmoi apply complete"
+    assert_output --partial "Installing GNU Stow with Homebrew"
+    assert_output --partial "Linking dotfiles from "
+    assert_output --partial "Checking links before applying"
+    assert_output --partial "Could not clone"
+    assert_output --partial "Linking complete"
     assert_output --partial "Existing files"
     assert_output --partial "File review for"
     refute_output --partial "Archive which paths?"
@@ -544,17 +517,19 @@ MOCK
         export HOME="'"${TEST_TMPDIR}"'/sandbox-home"
         export TEST_BIN="'"${TEST_TMPDIR}"'/bin"
         export TEST_LOG="'"${TEST_TMPDIR}"'/actions.log"
-        export TEST_CHEZMOI_STUB="'"${TEST_TMPDIR}"'/chezmoi.stub"
+        export TEST_STOW_STUB="'"${TEST_TMPDIR}"'/stow.stub"
+        export AGENTS_REPO_URL="file://'"${TEST_TMPDIR}"'/no-agents-repo"
         export USER="sandbox-user"
         export SHELL="${TEST_BIN}/zsh"
         export REPO_COPY="${HOME}/.dotfiles"
 
-        mkdir -p "${HOME}" "${TEST_BIN}" "${REPO_COPY}/scripts" "${REPO_COPY}/dotfiles"
+        mkdir -p "${HOME}" "${TEST_BIN}" "${REPO_COPY}/scripts" "${REPO_COPY}/stow"
         : > "${TEST_LOG}"
         export PATH="${TEST_BIN}:/usr/bin:/bin"
 
         cp "'"${PROJECT_ROOT}"'/install.sh" "${REPO_COPY}/install.sh"
         cp "'"${PROJECT_ROOT}"'/scripts/common.sh" "${REPO_COPY}/scripts/common.sh"
+        cp "'"${PROJECT_ROOT}"'/scripts/link.sh" "${REPO_COPY}/scripts/link.sh"
 
         cat > "${TEST_BIN}/hostname" <<'"'"'MOCK'"'"'
 #!/usr/bin/env bash
@@ -616,190 +591,34 @@ printf "PRIVATE KEY\n" > "${file}"
 printf "ssh-rsa sandbox-public\n" > "${file}.pub"
 MOCK
 
-        cat > "${TEST_CHEZMOI_STUB}" <<'"'"'MOCK'"'"'
+        cat > "${TEST_STOW_STUB}" <<'"'"'MOCK'"'"'
 #!/usr/bin/env bash
-set -euo pipefail
-
-if [[ "${1:-}" == "--source" ]]; then
-    source_dir="$2"
-    shift 2
-    case "${1:-}" in
-        status)
-            exit 0
-            ;;
-        apply)
-            shift
-            printf "chezmoi apply --source %s %s\n" "${source_dir}" "$*" >> "${TEST_LOG}"
-            exit 0
-            ;;
-        dump-config)
-            exit 0
-            ;;
-    esac
-fi
-
-case "${1:-}" in
-    source-path)
-        printf "%s\n" "${HOME}/.dotfiles/dotfiles"
-        ;;
-    *)
-        printf "chezmoi %s\n" "$*" >> "${TEST_LOG}"
-        ;;
-esac
+printf "stow %s\n" "$*" >> "${TEST_LOG}"
 MOCK
 
         cat > "${TEST_BIN}/brew" <<'"'"'MOCK'"'"'
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "${1:-}" == "install" && "${2:-}" == "chezmoi" ]]; then
-    cp "${TEST_CHEZMOI_STUB}" "${TEST_BIN}/chezmoi"
-    chmod +x "${TEST_BIN}/chezmoi"
+if [[ "${1:-}" == "install" && "${2:-}" == "stow" ]]; then
+    cp "${TEST_STOW_STUB}" "${TEST_BIN}/stow"
+    chmod +x "${TEST_BIN}/stow"
     exit 0
 fi
 
 exit 0
 MOCK
 
-        chmod +x "${TEST_BIN}/hostname" "${TEST_BIN}/find" "${TEST_BIN}/zsh" "${TEST_BIN}/grep" "${TEST_BIN}/ssh-keygen" "${TEST_BIN}/brew" "${TEST_CHEZMOI_STUB}"
+        chmod +x "${TEST_BIN}/hostname" "${TEST_BIN}/find" "${TEST_BIN}/zsh" "${TEST_BIN}/grep" "${TEST_BIN}/ssh-keygen" "${TEST_BIN}/brew" "${TEST_STOW_STUB}"
 
         cd "${REPO_COPY}"
-        ./install.sh --skip-system --skip-brew --force
+        ./install.sh --skip-system --skip-brew --adopt
 
         [[ -d "${REPO_COPY}" ]] || { echo "repo copy missing"; exit 1; }
         [[ ! -e "${REPO_COPY}/.dotfiles" ]] || { echo "nested self-link created"; exit 1; }
     '
     assert_success
     assert_output --partial "Dotfiles repo already linked at"
-}
-
-@test "install.sh does not warn when chezmoi source-path resolves through the dotfiles symlink" {
-    run bash -c '
-        set -euo pipefail
-
-        export HOME="'"${TEST_TMPDIR}"'/sandbox-home"
-        export TEST_BIN="'"${TEST_TMPDIR}"'/bin"
-        export TEST_LOG="'"${TEST_TMPDIR}"'/actions.log"
-        export TEST_CHEZMOI_STUB="'"${TEST_TMPDIR}"'/chezmoi.stub"
-        export USER="sandbox-user"
-        export SHELL="${TEST_BIN}/zsh"
-
-        mkdir -p "${HOME}" "${TEST_BIN}"
-        : > "${TEST_LOG}"
-        export PATH="${TEST_BIN}:/usr/bin:/bin"
-
-        cat > "${TEST_BIN}/hostname" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-echo "sandbox-host"
-MOCK
-
-        cat > "${TEST_BIN}/find" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-exit 0
-MOCK
-
-        cat > "${TEST_BIN}/zsh" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-exit 0
-MOCK
-
-        cat > "${TEST_BIN}/grep" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-if [[ "${*: -1}" == "/etc/shells" ]]; then
-    exit 0
-fi
-exec /usr/bin/grep "$@"
-MOCK
-
-        cat > "${TEST_BIN}/ssh-keygen" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-set -euo pipefail
-
-file=""
-if [[ "${1:-}" == "-y" ]]; then
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            -f)
-                file="$2"
-                shift 2
-                ;;
-            *)
-                shift
-                ;;
-        esac
-    done
-    cat "${file}.pub"
-    exit 0
-fi
-
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -f)
-            file="$2"
-            shift 2
-            ;;
-        *)
-            shift
-            ;;
-    esac
-done
-
-printf "PRIVATE KEY\n" > "${file}"
-printf "ssh-rsa sandbox-public\n" > "${file}.pub"
-MOCK
-
-        cat > "${TEST_CHEZMOI_STUB}" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-set -euo pipefail
-
-if [[ "${1:-}" == "--source" ]]; then
-    source_dir="$2"
-    shift 2
-    case "${1:-}" in
-        status)
-            exit 0
-            ;;
-        apply)
-            shift
-            printf "chezmoi apply --source %s %s\n" "${source_dir}" "$*" >> "${TEST_LOG}"
-            exit 0
-            ;;
-        dump-config)
-            exit 0
-            ;;
-    esac
-fi
-
-case "${1:-}" in
-    source-path)
-        printf "%s\n" "'"${PROJECT_ROOT}"'/dotfiles"
-        ;;
-    *)
-        printf "chezmoi %s\n" "$*" >> "${TEST_LOG}"
-        ;;
-esac
-MOCK
-
-        cat > "${TEST_BIN}/brew" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-set -euo pipefail
-
-if [[ "${1:-}" == "install" && "${2:-}" == "chezmoi" ]]; then
-    cp "${TEST_CHEZMOI_STUB}" "${TEST_BIN}/chezmoi"
-    chmod +x "${TEST_BIN}/chezmoi"
-    exit 0
-fi
-
-exit 0
-MOCK
-
-        chmod +x "${TEST_BIN}/hostname" "${TEST_BIN}/find" "${TEST_BIN}/zsh" "${TEST_BIN}/grep" "${TEST_BIN}/ssh-keygen" "${TEST_BIN}/brew" "${TEST_CHEZMOI_STUB}"
-
-        cd "'"${PROJECT_ROOT}"'"
-        ./install.sh --skip-system --skip-brew --force
-    '
-    assert_success
-    refute_output --partial "WARN chezmoi sourceDir is not set to"
 }
 
 @test "install.sh --dry-run reports changes without touching the system" {
@@ -855,53 +674,28 @@ MOCK
 printf "chsh %s\n" "$*" >> "${TEST_LOG}"
 MOCK
 
-        cat > "${TEST_BIN}/chezmoi" <<'"'"'MOCK'"'"'
+        cat > "${TEST_BIN}/stow" <<'"'"'MOCK'"'"'
 #!/usr/bin/env bash
-set -euo pipefail
-
-if [[ "${1:-}" == "--source" ]]; then
-    source_dir="$2"
-    shift 2
-    case "${1:-}" in
-        status)
-            exit 0
-            ;;
-        apply)
-            shift
-            printf "chezmoi apply --source %s %s\n" "${source_dir}" "$*" >> "${TEST_LOG}"
-            exit 0
-            ;;
-        dump-config)
-            exit 0
-            ;;
-    esac
-fi
-
-case "${1:-}" in
-    source-path)
-        printf "%s\n" "${HOME}/.dotfiles/dotfiles"
-        ;;
-    *)
-        printf "chezmoi %s\n" "$*" >> "${TEST_LOG}"
-        ;;
-esac
+printf "stow %s\n" "$*" >> "${TEST_LOG}"
 MOCK
 
-        chmod +x "${TEST_BIN}/hostname" "${TEST_BIN}/find" "${TEST_BIN}/zsh" "${TEST_BIN}/grep" "${TEST_BIN}/ssh-keygen" "${TEST_BIN}/brew" "${TEST_BIN}/chsh" "${TEST_BIN}/chezmoi"
+        chmod +x "${TEST_BIN}/hostname" "${TEST_BIN}/find" "${TEST_BIN}/zsh" "${TEST_BIN}/grep" "${TEST_BIN}/ssh-keygen" "${TEST_BIN}/brew" "${TEST_BIN}/chsh" "${TEST_BIN}/stow"
 
         cd "'"${PROJECT_ROOT}"'"
         ./install.sh --dry-run
 
         [[ ! -e "${HOME}/.dotfiles" ]] || { echo "FAIL: created the dotfiles symlink"; exit 1; }
         [[ ! -e "${HOME}/.ssh" ]] || { echo "FAIL: created the .ssh directory"; exit 1; }
-        grep -qx "chezmoi apply --source '"${PROJECT_ROOT}"' --dry-run" "${TEST_LOG}" || {
-            echo "FAIL: chezmoi apply did not receive --dry-run"
+        grep -q "^stow .*--simulate" "${TEST_LOG}" || {
+            echo "FAIL: stow did not run in simulate mode"
             cat "${TEST_LOG}"
             exit 1
         }
         ! grep -q "^ssh-keygen " "${TEST_LOG}" || { echo "FAIL: ran ssh-keygen"; exit 1; }
         ! grep -q "^brew " "${TEST_LOG}" || { echo "FAIL: ran brew"; exit 1; }
         ! grep -q "^chsh " "${TEST_LOG}" || { echo "FAIL: ran chsh"; exit 1; }
+        # find is mocked above; use the real one to prove HOME is untouched.
+        [[ -z "$(/usr/bin/find "${HOME}" -mindepth 1 -print)" ]] || { echo "FAIL: wrote into HOME"; /usr/bin/find "${HOME}"; exit 1; }
     '
     assert_success
     assert_output --partial "Would link "
@@ -930,60 +724,4 @@ MOCK
         assert_output --partial "command failed"
         refute_output --partial "ok:"
     done
-}
-
-# Run the shipped explain_overwrite_prompts against a canned `chezmoi status`.
-# INSTALL_TTY_DEVICE picks whether a terminal is available to chezmoi.
-run_explain() {
-    local tty_device="$1" status_output="$2"
-    shift 2
-
-    run env INSTALL_TTY_DEVICE="${tty_device}" bash -c "
-        set -euo pipefail
-        _box() { printf 'BOX:%s\n' \"\$1\"; }
-        log_warn() { printf 'WARN:%s\n' \"\$*\"; }
-        chezmoi_args=(\"\${@:2}\")
-        $(sed -n '/^explain_overwrite_prompts() {/,/^}/p' "${PROJECT_ROOT}/install.sh")
-        explain_overwrite_prompts \"\$1\"
-    " bash "${status_output}" "$@"
-}
-
-@test "explain_overwrite_prompts names locally edited files before chezmoi asks" {
-    local status_output=$' R backup-agent-symlinks.sh\nMM .ssh/config\n M .zshrc\nMM Library/Application Support/Code/User/settings.json'
-
-    run_explain /dev/null "${status_output}"
-    assert_success
-    assert_output --partial "BOX:These files were edited on this machine"
-    assert_output --partial "  ~/.ssh/config"
-    assert_output --partial "  ~/Library/Application Support/Code/User/settings.json"
-    assert_output --partial "overwrite      replace it with the repo version"
-    refute_output --partial ".zshrc"
-    refute_output --partial "backup-agent-symlinks.sh"
-}
-
-@test "explain_overwrite_prompts stays quiet when nothing was edited locally" {
-    run_explain /dev/null $' M .zshrc\n A .config/new'
-    assert_success
-    assert_output ""
-}
-
-@test "explain_overwrite_prompts stays quiet when --force skips the questions" {
-    run_explain /dev/null "MM .ssh/config" --force
-    assert_success
-    assert_output ""
-}
-
-@test "explain_overwrite_prompts still explains during a dry run" {
-    run_explain /dev/null "MM .ssh/config" --dry-run
-    assert_success
-    assert_output --partial "BOX:These files were edited"
-}
-
-@test "explain_overwrite_prompts gives a tip when no terminal can answer" {
-    run_explain "${TEST_TMPDIR}/missing-tty" "MM .ssh/config"
-    assert_success
-    assert_output --partial "WARN:These files were edited on this machine, and chezmoi cannot ask"
-    assert_output --partial "~/.ssh/config"
-    assert_output --partial "pass -- --force"
-    refute_output --partial "BOX:"
 }
