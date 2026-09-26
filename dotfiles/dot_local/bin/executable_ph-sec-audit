@@ -7,8 +7,8 @@ umask 077
 usage() {
     cat <<'EOF'
 Usage:
-  ph-security-remediation [--help]
-  sudo /absolute/path/to/ph-security-remediation --apply --user USER --host HOSTNAME [--upgrade-packages]
+  ph-sec-audit [--help]
+  sudo /absolute/path/to/ph-sec-audit --apply --user USER --host HOSTNAME [--upgrade-packages]
 
 Without --apply, print the plan and exit without changing the system.
 For Debian hosts running a native Pi-hole v6 installation with standard web ports.

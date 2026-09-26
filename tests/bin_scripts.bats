@@ -23,34 +23,34 @@ teardown() {
     teardown_tmpdir
 }
 
-@test "ph-security-remediation defaults to a plan without applying changes" {
-    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-security-remediation"
+@test "ph-sec-audit defaults to a plan without applying changes" {
+    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-sec-audit"
     assert_success
     assert_output --partial "Without --apply"
     refute_output --partial "Backups:"
 
-    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-security-remediation" --upgrade-packages
+    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-sec-audit" --upgrade-packages
     assert_success
     assert_output --partial "Without --apply"
     refute_output --partial "Backups:"
 }
 
-@test "ph-security-remediation requires a target and rejects malformed arguments" {
-    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-security-remediation" --apply
+@test "ph-sec-audit requires a target and rejects malformed arguments" {
+    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-sec-audit" --apply
     assert_failure
     assert_output --partial "requires an explicit valid --user and --host"
 
-    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-security-remediation" --apply --user --host
+    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-sec-audit" --apply --user --host
     assert_failure
     assert_output --partial "Missing value"
 
-    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-security-remediation" --unknown
+    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-sec-audit" --unknown
     assert_failure
     assert_output --partial "Unknown argument"
 }
 
-@test "ph-security-remediation refuses a different host before making changes" {
-    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-security-remediation" \
+@test "ph-sec-audit refuses a different host before making changes" {
+    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-sec-audit" \
         --apply --user operator --host "$(hostname)-wrong-target"
     assert_failure
     assert_output --partial "Host mismatch; no changes made"
@@ -84,12 +84,12 @@ PROBE
         /^restore_web_ports\(\) \{/ { copy=1 }
         copy { print }
         /^trap - ERR HUP INT TERM$/ { exit }
-    ' "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-security-remediation" >> "${probe_script}"
+    ' "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-sec-audit" >> "${probe_script}"
 
     run env PROBE_FAILURE="${1}" bash "${probe_script}"
 }
 
-@test "ph-security-remediation restores web ports when verification fails" {
+@test "ph-sec-audit restores web ports when verification fails" {
     run_remediation_web_probe verification
     assert_failure
     assert_output --partial "restoring original port configuration"
@@ -98,7 +98,7 @@ PROBE
     assert_output "original-ports"
 }
 
-@test "ph-security-remediation restores web ports and preserves restart failure status" {
+@test "ph-sec-audit restores web ports and preserves restart failure status" {
     run_remediation_web_probe restart
     assert_equal "${status}" 7
     assert_output --partial "restoring original port configuration"
@@ -107,7 +107,7 @@ PROBE
     assert_output "original-ports"
 }
 
-@test "ph-security-remediation restores web ports when interrupted" {
+@test "ph-sec-audit restores web ports when interrupted" {
     run_remediation_web_probe interrupt
     assert_equal "${status}" 143
     assert_output --partial "restoring original port configuration"
