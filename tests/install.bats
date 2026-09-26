@@ -122,6 +122,46 @@ run_parser() {
 }
 
 # ---------------------------------------------------------------------------
+# _box
+# ---------------------------------------------------------------------------
+
+# Run the shipped _box with a stub gum that records its arguments, so the
+# tests check what width (if any) the box is asked to wrap at.
+run_box() {
+    local columns="$1" content="$2"
+    local stub_bin="${TEST_TMPDIR}/bin"
+    mkdir -p "${stub_bin}"
+    cat > "${stub_bin}/gum" <<'EOF'
+#!/usr/bin/env bash
+printf 'gum-args:'
+printf ' %s' "$@"
+printf '\n'
+cat >/dev/null
+EOF
+    chmod +x "${stub_bin}/gum"
+
+    run env PATH="${stub_bin}:${PATH}" COLUMNS="${columns}" bash -c "
+        set -euo pipefail
+        HAS_GUM=true
+        $(sed -n '/^_box() {/,/^}/p' "${PROJECT_ROOT}/install.sh")
+        _box \"\$1\"
+    " bash "${content}"
+}
+
+@test "_box wraps lines wider than the terminal" {
+    run_box 60 "INFO Found ${HOME}/.ssh/id_ed25519.pub with no private key on disk; assuming an external agent (e.g. 1Password) manages it, leaving it untouched"
+    assert_success
+    assert_output --partial "--width 58"
+}
+
+@test "_box keeps a snug box for short content" {
+    run_box 60 "Done."
+    assert_success
+    assert_output --partial "gum-args:"
+    refute_output --partial "--width"
+}
+
+# ---------------------------------------------------------------------------
 # ssh_key_comment
 # ---------------------------------------------------------------------------
 
