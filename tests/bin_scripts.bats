@@ -8,10 +8,112 @@ setup() {
     export BIN_SANDBOX="${TEST_TMPDIR}/bin"
     mkdir -p "${BIN_SANDBOX}"
     ln -sf "$(brew --prefix)/bin/bash" "${BIN_SANDBOX}/bash"
+    cat > "${BIN_SANDBOX}/brew" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+    --cache) printf '%s\n' "${TEST_TMPDIR}/brew-cache" ;;
+    *) printf 'brew %s\n' "$*" ;;
+esac
+MOCK
+    chmod +x "${BIN_SANDBOX}/brew"
 }
 
 teardown() {
     teardown_tmpdir
+}
+
+@test "ph-security-remediation defaults to a plan without applying changes" {
+    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-security-remediation"
+    assert_success
+    assert_output --partial "Without --apply"
+    refute_output --partial "Backups:"
+
+    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-security-remediation" --upgrade-packages
+    assert_success
+    assert_output --partial "Without --apply"
+    refute_output --partial "Backups:"
+}
+
+@test "ph-security-remediation requires a target and rejects malformed arguments" {
+    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-security-remediation" --apply
+    assert_failure
+    assert_output --partial "requires an explicit valid --user and --host"
+
+    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-security-remediation" --apply --user --host
+    assert_failure
+    assert_output --partial "Missing value"
+
+    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-security-remediation" --unknown
+    assert_failure
+    assert_output --partial "Unknown argument"
+}
+
+@test "ph-security-remediation refuses a different host before making changes" {
+    run bash "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-security-remediation" \
+        --apply --user operator --host "$(hostname)-wrong-target"
+    assert_failure
+    assert_output --partial "Host mismatch; no changes made"
+    refute_output --partial "Backups:"
+}
+
+run_remediation_web_probe() {
+    local probe_script="${TEST_TMPDIR}/web-probe.sh"
+
+    cat > "${probe_script}" <<'PROBE'
+#!/usr/bin/env bash
+set -euo pipefail
+old_ports='original-ports'
+backup_dir="${TEST_TMPDIR}"
+pihole-FTL() {
+    printf '%s\n' "${3}" >> "${TEST_TMPDIR}/port-changes"
+}
+systemctl() {
+    if [[ ! -f "${TEST_TMPDIR}/restart-attempted" ]]; then
+        touch "${TEST_TMPDIR}/restart-attempted"
+        case "${PROBE_FAILURE}" in
+            restart) return 7 ;;
+            interrupt) kill -TERM "${BASHPID}" ;;
+        esac
+    fi
+}
+curl() { return 1; }
+sleep() { :; }
+PROBE
+    awk '
+        /^restore_web_ports\(\) \{/ { copy=1 }
+        copy { print }
+        /^trap - ERR HUP INT TERM$/ { exit }
+    ' "${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_ph-security-remediation" >> "${probe_script}"
+
+    run env PROBE_FAILURE="${1}" bash "${probe_script}"
+}
+
+@test "ph-security-remediation restores web ports when verification fails" {
+    run_remediation_web_probe verification
+    assert_failure
+    assert_output --partial "restoring original port configuration"
+    run tail -n 1 "${TEST_TMPDIR}/port-changes"
+    assert_success
+    assert_output "original-ports"
+}
+
+@test "ph-security-remediation restores web ports and preserves restart failure status" {
+    run_remediation_web_probe restart
+    assert_equal "${status}" 7
+    assert_output --partial "restoring original port configuration"
+    run tail -n 1 "${TEST_TMPDIR}/port-changes"
+    assert_success
+    assert_output "original-ports"
+}
+
+@test "ph-security-remediation restores web ports when interrupted" {
+    run_remediation_web_probe interrupt
+    assert_equal "${status}" 143
+    assert_output --partial "restoring original port configuration"
+    run tail -n 1 "${TEST_TMPDIR}/port-changes"
+    assert_success
+    assert_output "original-ports"
 }
 
 run_padd_api_probe() {
