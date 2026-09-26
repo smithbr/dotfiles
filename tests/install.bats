@@ -531,6 +531,9 @@ MOCK
     assert_output --partial "Checking pending chezmoi changes"
     assert_output --partial "chezmoi reports 1 pending change(s) before apply"
     assert_output --partial "chezmoi apply complete"
+    assert_output --partial "Existing files"
+    assert_output --partial "File review for"
+    refute_output --partial "Archive which paths?"
     assert_output --partial "Done."
 }
 

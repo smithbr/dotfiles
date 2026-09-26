@@ -10,19 +10,28 @@ source "${BASEDIR}/scripts/common.sh"
 CHEZMOI_SOURCE="${HOME}/.dotfiles"
 SHOW_ALL=0
 MANAGED_PATHS_CACHE=""
+REVIEW_INCOMPLETE=0
+DEST_DIR="${HOME}"
+CLEANUP=0
+declare -a candidates=()
 declare -a extra_roots=()
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [--source PATH] [audit-root...]
+Usage: $(basename "$0") [--source PATH] [--destination PATH] [--all] [--cleanup] [audit-root...]
 
-Highlight unmanaged files near chezmoi-managed paths after a symlink migration.
+Review existing files on this machine. Nothing changes unless --cleanup is used.
+--cleanup offers one selection of paths to archive; it never permanently deletes.
+Press Enter or close stdin to leave everything in place.
+Unmanaged files are review candidates, not proof that a file is abandoned.
 
 By default this script:
 - translates managed drift into a short action list
 - highlights likely leftovers
+- lists saved migration backups and broken managed symlinks
 - hides obvious local/runtime state unless --all is passed
-- skips broad roots like ${HOME}, ${HOME}/.config, and ${HOME}/.local
+- checks unmanaged dotfiles directly in ${HOME} without walking the whole home
+- skips recursive scans of broad roots like ${HOME}/.config and ${HOME}/.local
 
 Pass one or more audit roots to widen the scan. For example:
   $(basename "$0") "${HOME}"
@@ -57,7 +66,7 @@ is_excluded_root() {
     local path="$1"
 
     case "${path}" in
-        "${HOME}" | "${HOME}/.config" | "${HOME}/.local" | "${HOME}/Library" | "${HOME}/Library/Application Support")
+        "${DEST_DIR}" | "${DEST_DIR}/.config" | "${DEST_DIR}/.local" | "${DEST_DIR}/Library" | "${DEST_DIR}/Library/Application Support")
             return 0
             ;;
         *)
@@ -69,6 +78,10 @@ is_excluded_root() {
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --cleanup)
+                CLEANUP=1
+                shift
+                ;;
             --all)
                 SHOW_ALL=1
                 shift
@@ -79,6 +92,14 @@ parse_args() {
                     exit 1
                 fi
                 CHEZMOI_SOURCE="$2"
+                shift 2
+                ;;
+            --destination)
+                if [[ $# -lt 2 ]]; then
+                    log_error "--destination requires a path"
+                    exit 1
+                fi
+                DEST_DIR="$2"
                 shift 2
                 ;;
             -h|--help)
@@ -105,7 +126,7 @@ parse_args() {
 }
 
 collect_managed_paths() {
-    chezmoi --source "${CHEZMOI_SOURCE}" managed --include=files,dirs,symlinks --path-style=absolute
+    chezmoi --source "${CHEZMOI_SOURCE}" --destination "${DEST_DIR}" managed --include=files,dirs,symlinks --path-style=absolute
 }
 
 prime_managed_paths_cache() {
@@ -113,7 +134,10 @@ prime_managed_paths_cache() {
         return
     fi
 
-    MANAGED_PATHS_CACHE="$(collect_managed_paths)"
+    if ! MANAGED_PATHS_CACHE="$(collect_managed_paths)"; then
+        log_error "Could not list managed paths; file review is incomplete"
+        return 1
+    fi
 }
 
 is_expected_local_override() {
@@ -137,11 +161,11 @@ collect_audit_roots() {
     while IFS= read -r managed_path; do
         [[ -n "${managed_path}" ]] || continue
         parent_dir="$(dirname "${managed_path}")"
-        if is_excluded_root "${parent_dir}"; then
+        if is_excluded_root "${parent_dir}" || is_protected "${parent_dir}"; then
             continue
         fi
         printf '%s\n' "${parent_dir}"
-    done < <(collect_managed_paths)
+    done <<< "${MANAGED_PATHS_CACHE}"
 
     if [[ "${#extra_roots[@]}" -gt 0 ]]; then
         printf '%s\n' "${extra_roots[@]}"
@@ -169,7 +193,11 @@ print_status_section() {
     local path=""
     local printed_header=0
 
-    status_output="$(chezmoi --source "${CHEZMOI_SOURCE}" status --path-style=absolute || true)"
+    if ! status_output="$(chezmoi --source "${CHEZMOI_SOURCE}" --destination "${DEST_DIR}" status --exclude=scripts --path-style=absolute)"; then
+        log_warn "Could not check managed drift; file review is incomplete"
+        REVIEW_INCOMPLETE=1
+        return
+    fi
 
     while IFS= read -r line; do
         [[ -n "${line}" ]] || continue
@@ -215,13 +243,13 @@ is_hidden_local_state() {
     local path="$1"
 
     case "${path}" in
-        "${HOME}/.claude/"* | "${HOME}/.codex/"* | "${HOME}/.ssh/"* )
+        "${DEST_DIR}/.claude/"* | "${DEST_DIR}/.codex/"* | "${DEST_DIR}/.ssh/"* )
             return 0
             ;;
-        "${HOME}/Library/Application Support/Code/"* | "${HOME}/Library/Application Support/Cursor/"* )
+        "${DEST_DIR}/Library/Application Support/Code/"* | "${DEST_DIR}/Library/Application Support/Cursor/"* )
             return 0
             ;;
-        "${HOME}/.config/1Password/ssh/agent.toml" | "${HOME}/.config/gh/config.yml" | "${HOME}/.config/git/config.local" | "${HOME}/.config/zsh/.zsh_history" | "${HOME}/.config/zsh/plugins.zsh" | "${HOME}/.local/bin/python"* )
+        "${DEST_DIR}/.config/1Password/ssh/agent.toml" | "${DEST_DIR}/.config/gh/config.yml" | "${DEST_DIR}/.config/git/config.local" | "${DEST_DIR}/.config/zsh/.zsh_history" | "${DEST_DIR}/.config/zsh/plugins.zsh" | "${DEST_DIR}/.local/bin/python"* )
             return 0
             ;;
         *"/.DS_Store" | *"/.ignore.swp" | *"/Cookies" | *"/Cookies-journal" | *"/DIPS" | *"/DIPS-wal" | *"/Network Persistent State" | *"/SharedStorage" | *"/SharedStorage-wal" | *"/TransportSecurity" | *"/Trust Tokens" | *"/Trust Tokens-journal" | *"/code.lock" | *"/languagepacks.json" | *"/machineid" | *"/known_hosts" | *"/known_hosts.old" | *"/history.jsonl" | *"/mcp-needs-auth-cache.json" | *"/models_cache.json" | *"/policy-limits.json" | *"/readout-cost-cache.json" | *"/readout-pricing.json" | *"/session_index.jsonl" | *"/stats-cache.json" | *"/auth.json" | *"/.codex-global-state.json" | *"/.personality_migration" | *"/logs_"*.sqlite | *"/logs_"*.sqlite-shm | *"/logs_"*.sqlite-wal | *"/state_"*.sqlite | *"/state_"*.sqlite-shm | *"/state_"*.sqlite-wal )
@@ -237,14 +265,14 @@ leftover_action() {
     local path="$1"
 
     case "${path}" in
-        "${HOME}/.local/bin/"*)
-            printf 'add a matching executable to dotfiles if you want it managed, otherwise remove the stray binary\n'
+        "${DEST_DIR}/.local/bin/"*)
+            printf 'check its owner and usage; keep local tools, or archive it if confirmed obsolete\n'
             ;;
-        "${HOME}/.config/agents/"* | "${HOME}/.config/git/"* | "${HOME}/.config/zsh/"*)
-            printf 'either add it to dotfiles if it belongs in the repo, or delete it if it was left behind by the migration\n'
+        "${DEST_DIR}/.config/agents/"*)
+            printf 'review in the private agents repo; do not copy private agent configuration into public dotfiles\n'
             ;;
         *)
-            printf 'review it and decide whether to add it to dotfiles, keep it local, or delete it\n'
+            printf 'review its owner and usage; keep it local, manage it in the appropriate repo, or archive it if obsolete\n'
             ;;
     esac
 }
@@ -268,7 +296,11 @@ print_candidate_section() {
             continue
         fi
 
-        unmanaged_output="$(chezmoi --source "${CHEZMOI_SOURCE}" unmanaged --include=files,symlinks --path-style=absolute -- "${root}" 2>/dev/null || true)"
+        if ! unmanaged_output="$(chezmoi --source "${CHEZMOI_SOURCE}" --destination "${DEST_DIR}" unmanaged --include=files,symlinks --path-style=absolute -- "${root}")"; then
+            log_warn "Could not inspect ${root}; file review is incomplete"
+            REVIEW_INCOMPLETE=1
+            continue
+        fi
         unmanaged_output="$(printf '%s\n' "${unmanaged_output}" | grep -Ev '/\.config/chezmoi/chezmoistate\.boltdb$' || true)"
 
         if [[ -z "${unmanaged_output}" ]]; then
@@ -282,7 +314,7 @@ print_candidate_section() {
 
         while IFS= read -r path; do
             [[ -n "${path}" ]] || continue
-            if is_expected_local_override "${path}"; then
+            if is_expected_local_override "${path}" || is_protected "${path}"; then
                 continue
             fi
             if is_hidden_local_state "${path}"; then
@@ -293,6 +325,7 @@ print_candidate_section() {
                 fi
                 continue
             fi
+            add_candidate "${path}"
             visible_for_root="${visible_for_root}  $(display_path "${path}")"$'\n'
             visible_for_root="${visible_for_root}    action: $(leftover_action "${path}")"$'\n'
         done <<< "${unmanaged_output}"
@@ -319,7 +352,7 @@ print_candidate_section() {
         fi
     done < <(print_unique_roots)
 
-    if [[ "${printed_candidates}" -eq 0 ]]; then
+    if [[ "${printed_candidates}" -eq 0 && "${REVIEW_INCOMPLETE}" -eq 0 ]]; then
         printf '\nPotential leftovers: none\n'
     fi
 
@@ -333,6 +366,169 @@ print_candidate_section() {
     fi
 }
 
+is_protected() {
+    local path="$1"
+
+    [[ "${CHEZMOI_SOURCE}" == "${path}/"* || "${BASEDIR}" == "${path}/"* ]] && return 0
+    case "${path}" in
+        "${DEST_DIR}" | "${DEST_DIR}/.config" | "${DEST_DIR}/.local" | "${DEST_DIR}/.git" | "${DEST_DIR}/.git/"* | "${DEST_DIR}/.dotfiles" | "${DEST_DIR}/.dotfiles/"* | "${DEST_DIR}/.cache" | "${DEST_DIR}/.cache/"* | "${DEST_DIR}/.Trash" | "${DEST_DIR}/.Trash/"*) return 0 ;;
+        "${DEST_DIR}/.ssh" | "${DEST_DIR}/.ssh/"* | "${DEST_DIR}/.gnupg" | "${DEST_DIR}/.gnupg/"* | "${DEST_DIR}/.aws" | "${DEST_DIR}/.aws/"* | "${DEST_DIR}/.1password" | "${DEST_DIR}/.1password/"*) return 0 ;;
+        "${DEST_DIR}/.netrc" | "${DEST_DIR}/.npmrc" | "${DEST_DIR}/.pypirc" | "${DEST_DIR}/.kube" | "${DEST_DIR}/.kube/"* | "${DEST_DIR}/.docker" | "${DEST_DIR}/.docker/"*) return 0 ;;
+        "${DEST_DIR}/.agents" | "${DEST_DIR}/.agents/"* | "${DEST_DIR}/.claude" | "${DEST_DIR}/.claude/"* | "${DEST_DIR}/.codex" | "${DEST_DIR}/.codex/"* | "${DEST_DIR}/.cursor" | "${DEST_DIR}/.cursor/"* | "${DEST_DIR}/.claude.json" | "${DEST_DIR}/.config/agents" | "${DEST_DIR}/.config/agents/"*) return 0 ;;
+        "${DEST_DIR}/.local/state/dotfiles" | "${DEST_DIR}/.local/state/dotfiles/"* | "${DEST_DIR}/.config/agents-backup."*) return 0 ;;
+        "${CHEZMOI_SOURCE}" | "${CHEZMOI_SOURCE}/"* | "${BASEDIR}" | "${BASEDIR}/"*) return 0 ;;
+    esac
+    return 1
+}
+
+contains_managed_path() {
+    local path="$1"
+    local managed=""
+
+    while IFS= read -r managed; do
+        [[ -n "${managed}" ]] || continue
+        if [[ "${managed}" == "${path}" || "${managed}" == "${path}/"* || ( "${path}" == "${managed}/"* && -L "${managed}" ) ]]; then
+            return 0
+        fi
+    done <<< "${MANAGED_PATHS_CACHE}"
+    return 1
+}
+
+add_candidate() {
+    local path="$1"
+    local existing=""
+    local parent="${path%/*}"
+
+    [[ -e "${path}" || -L "${path}" ]] || return 0
+    [[ "${path}" == "${DEST_DIR}/"* && "${path}" != *$'\n'* && "${path}" != *$'\t'* ]] || return 0
+    is_protected "${path}" && return 0
+    contains_managed_path "${path}" && return 0
+    # Never move a file through a symlinked parent into someone else's tree.
+    while [[ "${parent}" != "${DEST_DIR}" && "${parent}" != / ]]; do
+        [[ -L "${parent}" ]] && return 0
+        parent="${parent%/*}"
+    done
+    if [[ "${#candidates[@]}" -gt 0 ]]; then
+        for existing in "${candidates[@]}"; do
+            [[ "${path}" == "${existing}" || "${path}" == "${existing}/"* ]] && return 0
+        done
+    fi
+    candidates+=("${path}")
+}
+
+print_home_candidates() {
+    local path=""
+    local found=0
+
+    printf '\nUnmanaged home dotfiles (review before archiving):\n'
+    for path in "${DEST_DIR}"/.[!.]* "${DEST_DIR}"/..?*; do
+        [[ -e "${path}" || -L "${path}" ]] || continue
+        is_protected "${path}" && continue
+        contains_managed_path "${path}" && continue
+        is_hidden_local_state "${path}" && continue
+        printf '  %s\n' "$(display_path "${path}")"
+        add_candidate "${path}"
+        found=1
+    done
+    [[ "${found}" -ne 0 ]] || printf '  none\n'
+}
+
+archive_selection() {
+    local answer="" token="" index=0 path="" archive="" relative=""
+    local -a selected=()
+
+    if [[ "${REVIEW_INCOMPLETE}" -ne 0 ]]; then
+        log_warn "Cleanup unavailable because the review is incomplete"
+        return
+    fi
+    [[ "${#candidates[@]}" -gt 0 ]] || return 0
+    printf '\nArchive candidates — unmanaged does not necessarily mean unused:\n'
+    for path in "${candidates[@]}"; do
+        index=$((index + 1))
+        printf '  %d) %s\n' "${index}" "$(display_path "${path}")"
+    done
+    printf 'Archive which paths? Enter numbers separated by spaces, all, or Enter to skip: '
+    if ! IFS= read -r answer || [[ -z "${answer//[[:space:]]/}" ]]; then
+        printf '\nCleanup skipped; no files moved.\n'
+        return
+    fi
+    if [[ "${answer}" == all ]]; then
+        selected=("${candidates[@]}")
+    else
+        local -a choices=()
+        read -r -a choices <<< "${answer}"
+        for token in "${choices[@]}"; do
+            if [[ ! "${token}" =~ ^[1-9][0-9]*$ || "${#token}" -gt 6 ]] || (( token > ${#candidates[@]} )); then
+                log_warn "Invalid selection; no files moved"
+                return
+            fi
+            selected+=("${candidates[token-1]}")
+        done
+    fi
+    MANAGED_PATHS_CACHE=""
+    prime_managed_paths_cache || return 1
+    for path in "${selected[@]}"; do
+        if contains_managed_path "${path}"; then
+            log_error "Managed paths changed during review; no files moved"
+            return 1
+        fi
+    done
+    for path in "${DEST_DIR}/.local" "${DEST_DIR}/.local/state" "${DEST_DIR}/.local/state/dotfiles" "${DEST_DIR}/.local/state/dotfiles/cleanup"; do
+        if [[ -L "${path}" ]]; then
+            log_error "Archive parent is a symlink: ${path}; no files moved"
+            return 1
+        fi
+    done
+    umask 077
+    mkdir -p "${DEST_DIR}/.local/state/dotfiles/cleanup"
+    archive="$(mktemp -d "${DEST_DIR}/.local/state/dotfiles/cleanup/$(date +%Y%m%d-%H%M%S).XXXXXX")"
+    printf '\nArchive: %s\n' "${archive}"
+    for path in "${selected[@]}"; do
+        [[ -e "${path}" || -L "${path}" ]] || continue
+        relative="${path#"${DEST_DIR}"/}"
+        mkdir -p "${archive}/$(dirname "${relative}")"
+        mv "${path}" "${archive}/${relative}"
+        printf '  archived %s\n' "$(display_path "${path}")"
+    done
+    printf 'Original relative paths are preserved. To restore a file, move it from the archive back under %s; check for conflicts first.\n' "${DEST_DIR}"
+}
+
+print_installation_state() {
+    local path=""
+    local found=0
+
+    printf '\nBroken managed symlinks:\n'
+    while IFS= read -r path; do
+        if [[ -L "${path}" && ! -e "${path}" ]]; then
+            printf '  %s -> %s\n' "$(display_path "${path}")" "$(readlink "${path}")"
+            found=1
+        fi
+    done <<< "${MANAGED_PATHS_CACHE}"
+    if [[ "${found}" -eq 0 ]]; then
+        printf '  none\n'
+    else
+        printf '  action: restore the missing target or correct the source link, then apply\n'
+    fi
+
+    printf '\nSaved migration backups:\n'
+    found=0
+    for path in "${DEST_DIR}/.local/state/dotfiles/clobbered/"* "${DEST_DIR}/.local/state/dotfiles/cleanup/"* "${DEST_DIR}/.config/agents-backup."*; do
+        [[ -e "${path}" || -L "${path}" ]] || continue
+        printf '  %s\n' "$(display_path "${path}")"
+        found=1
+    done
+    if [[ "${found}" -eq 0 ]]; then
+        printf '  none\n'
+    else
+        printf '  action: compare with the current configuration and recover needed data before removing any backup\n'
+    fi
+
+    if [[ -d "${DEST_DIR}/.config/agents" && ! -e "${DEST_DIR}/.config/agents/.git" ]]; then
+        printf '\nAgents checkout needs attention: %s\n' "$(display_path "${DEST_DIR}/.config/agents")"
+        printf '  action: preserve this directory before replacing it with the configured private Git checkout\n'
+    fi
+}
+
 main() {
     parse_args "$@"
 
@@ -343,13 +539,25 @@ main() {
         exit 1
     fi
 
+    DEST_DIR="$(cd "${DEST_DIR}" && pwd -L)" || return 1
+    CHEZMOI_SOURCE="$(cd "${CHEZMOI_SOURCE}" && pwd -L)" || return 1
+    prime_managed_paths_cache || return 1
+    printf 'File review for %s\n' "${DEST_DIR}"
     print_status_section
+    print_home_candidates
+    print_installation_state
     print_candidate_section
 
-    printf '\nSkipped broad roots by default: %s, %s, %s\n' \
-        "$(display_path "${HOME}")" \
-        "$(display_path "${HOME}/.config")" \
-        "$(display_path "${HOME}/.local")"
+    printf '\nRecursive scans skipped by default: %s, %s, %s\n' \
+        "$(display_path "${DEST_DIR}")" \
+        "$(display_path "${DEST_DIR}/.config")" \
+        "$(display_path "${DEST_DIR}/.local")"
+    if [[ "${CLEANUP}" -eq 1 ]]; then
+        archive_selection
+    else
+        printf 'Bulk cleanup: run %s --cleanup to select paths to archive.\n' "${BASEDIR}/scripts/chezmoi-abandoned.sh"
+    fi
+    return "${REVIEW_INCOMPLETE}"
 }
 
 main "$@"

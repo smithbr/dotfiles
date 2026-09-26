@@ -50,3 +50,10 @@ Unrecognized arguments and everything after `--` are passed to `chezmoi apply`:
 
 - Keep `README.md` focused on installation and discovery. Document installer details and maintenance rules here, and test-suite details in `tests/README.md`; update the corresponding guidance when behavior changes.
 - Keep CI and local validation aligned through `tests/run_tests.sh`. If test discovery or lint coverage changes, verify that the intended files and tests actually run.
+
+## Existing files and cleanup
+
+- Installation ends with a file review. It lists unmanaged dotfiles directly under the destination home, unmanaged neighbors of managed files, broken managed links, and saved migration backups. Unmanaged does not mean unused; credentials, private agent directories, managed paths, and expected local overrides are excluded from cleanup.
+- Interactive installs offer one numbered selection (or `all`) to archive reviewed candidates. Enter skips cleanup. Closed stdin, non-interactive installs, and dry runs only report; they never archive. Failed inventory queries disable cleanup and report an incomplete review.
+- Run `./scripts/chezmoi-abandoned.sh --cleanup` to repeat the review and selection without reinstalling. Use `--source PATH` for another source tree and `--destination PATH` for another destination. Extra positional roots expand the recursive scan; `--all` shows normally hidden runtime state but does not select it for cleanup.
+- Cleanup moves selected paths into `~/.local/state/dotfiles/cleanup/<timestamp>.<suffix>/` with private permissions and original relative paths. It never permanently deletes them or follows symlinked parents. Restore needed files to their original paths after checking for conflicts. Existing migration backups are reported separately and are not cleanup candidates.

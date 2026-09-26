@@ -96,6 +96,12 @@ This is process-level isolation, not a real container or VM.
 - Verifies `gum` and non-`gum` behavior
 - Tests `require_non_root`, `sudo_cmd`, and `spin`
 
+[`chezmoi_abandoned.bats`](/Users/bran/.dotfiles/tests/chezmoi_abandoned.bats)
+
+- Exercises file inventory, broken managed links, and migration backup reporting
+- Verifies bulk archival preserves contents and symlinks, excludes protected paths, and is safe to repeat
+- Checks closed stdin, invalid selections, failed inventory queries, alternate destinations, and installer report integration
+
 [`install.bats`](/Users/bran/.dotfiles/tests/install.bats)
 
 - Tests `install.sh` argument parsing
