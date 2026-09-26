@@ -421,7 +421,9 @@ fi
 
 _item "Running chezmoi status"
 _item "Running chezmoi apply"
-run_boxed apply_dotfiles
+# Not boxed: chezmoi prompts before overwriting files changed since it last
+# wrote them, and capturing its output would hide the prompt while it waits.
+apply_dotfiles
 
 chezmoi_source_path="$(chezmoi source-path 2>/dev/null || true)"
 chezmoi_source_resolved="$(resolve_dir_path "${chezmoi_source_path}" || true)"
