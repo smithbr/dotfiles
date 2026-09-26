@@ -114,6 +114,8 @@ bucket_of() {
     run_audit --all
     assert_success
     [ "$(cd "${SANDBOX_HOME}" && find . -print | sort)" = "${before}" ]
+    assert_output --partial "Nothing was changed"
+    refute_output --partial "safe to delete"
 }
 
 @test "home-audit reports skipped checks when xdg-ninja data and chezmoi are unavailable" {

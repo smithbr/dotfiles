@@ -222,7 +222,7 @@ printf '%sHome audit%s %s(%s, inactive = %s+ days)%s\n' "${bold}" "${reset}" "${
 [[ -n "${xdg_db}" ]] || printf '%snote: xdg-ninja data or jq not found; XDG checks skipped%s\n' "${dim}" "${reset}"
 [[ -n "${managed}" ]] || printf '%snote: chezmoi unavailable; managed files not recognised%s\n' "${dim}" "${reset}"
 
-print_bucket JUNK "safe to delete" ${junk[@]+"${junk[@]}"}
+print_bucket JUNK "safe to remove by hand" ${junk[@]+"${junk[@]}"}
 print_bucket LEFTOVER "likely safe to archive" ${leftover[@]+"${leftover[@]}"}
 print_bucket MOVE "tool supports XDG" ${move[@]+"${move[@]}"}
 print_bucket REVIEW "check by hand" ${review[@]+"${review[@]}"}
@@ -231,3 +231,4 @@ if [[ "${show_all}" -eq 1 ]]; then
 else
     printf '\n%s%d kept (managed, required, in use, or not movable); --all lists them%s\n' "${dim}" "${#keep[@]}" "${reset}"
 fi
+printf '\n%sNothing was changed. To archive entries, run ~/.dotfiles/scripts/chezmoi-abandoned.sh --cleanup%s\n' "${dim}" "${reset}"
