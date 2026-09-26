@@ -518,6 +518,7 @@ _config_tool_map() {
 dotfiles/dot_config/chezmoi/chezmoi.json.tmpl|difft|difftastic
 dotfiles/dot_config/git/config|fzf|fzf
 dotfiles/dot_config/git/config|git-lfs|git-lfs
+dotfiles/dot_config/git/config|ghq|ghq
 EOF
 }
 
