@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # Homebrew resolves its trust store from XDG_CONFIG_HOME, falling back to
-# ~/.homebrew when unset. The bootstrap runs before chezmoi deploys ~/.zshenv,
+# ~/.homebrew when unset. The bootstrap runs before link.sh deploys ~/.zshenv,
 # which is what normally exports it, so without this default `brew trust` grants
 # made during install land somewhere the finished shell never reads. Guarded on
 # HOME so callers that deliberately unset it still hit their own error path.

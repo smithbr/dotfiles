@@ -1,0 +1,237 @@
+#!/usr/bin/env bats
+
+load test_helper
+
+setup() {
+    setup_tmpdir
+
+    export HOME="${TEST_TMPDIR}/home"
+    mkdir -p "${HOME}/.config/git" "${HOME}/.config/agents" "${HOME}/.local/bin" "${HOME}/Documents"
+    printf 'local override\n' > "${HOME}/.config/git/config.local"
+    printf 'tool cache\n' > "${HOME}/.config/agents/tools"
+    printf 'extra binary\n' > "${HOME}/.local/bin/ph-extra"
+    printf 'noise\n' > "${HOME}/Documents/todo.txt"
+
+    # A minimal dotfiles repo, linked into HOME the way link.sh leaves it.
+    export TEST_SOURCE_DIR="${TEST_TMPDIR}/source"
+    local relative
+    for relative in .bashrc .config/git/config .config/git/config.local.example .local/bin/ph-padd; do
+        mkdir -p "$(dirname "${TEST_SOURCE_DIR}/stow/common/${relative}")"
+        printf 'managed\n' > "${TEST_SOURCE_DIR}/stow/common/${relative}"
+        ln -s "${TEST_SOURCE_DIR}/stow/common/${relative}" "${HOME}/${relative}"
+    done
+    mkdir -p "${HOME}/.config/agents/skills"
+    for relative in .agents/skills .claude/skills .cursor/skills; do
+        mkdir -p "$(dirname "${HOME}/${relative}")"
+        ln -s "${HOME}/.config/agents/skills" "${HOME}/${relative}"
+    done
+    for relative in .claude/CLAUDE.md .codex/AGENTS.md .cursor/AGENTS.md; do
+        mkdir -p "$(dirname "${HOME}/${relative}")"
+        ln -s "${HOME}/.config/agents/AGENTS.md" "${HOME}/${relative}"
+    done
+    ln -s "${HOME}/.config/agents/tools/claude/settings.json" "${HOME}/.claude/settings.json"
+    printf 'agents\n' > "${HOME}/.config/agents/AGENTS.md"
+    rm "${HOME}/.config/agents/tools"
+    mkdir -p "${HOME}/.config/agents/tools/claude"
+    printf '{}\n' > "${HOME}/.config/agents/tools/claude/settings.json"
+    printf 'tool cache\n' > "${HOME}/.config/agents/tools/cache"
+
+    export PATH="/usr/bin:/bin"
+}
+
+teardown() {
+    teardown_tmpdir
+}
+
+@test "file review lists unmanaged neighbors without walking home or private agents" {
+    run "${PROJECT_ROOT}/scripts/file-review.sh" --source "${TEST_SOURCE_DIR}"
+    assert_success
+    assert_output --partial "Managed drift: none"
+    assert_output --partial "Potential leftovers:"
+    # shellcheck disable=SC2088
+    assert_output --partial "$(printf '%s' '~/.config/agents')"
+    refute_output --partial "~/.config/agents/tools"
+    # shellcheck disable=SC2088
+    assert_output --partial "$(printf '%s' '~/.local/bin')"
+    # shellcheck disable=SC2088
+    assert_output --partial "$(printf '%s' '~/.local/bin/ph-extra')"
+    refute_output --partial "~/.config/git/config.local"$'\n'
+    refute_output --partial "todo.txt"
+}
+
+@test "file review explains a real file where a link belongs" {
+    rm "${HOME}/.local/bin/ph-padd"
+    printf 'edited copy\n' > "${HOME}/.local/bin/ph-padd"
+
+    run "${PROJECT_ROOT}/scripts/file-review.sh" --source "${TEST_SOURCE_DIR}"
+    assert_success
+    assert_output --partial "Managed drift:"
+    # shellcheck disable=SC2088
+    assert_output --partial "$(printf '%s' '~/.local/bin/ph-padd')"
+    assert_output --partial "action: diff the local file against the repo"
+}
+
+@test "file review finds home leftovers, broken links, and saved backups without changing them" {
+    mkdir -p "${HOME}/.old-tool" "${HOME}/.config/agents-backup.saved/agents"
+    printf 'keep this\n' > "${HOME}/.old-tool/config"
+    ln -s "${HOME}/missing-target" "${HOME}/.config/git/broken"
+    printf 'managed\n' > "${TEST_SOURCE_DIR}/stow/common/.config/git/broken"
+
+    run "${PROJECT_ROOT}/scripts/file-review.sh" --source "${TEST_SOURCE_DIR}"
+    assert_success
+    assert_output --partial "~/.old-tool"
+    assert_output --partial "~/.config/git/broken -> ${HOME}/missing-target"
+    assert_output --partial "~/.config/agents-backup.saved"
+    assert_output --partial "Agents checkout needs attention"
+    [[ -L "${HOME}/.config/git/broken" ]]
+    [[ "$(cat "${HOME}/.old-tool/config")" == 'keep this' ]]
+    [[ ! -e "${HOME}/.local/state/dotfiles/cleanup" ]]
+}
+
+@test "bulk cleanup archives selected directories and symlinks without following them" {
+    mkdir -p "${HOME}/.old-tool" "${TEST_TMPDIR}/outside"
+    printf 'keep this\n' > "${HOME}/.old-tool/config"
+    printf 'outside\n' > "${TEST_TMPDIR}/outside/file"
+    ln -s "${TEST_TMPDIR}/outside" "${HOME}/.old-link"
+
+    run bash -c 'printf "1 2\n" | "$1/scripts/file-review.sh" --source "$2" --cleanup' _ "${PROJECT_ROOT}" "${TEST_SOURCE_DIR}"
+    assert_success
+    local archives=("${HOME}/.local/state/dotfiles/cleanup/"*)
+    [[ "${#archives[@]}" -eq 1 ]]
+    [[ ! -e "${HOME}/.old-tool" && ! -L "${HOME}/.old-link" ]]
+    [[ "$(cat "${archives[0]}/.old-tool/config")" == 'keep this' ]]
+    [[ -L "${archives[0]}/.old-link" ]]
+    [[ "$(cat "${TEST_TMPDIR}/outside/file")" == outside ]]
+    [[ -f "${HOME}/.local/bin/ph-extra" ]]
+}
+
+@test "bulk cleanup skips closed stdin and validates the entire selection before moving" {
+    printf 'keep\n' > "${HOME}/.old-file"
+    run bash -c '"$1/scripts/file-review.sh" --source "$2" --cleanup </dev/null' _ "${PROJECT_ROOT}" "${TEST_SOURCE_DIR}"
+    assert_success
+    assert_output --partial "Cleanup skipped"
+    [[ -f "${HOME}/.old-file" ]]
+    [[ ! -e "${HOME}/.local/state/dotfiles/cleanup" ]]
+
+    run bash -c 'printf "1 invalid\n" | "$1/scripts/file-review.sh" --source "$2" --cleanup' _ "${PROJECT_ROOT}" "${TEST_SOURCE_DIR}"
+    assert_success
+    assert_output --partial "Invalid selection"
+    [[ -f "${HOME}/.old-file" ]]
+    [[ ! -e "${HOME}/.local/state/dotfiles/cleanup" ]]
+}
+
+@test "bulk cleanup never selects managed parents, credentials, private agents, or local overrides" {
+    mkdir -p "${HOME}/.ssh" "${HOME}/.owned" "${HOME}/.dotfiles"
+    printf 'private\n' > "${HOME}/.ssh/secret"
+    printf 'managed\n' > "${HOME}/.owned/file"
+    mkdir -p "${TEST_SOURCE_DIR}/stow/common/.owned"
+    printf 'managed\n' > "${TEST_SOURCE_DIR}/stow/common/.owned/file"
+    run bash -c 'printf "all\n" | "$1/scripts/file-review.sh" --source "$2" --cleanup' _ "${PROJECT_ROOT}" "${TEST_SOURCE_DIR}"
+    assert_success
+    [[ -f "${HOME}/.ssh/secret" ]]
+    [[ -f "${HOME}/.owned/file" ]]
+    [[ -f "${HOME}/.config/agents/tools" ]]
+    [[ -f "${HOME}/.config/git/config.local" ]]
+    [[ -d "${HOME}/.dotfiles" ]]
+    [[ ! -e "${HOME}/.local/bin/ph-extra" ]]
+}
+
+@test "failed inventory queries report an incomplete review and disable cleanup" {
+    printf 'keep\n' > "${HOME}/.old-file"
+    # A source without stow/ makes link.sh fail to list managed paths.
+    mkdir -p "${TEST_TMPDIR}/not-a-repo"
+    run bash -c 'printf "all\n" | "$1/scripts/file-review.sh" --source "$2" --cleanup' _ "${PROJECT_ROOT}" "${TEST_TMPDIR}/not-a-repo"
+    assert_failure
+    assert_output --partial "incomplete"
+    refute_output --partial "Potential leftovers: none"
+    [[ -f "${HOME}/.old-file" ]]
+    [[ ! -e "${HOME}/.local/state/dotfiles/cleanup" ]]
+}
+
+@test "cleanup respects a separate destination and does not change HOME" {
+    local destination="${TEST_TMPDIR}/destination"
+    mkdir -p "${destination}"
+    printf 'target\n' > "${destination}/.old-file"
+    printf 'home\n' > "${HOME}/.old-file"
+    run bash -c 'printf "all\n" | "$1/scripts/file-review.sh" --source "$2" --destination "$3" --cleanup' _ "${PROJECT_ROOT}" "${TEST_SOURCE_DIR}" "${destination}"
+    assert_success
+    [[ ! -e "${destination}/.old-file" ]]
+    [[ "$(cat "${HOME}/.old-file")" == home ]]
+    local archives=("${destination}/.local/state/dotfiles/cleanup/"*)
+    [[ "$(cat "${archives[0]}/.old-file")" == target ]]
+}
+
+@test "second cleanup does not offer the existing archive again" {
+    printf 'old\n' > "${HOME}/.old-file"
+    run bash -c 'printf "all\n" | "$1/scripts/file-review.sh" --source "$2" --cleanup' _ "${PROJECT_ROOT}" "${TEST_SOURCE_DIR}"
+    assert_success
+    run bash -c 'printf "all\n" | "$1/scripts/file-review.sh" --source "$2" --cleanup' _ "${PROJECT_ROOT}" "${TEST_SOURCE_DIR}"
+    assert_success
+    refute_output --partial "Archive candidates"
+    assert_output --partial "Saved migration backups:"
+    local archives=("${HOME}/.local/state/dotfiles/cleanup/"*)
+    [[ "${#archives[@]}" -eq 1 ]]
+    [[ -f "${archives[0]}/.old-file" ]]
+}
+
+@test "installer reviews existing files with closed stdin and leaves leftovers untouched" {
+    printf 'keep\n' > "${HOME}/.old-file"
+    run bash -c '
+        source "$PROJECT_ROOT/scripts/common.sh"
+        eval "$(sed -n '\''/^review_existing_files() {$/,/^}$/p'\'' "$PROJECT_ROOT/install.sh")"
+        BASEDIR="$PROJECT_ROOT"
+        dry_run=0
+        link_args=()
+        review_existing_files </dev/null
+    '
+    assert_success
+    assert_output --partial "~/.old-file"
+    refute_output --partial "Archive which paths?"
+    [[ -f "${HOME}/.old-file" ]]
+    [[ ! -e "${HOME}/.local/state/dotfiles/cleanup" ]]
+}
+
+@test "installer surfaces failed file review instead of claiming a clean machine" {
+    # An install tree without stow/ cannot list what it manages.
+    local broken_repo="${TEST_TMPDIR}/broken-repo"
+    mkdir -p "${broken_repo}"
+    cp -R "${PROJECT_ROOT}/scripts" "${broken_repo}/scripts"
+    run env BROKEN_REPO="${broken_repo}" bash -c '
+        source "$PROJECT_ROOT/scripts/common.sh"
+        eval "$(sed -n '\''/^review_existing_files() {$/,/^}$/p'\'' "$PROJECT_ROOT/install.sh")"
+        BASEDIR="$BROKEN_REPO"
+        dry_run=0
+        link_args=()
+        review_existing_files </dev/null
+    '
+    assert_success
+    assert_output --partial "File review incomplete"
+    refute_output --partial "Potential leftovers: none"
+}
+
+@test "cleanup does not move files through a symlinked parent" {
+    mv "${HOME}/.local/bin" "${TEST_TMPDIR}/outside-bin"
+    ln -s "${TEST_TMPDIR}/outside-bin" "${HOME}/.local/bin"
+    run bash -c 'printf "all\n" | "$1/scripts/file-review.sh" --source "$2" --cleanup' _ "${PROJECT_ROOT}" "${TEST_SOURCE_DIR}"
+    assert_success
+    [[ -f "${TEST_TMPDIR}/outside-bin/ph-extra" ]]
+    [[ -L "${HOME}/.local/bin" ]]
+    [[ ! -e "${HOME}/.local/state/dotfiles/cleanup" ]]
+}
+
+@test "cleanup refuses a symlinked archive directory" {
+    mkdir -p "${TEST_TMPDIR}/outside-state"
+    ln -s "${TEST_TMPDIR}/outside-state" "${HOME}/.local/state"
+    run bash -c 'printf "all\n" | "$1/scripts/file-review.sh" --source "$2" --cleanup' _ "${PROJECT_ROOT}" "${TEST_SOURCE_DIR}"
+    assert_failure
+    assert_output --partial "Archive parent is a symlink"
+    [[ -f "${HOME}/.local/bin/ph-extra" ]]
+    [[ ! -e "${TEST_TMPDIR}/outside-state/dotfiles" ]]
+}
+
+@test "cleanup protects the source repository's parent directory" {
+    mkdir -p "${HOME}/.sources/dotfiles/stow"
+    run bash -c 'printf "all\n" | "$1/scripts/file-review.sh" --source "$2" --cleanup' _ "${PROJECT_ROOT}" "${HOME}/.sources/dotfiles"
+    assert_success
+    [[ -d "${HOME}/.sources/dotfiles" ]]
+}

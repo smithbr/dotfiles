@@ -1,10 +1,10 @@
 #!/usr/bin/env bats
-# Tests for dot_local/bin/home-audit — classification of top-level dotfiles.
+# Tests for stow/common/.local/bin/home-audit — classification of top-level dotfiles.
 # shellcheck disable=SC2088 # "~/" is literal display text in expected output
 
 load test_helper
 
-SCRIPT="${PROJECT_ROOT}/dotfiles/dot_local/bin/executable_home-audit"
+SCRIPT="${PROJECT_ROOT}/stow/common/.local/bin/home-audit"
 
 setup() {
     setup_tmpdir
@@ -15,12 +15,13 @@ setup() {
     ln -sf "$(command -v bash)" "${BIN_SANDBOX}/bash"
     ln -sf "$(command -v jq)" "${BIN_SANDBOX}/jq"
 
-    cat > "${BIN_SANDBOX}/chezmoi" <<MOCK
-#!/usr/bin/env bash
-printf '%s\n' "${SANDBOX_HOME}/.managed" "${SANDBOX_HOME}/.partly/inner.conf"
-MOCK
+    # A minimal dotfiles repo: the real link.sh decides what is managed.
+    export DOTFILES_DIR="${TEST_TMPDIR}/repo"
+    mkdir -p "${DOTFILES_DIR}/scripts" "${DOTFILES_DIR}/stow/common/.partly"
+    cp "${PROJECT_ROOT}/scripts/link.sh" "${PROJECT_ROOT}/scripts/common.sh" "${DOTFILES_DIR}/scripts/"
+    touch "${DOTFILES_DIR}/stow/common/.managed" "${DOTFILES_DIR}/stow/common/.partly/inner.conf"
     printf '#!/usr/bin/env bash\n' > "${BIN_SANDBOX}/ownedtool"
-    chmod +x "${BIN_SANDBOX}/chezmoi" "${BIN_SANDBOX}/ownedtool"
+    chmod +x "${BIN_SANDBOX}/ownedtool"
 
     cat > "${HOME_AUDIT_PROGRAMS}/fixtures.json" <<'JSON'
 {
@@ -115,16 +116,16 @@ bucket_of() {
     assert_success
     [ "$(cd "${SANDBOX_HOME}" && find . -print | sort)" = "${before}" ]
     assert_output --partial "Nothing was changed"
+    assert_output --partial "scripts/file-review.sh --cleanup"
     refute_output --partial "safe to delete"
 }
 
-@test "home-audit reports skipped checks when xdg-ninja data and chezmoi are unavailable" {
-    rm "${BIN_SANDBOX}/chezmoi"
-    run env HOME="${SANDBOX_HOME}" HOME_AUDIT_PROGRAMS="${TEST_TMPDIR}/missing" \
+@test "home-audit reports skipped checks when xdg-ninja data and the dotfiles repo are unavailable" {
+    run env DOTFILES_DIR="${TEST_TMPDIR}/missing-repo" HOME="${SANDBOX_HOME}" HOME_AUDIT_PROGRAMS="${TEST_TMPDIR}/missing" \
         PATH="${BIN_SANDBOX}:/usr/bin:/bin" NO_COLOR=1 "${BIN_SANDBOX}/bash" "${SCRIPT}" --all
     assert_success
     assert_output --partial "XDG checks skipped"
-    assert_output --partial "chezmoi unavailable"
+    assert_output --partial "dotfiles repo not found"
     [ "$(bucket_of .DS_Store)" = JUNK ]
 }
 

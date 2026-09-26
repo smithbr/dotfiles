@@ -484,15 +484,15 @@ _parse_brewfile_line() {
     assert_success
 }
 
-@test "Brewfile.core tracks chezit as a fully-qualified cask" {
-    run grep -qx 'cask "daptify14/tap/chezit"' "${PROJECT_ROOT}/homebrew/Brewfile.core"
+@test "Brewfile.core installs GNU Stow for linking the dotfiles" {
+    run grep -qx 'brew "stow"' "${PROJECT_ROOT}/homebrew/Brewfile.core"
     assert_success
 }
 
 # ---------------------------------------------------------------------------
 # Config-referenced tools must be installed by a Brewfile
 #
-# Guards against silent drift: if git or chezmoi config invokes an external
+# Guards against silent drift: if git config invokes an external
 # tool, the install must provide it. Each row maps a config file + the binary
 # it references to the Homebrew formula that supplies that binary (the names
 # differ for difftastic -> difft).
@@ -506,7 +506,7 @@ _all_brewfile_packages() {
         while IFS= read -r raw_line; do
             line="${raw_line#"${raw_line%%[![:space:]]*}"}"
             [[ "${line}" =~ ^(brew|cask)[[:space:]]+\"([^\"]+)\" ]] || continue
-            # Strip any tap prefix: daptify14/tap/chezit -> chezit
+            # Strip any tap prefix: superradcompany/tap/microsandbox -> microsandbox
             printf '%s\n' "${BASH_REMATCH[2]##*/}"
         done < "${brewfile}"
     done
@@ -515,14 +515,13 @@ _all_brewfile_packages() {
 # config-file (relative to repo) | binary referenced | formula expected to supply it
 _config_tool_map() {
     cat <<'EOF'
-dotfiles/dot_config/chezmoi/chezmoi.json.tmpl|difft|difftastic
-dotfiles/dot_config/git/config|fzf|fzf
-dotfiles/dot_config/git/config|git-lfs|git-lfs
-dotfiles/dot_config/git/config|ghq|ghq
+stow/common/.config/git/config|fzf|fzf
+stow/common/.config/git/config|git-lfs|git-lfs
+stow/common/.config/git/config|ghq|ghq
 EOF
 }
 
-@test "tools referenced by git/chezmoi config are provided by a Brewfile" {
+@test "tools referenced by git config are provided by a Brewfile" {
     local packages config_file binary formula missing=""
     packages="$(_all_brewfile_packages)"
 
@@ -654,7 +653,6 @@ MOCK
         grep -qx '"'"'brew "shellcheck"'"'"' "${TEST_BUNDLE}" || { echo "missing shellcheck"; exit 1; }
         grep -qx '"'"'brew "gum"'"'"' "${TEST_BUNDLE}" || { echo "missing gum"; exit 1; }
         grep -qx '"'"'cask "font-hack-nerd-font"'"'"' "${TEST_BUNDLE}" || { echo "missing font cask"; exit 1; }
-        grep -qx '"'"'cask "daptify14/tap/chezit"'"'"' "${TEST_BUNDLE}" || { echo "missing chezit cask"; exit 1; }
         if grep -qx '"'"'brew "jq"'"'"' "${TEST_BUNDLE}"; then
             echo "installed formula was not filtered"
             exit 1

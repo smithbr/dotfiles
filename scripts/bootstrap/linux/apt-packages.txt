@@ -5,6 +5,7 @@ git
 htop
 net-tools
 nethogs
+stow
 tcpdump
 tree
 wget

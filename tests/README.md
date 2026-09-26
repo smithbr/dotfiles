@@ -11,7 +11,7 @@ Run the full suite with:
 ```
 
 The runner uses Homebrew-installed `bats-core`, `bats-support`, and `bats-assert`. If they are missing, [`run_tests.sh`](/Users/bran/.dotfiles/tests/run_tests.sh) installs them first.
-It also ensures `shellcheck` is installed, then lints the repo's shell scripts before running Bats.
+It also ensures `shellcheck` and `stow` are installed, then lints the repo's shell scripts before running Bats.
 
 ## Git Hooks
 
@@ -52,7 +52,7 @@ Notes:
 - Homebrew and `chsh` are skipped: Linux aarch64 has no brew bottles, and `chsh`
   needs a password the container user does not have.
 - `pre-push` only runs it when the pushed commits touch `install.sh`, `scripts/`,
-  `dotfiles/`, or `homebrew/`. Set `SKIP_SANDBOX_INSTALL=1` to bypass it, and it
+  `stow/`, `seed/`, `editors/`, or `homebrew/`. Set `SKIP_SANDBOX_INSTALL=1` to bypass it, and it
   skips itself when `docker` is absent.
 
 ## Isolation Model
@@ -75,7 +75,7 @@ This is process-level isolation, not a real container or VM.
 
 [`bin_scripts.bats`](/Users/bran/.dotfiles/tests/bin_scripts.bats)
 
-- Covers scripts in [`dotfiles/dot_local/bin`](/Users/bran/.dotfiles/dotfiles/dot_local/bin)
+- Covers scripts in [`stow/common/.local/bin`](/Users/bran/.dotfiles/stow/common/.local/bin)
 - Verifies help output and startup probing for `ph-padd`
 - Verifies non-root self-elevation behavior for `ph-update`, `ph-test`, and `ph-backup`
 - Runs `ph-backup` against mocked Pi-hole, Unbound, and Tailscale and inspects the resulting zip
@@ -96,17 +96,23 @@ This is process-level isolation, not a real container or VM.
 - Verifies `gum` and non-`gum` behavior
 - Tests `require_non_root`, `sudo_cmd`, and `spin`
 
-[`chezmoi_abandoned.bats`](/Users/bran/.dotfiles/tests/chezmoi_abandoned.bats)
+[`file_review.bats`](/Users/bran/.dotfiles/tests/file_review.bats)
 
-- Exercises file inventory, broken managed links, and migration backup reporting
+- Exercises file inventory against a fixture repo, replaced links, broken managed links, and migration backup reporting
 - Verifies bulk archival preserves contents and symlinks, excludes protected paths, and is safe to repeat
-- Checks closed stdin, invalid selections, failed inventory queries, alternate destinations, and installer report integration
+- Checks closed stdin, invalid selections, a failed inventory query, alternate destinations, and installer report integration
 
 [`home_audit.bats`](/Users/bran/.dotfiles/tests/home_audit.bats)
 
-- Runs `home-audit` against a sandboxed home, a fixture xdg-ninja database, and a stubbed `chezmoi`
+- Runs `home-audit` against a sandboxed home, a fixture xdg-ninja database, and a fixture dotfiles repo
 - Verifies JUNK/LEFTOVER/MOVE/REVIEW/KEEP classification, environment-redirect detection, and `--days`/`--all`
 - Checks that the audited home is left untouched and that missing data sources are reported
+
+[`link.bats`](/Users/bran/.dotfiles/tests/link.bats)
+
+- Runs the real [`scripts/link.sh`](/Users/bran/.dotfiles/scripts/link.sh) and GNU Stow against a scratch home and a local agents repo fixture
+- Verifies linking per platform, shared editor settings, backups of changed copies and foreign links, idempotency, and dry runs
+- Covers agent links (clone, backup of real agent config, unreachable repo), seed files, and the `managed` and `status` reports
 
 [`install.bats`](/Users/bran/.dotfiles/tests/install.bats)
 

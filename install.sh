@@ -8,10 +8,10 @@ source "${BASEDIR}/scripts/common.sh"
 
 usage() {
     cat <<'EOF'
-Usage: install.sh [OPTIONS] [-- CHEZMOI_ARGS...]
+Usage: install.sh [OPTIONS] [-- STOW_ARGS...]
 
 Sets this machine up: links the repo into place, ensures an SSH key exists,
-runs the OS bootstrap and Homebrew, then applies the dotfiles with chezmoi.
+runs the OS bootstrap and Homebrew, then links the dotfiles with GNU Stow.
 
 Options:
   -n, --dry-run      Report what would change without touching the system
@@ -22,8 +22,8 @@ Options:
       --skip-brew    Skip the Homebrew install/update/bundle step
       --skip-shell   Skip adding zsh to /etc/shells and chsh
 
-Unrecognised arguments are passed through to `chezmoi apply`, as is everything
-after `--`, e.g. install.sh --skip-brew -- --force --exclude=scripts
+Unrecognised arguments are passed through to stow, as is everything after
+`--`, e.g. install.sh --skip-brew -- --verbose=2
 EOF
 }
 
@@ -32,7 +32,7 @@ dry_run=0
 run_system_bootstrap=1
 run_brew=1
 run_shell_setup=1
-declare -a chezmoi_args=()
+declare -a link_args=()
 while [[ $# -gt 0 ]]; do
     case "${1}" in
         -n|--dry-run)
@@ -61,22 +61,18 @@ while [[ $# -gt 0 ]]; do
         --)
             shift
             while [[ $# -gt 0 ]]; do
-                chezmoi_args+=("$1")
+                link_args+=("$1")
                 shift
             done
             break
             ;;
         *)
-            chezmoi_args+=("$1")
+            link_args+=("$1")
             ;;
     esac
     shift
 done
 export VERBOSE
-
-if [[ "${dry_run}" -eq 1 ]]; then
-    chezmoi_args+=(--dry-run)
-fi
 
 require_non_root
 
@@ -85,19 +81,14 @@ if [[ -z "${HOME:-}" ]]; then
     exit 1
 fi
 
-# Point chezmoi at the repo root; .chezmoiroot redirects it to the dotfiles/ subdir.
-CHEZMOI_SOURCE="${BASEDIR}"
-# Resolved source path that `chezmoi source-path` reports, used by the sanity check below.
-CHEZMOI_DEFAULT_SOURCE="${HOME}/.dotfiles/dotfiles"
-CHEZMOI_CONFIG_DIR="${HOME}/.config/chezmoi"
-CHEZMOI_CONFIG_FILE="${CHEZMOI_CONFIG_DIR}/chezmoi.json"
+LINK_SCRIPT="${BASEDIR}/scripts/link.sh"
 LOCAL_INSTALL_SSH_KEY_PATH="${HOME}/.ssh/id_ed25519"
 HAS_GUM=false
 command -v gum >/dev/null 2>&1 && [[ -t 1 ]] && HAS_GUM=true
 STEP_INDEX=0
 STEP_TOTAL=0
 # Follow-ups gathered during the run and shown together at the end, so they
-# are not lost in the scrollback of Homebrew and chezmoi output.
+# are not lost in the scrollback of Homebrew and stow output.
 declare -a NEXT_STEPS=()
 
 _header() {
@@ -264,8 +255,10 @@ copy_and_list_local_example_files() {
     local local_path
     local review_message=""
 
+    # Stow packages mirror $HOME, so a package-relative path is the target path.
     while IFS= read -r -d '' example_path; do
-        target_path="$(chezmoi target-path --source "${CHEZMOI_SOURCE}" "${example_path}")"
+        example_path="${example_path#"${BASEDIR}"/stow/}"
+        target_path="${HOME}/${example_path#*/}"
         local_path="${target_path%.example}"
 
         if [[ ! -e "${local_path}" && ! -L "${local_path}" ]]; then
@@ -276,7 +269,7 @@ copy_and_list_local_example_files() {
                 log_info "Created ${local_path} from ${target_path}"
             fi
         fi
-    done < <(find "${BASEDIR}/dotfiles" -type f -name '*.local.example' -print0)
+    done < <(find "${BASEDIR}/stow" -type f -name '*.local.example' -print0)
 
     review_message='Review machine-specific settings in ~/.config/git/config.local,'
     review_message+=' ~/.config/zsh/.zshrc.local, ~/.ssh/config.local,'
@@ -303,165 +296,76 @@ ensure_dotfiles_repo_link() {
     spin "Linking dotfiles repo..." ln -sfn "${BASEDIR}" "${HOME}/.dotfiles"
 }
 
-ensure_chezmoi() {
-    local chezmoi_path=""
-    local bin_dir=""
-
-    chezmoi_path="$(command -v chezmoi || true)"
-    if [[ -n "${chezmoi_path}" ]]; then
-        log_info "chezmoi already installed at ${chezmoi_path}"
+ensure_stow() {
+    if command -v stow >/dev/null 2>&1; then
         return 0
     fi
 
     if [[ "${dry_run}" -eq 1 ]]; then
-        log_warn "chezmoi is not installed; would install it before applying"
+        log_warn "GNU Stow is not installed; would install it before linking"
         return 0
     fi
 
     if command -v brew >/dev/null 2>&1; then
-        log_info "Installing chezmoi with Homebrew"
-        spin "Installing chezmoi..." brew install chezmoi
+        log_info "Installing GNU Stow with Homebrew"
+        spin "Installing stow..." brew install stow
+    elif command -v apt-get >/dev/null 2>&1; then
+        log_info "Installing GNU Stow with apt"
+        spin "Installing stow..." sudo_cmd apt-get install -y -qq stow
     else
-        bin_dir="${HOME}/.local/bin"
-        mkdir -p "${bin_dir}"
-        log_info "Installing chezmoi to ${bin_dir}"
-        spin "Installing chezmoi..." sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "${bin_dir}"
-        export PATH="${bin_dir}:${PATH}"
-    fi
-
-    chezmoi_path="$(command -v chezmoi || true)"
-    if [[ -n "${chezmoi_path}" ]]; then
-        log_info "chezmoi available at ${chezmoi_path}"
+        log_error "GNU Stow is not installed and no package manager was found to install it"
+        return 1
     fi
 }
 
-log_pending_chezmoi_changes() {
+log_pending_link_changes() {
     local status_output=""
     local pending_count=""
 
-    log_info "Checking pending chezmoi changes"
-    status_output="$(chezmoi --source "${CHEZMOI_SOURCE}" status 2>/dev/null || true)"
+    log_info "Checking links before applying"
+    status_output="$(bash "${LINK_SCRIPT}" status 2>/dev/null || true)"
 
     if [[ -z "${status_output}" ]]; then
-        log_info "chezmoi reports no pending changes before apply"
+        log_info "All dotfiles are already linked"
         return 0
     fi
 
     pending_count="$(printf '%s\n' "${status_output}" | awk 'NF { count++ } END { print count + 0 }')"
-    log_info "chezmoi reports ${pending_count} pending change(s) before apply"
-    explain_overwrite_prompts "${status_output}"
-}
-
-# chezmoi stops to ask before replacing a file that was edited since it last
-# wrote it. Name those files up front so the question is expected, not a hang.
-explain_overwrite_prompts() {
-    local status_output="$1"
-    local edited=""
-    local arg=""
-    local tty_device="${INSTALL_TTY_DEVICE:-/dev/tty}"
-
-    # --dry-run still prompts, so only --force skips the questions.
-    for arg in ${chezmoi_args[@]+"${chezmoi_args[@]}"}; do
-        [[ "${arg}" == "--force" ]] && return 0
-    done
-
-    # Column 1 = changed on disk since chezmoi's last write; column 2 = apply
-    # would change it. Both set means chezmoi will prompt.
-    edited="$(printf '%s\n' "${status_output}" \
-        | awk 'substr($0, 1, 1) != " " && substr($0, 2, 1) != " " && length($0) > 3 { print "  ~/" substr($0, 4) }')"
-    [[ -n "${edited}" ]] || return 0
-
-    # chezmoi asks on /dev/tty; without a controlling terminal it cannot ask
-    # and the apply fails instead.
-    if ! ( : < "${tty_device}" ) 2>/dev/null; then
-        log_warn "These files were edited on this machine, and chezmoi cannot ask about them without a terminal:"
-        printf '%s\n' "${edited}" >&2
-        log_warn "Tip: re-run from a terminal, or pass -- --force to replace them with the repo versions"
-        return 0
-    fi
-
-    _box "These files were edited on this machine and differ from the repo:
-${edited}
-
-chezmoi will ask about each one. Choose:
-  diff           show what would change
-  overwrite      replace it with the repo version
-  all-overwrite  replace this and every remaining file
-  skip           keep your local version for now
-  quit           stop applying"
-}
-
-resolve_dir_path() {
-    local path="$1"
-
-    if [[ -z "${path}" ]]; then
-        return 1
-    fi
-
-    cd "${path}" 2>/dev/null && pwd -P
-}
-
-run_chezmoi_apply() {
-    local -a apply_cmd=(chezmoi --source "${CHEZMOI_SOURCE}" apply)
-
-    if [[ "${#chezmoi_args[@]}" -gt 0 ]]; then
-        apply_cmd+=("${chezmoi_args[@]}")
-    fi
-
-    if "${apply_cmd[@]}"; then
-        return 0
-    fi
-
-    # The .config/agents external clones a private repo over SSH. On a first run
-    # this host's key isn't registered with GitHub yet, so the clone fails and
-    # takes the rest of the apply down with it -- leaving no shell config at all.
-    # Retry without externals so the machine ends up usable, and say what is
-    # needed to finish.
-    log_warn "chezmoi apply failed; retrying without externals"
-    "${apply_cmd[@]}" --exclude=externals
-
-    log_warn "Applied without externals (usually a GitHub SSH key that isn't registered yet)"
-    _next_step "Add ~/.ssh/id_ed25519.pub to GitHub (https://github.com/settings/keys), then run: chezmoi --source ${CHEZMOI_SOURCE} apply"
+    log_info "${pending_count} path(s) to link or repair"
 }
 
 apply_dotfiles() {
-    if ! command -v chezmoi >/dev/null 2>&1; then
-        log_warn "chezmoi is not installed; skipping apply"
-        return 0
+    local -a link_cmd=(bash "${LINK_SCRIPT}")
+
+    if ! command -v stow >/dev/null 2>&1 && [[ "${dry_run}" -eq 0 ]]; then
+        log_error "GNU Stow is not installed; cannot link dotfiles"
+        return 1
     fi
 
-    log_info "Applying dotfiles from ${CHEZMOI_SOURCE}"
-    log_pending_chezmoi_changes
+    log_info "Linking dotfiles from ${BASEDIR}/stow"
+    log_pending_link_changes
 
-    run_chezmoi_apply
+    if [[ "${dry_run}" -eq 1 ]]; then
+        link_cmd+=(--dry-run)
+    fi
+    if [[ "${#link_args[@]}" -gt 0 ]]; then
+        link_cmd+=(-- "${link_args[@]}")
+    fi
+    "${link_cmd[@]}"
 
-    log_info "chezmoi apply complete"
+    log_info "Linking complete"
 }
 
 review_existing_files() {
     local index=0
     local review_only="${dry_run}"
-    local -a review_args=(--source "${CHEZMOI_SOURCE}")
+    local -a review_args=(--source "${BASEDIR}")
 
-    if ! command -v chezmoi >/dev/null 2>&1; then
-        log_warn "File review unavailable until chezmoi is installed"
-        return
-    fi
-    while [[ "${index}" -lt "${#chezmoi_args[@]}" ]]; do
-        case "${chezmoi_args[index]}" in
-            -n|--dry-run|--dry-run=true)
+    # stow's own simulate flags make the whole install a dry run.
+    while [[ "${index}" -lt "${#link_args[@]}" ]]; do
+        case "${link_args[index]}" in
+            -n|--no|--simulate)
                 review_only=1
-                ;;
-            -D|--destination)
-                index=$((index + 1))
-                if [[ "${index}" -ge "${#chezmoi_args[@]}" ]]; then
-                    log_warn "File review skipped: missing destination argument"
-                    return
-                fi
-                review_args+=(--destination "${chezmoi_args[index]}")
-                ;;
-            --destination=*)
-                review_args+=(--destination "${chezmoi_args[index]#*=}")
                 ;;
         esac
         index=$((index + 1))
@@ -469,7 +373,7 @@ review_existing_files() {
     if [[ "${review_only}" -eq 0 && -t 0 && -t 1 ]]; then
         review_args+=(--cleanup)
     fi
-    if ! bash "${BASEDIR}/scripts/chezmoi-abandoned.sh" "${review_args[@]}"; then
+    if ! bash "${BASEDIR}/scripts/file-review.sh" "${review_args[@]}"; then
         log_warn "File review incomplete; inspect the errors above before cleaning up"
     fi
 }
@@ -546,32 +450,12 @@ if [[ "${run_brew}" -eq 1 ]]; then
     fi
 fi
 
-begin_step "Dotfiles" "Install chezmoi if needed, then write the managed files into your home"
-run_boxed ensure_chezmoi
+begin_step "Dotfiles" "Install GNU Stow if needed, then link the managed files into your home"
+run_boxed ensure_stow
 
-# Remove invalid config so chezmoi apply can regenerate it from the template
-if [[ -f "${CHEZMOI_CONFIG_FILE}" ]] && command -v chezmoi >/dev/null 2>&1 \
-    && ! chezmoi --source "${CHEZMOI_SOURCE}" dump-config &>/dev/null; then
-    if [[ "${dry_run}" -eq 1 ]]; then
-        _box "Would remove invalid ${CHEZMOI_CONFIG_FILE}."
-    else
-        log_warn "Removing invalid ${CHEZMOI_CONFIG_FILE}"
-        rm -f "${CHEZMOI_CONFIG_FILE}"
-        _box "Removed invalid ${CHEZMOI_CONFIG_FILE}; chezmoi will regenerate it."
-    fi
-fi
-
-# Not boxed: chezmoi prompts before overwriting files changed since it last
-# wrote them, and capturing its output would hide the prompt while it waits.
+# Not boxed: backups of replaced files are listed as they happen, and the
+# agents clone may need to show an SSH prompt.
 apply_dotfiles
-
-chezmoi_source_path="$(chezmoi source-path 2>/dev/null || true)"
-chezmoi_source_resolved="$(resolve_dir_path "${chezmoi_source_path}" || true)"
-chezmoi_default_resolved="$(resolve_dir_path "${CHEZMOI_DEFAULT_SOURCE}" || true)"
-if [[ "${chezmoi_source_path}" != "${CHEZMOI_DEFAULT_SOURCE}" ]] \
-    && [[ -z "${chezmoi_source_resolved}" || -z "${chezmoi_default_resolved}" || "${chezmoi_source_resolved}" != "${chezmoi_default_resolved}" ]]; then
-    log_warn "chezmoi sourceDir is not set to ${CHEZMOI_DEFAULT_SOURCE}"
-fi
 
 zsh_path=""
 if [[ "${run_shell_setup}" -eq 1 ]]; then

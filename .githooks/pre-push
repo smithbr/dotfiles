@@ -10,7 +10,7 @@ printf 'pre-push: running shellcheck and test suite\n'
 
 # A sandbox install boots a container and takes minutes, so only pay for it when
 # the pushed commits touch something that can break a fresh install.
-INSTALL_PATHS='^(install\.sh|scripts/|dotfiles/|homebrew/|tests/sandbox-install\.sh)'
+INSTALL_PATHS='^(install\.sh|scripts/|stow/|seed/|editors/|homebrew/|tests/sandbox-install\.sh)'
 ZERO='0000000000000000000000000000000000000000'
 
 needs_sandbox() {

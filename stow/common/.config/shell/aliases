@@ -1,0 +1,57 @@
+# navigation
+alias cdd="cd ~/.dotfiles"
+alias h="history"
+alias lsa="ls -FGlAhp"
+alias xb="cd ~/.local/bin"
+alias xc="cd ~/.config"
+alias xdn="xdg-ninja --skip-ok --skip-unsupported"
+
+# shell
+alias dfl="~/.dotfiles/scripts/link.sh"
+alias dflr="~/.dotfiles/scripts/link.sh --refresh"
+alias dfs="~/.dotfiles/scripts/link.sh status"
+alias ddf="cd ~/.dotfiles"
+alias ff="fastfetch -c all"
+alias fish="asciiquarium"
+alias rl="exec ${SHELL} -l"
+
+# system
+alias df="df -HT"
+alias top="btm"
+
+# brew
+alias brewls="brew list --formula -t"
+
+# docker
+alias dclean="docker system prune -af"
+alias dlogs="docker logs -f"
+alias dps="docker ps"
+alias dpsa="docker ps -a"
+alias drm="docker rm \$(docker ps -a -q)"
+alias drmi="docker rmi \$(docker images -q)"
+alias dstop="docker stop \$(docker ps -q)"
+
+# network
+alias dns="cat /etc/resolv.conf"
+alias ip_public="dig +short myip.opendns.com @resolver1.opendns.com"
+case "${OSTYPE}" in
+    darwin*)
+        alias ip_local="ipconfig getifaddr en0"
+        alias flushdns="dscacheutil -flushcache"
+        ;;
+    linux*)
+        alias ip_local="hostname -I"
+        alias flushdns="sudo systemd-resolve --flush-caches"
+        alias nethogs="sudo /home/linuxbrew/.linuxbrew/sbin/nethogs"
+        ;;
+esac
+
+# remove junk files
+alias cleanupds="find . -type f -name '*.DS_Store' -ls -delete"
+alias emptyfolders="du -a --max-depth=1 | sort -n"
+
+# domain lookup
+alias tld="domain-check --preset startup --pretty"
+
+# generate random token
+alias newtoken="openssl rand -hex 32"
