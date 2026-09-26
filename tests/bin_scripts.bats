@@ -73,7 +73,7 @@ systemctl() {
         touch "${TEST_TMPDIR}/restart-attempted"
         case "${PROBE_FAILURE}" in
             restart) return 7 ;;
-            interrupt) kill -TERM "${BASHPID}" ;;
+            interrupt) kill -TERM "$$" ;;
         esac
     fi
 }
