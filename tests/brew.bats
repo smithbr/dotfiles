@@ -903,3 +903,106 @@ MOCK
     assert_output --partial "Linked 1Password SSH agent socket"
     assert_output --partial "Skipping optional Homebrew package selection because no interactive terminal was detected"
 }
+
+@test "brew.sh optional picker reports installed packages and labels apps installed outside Homebrew" {
+    command -v jq >/dev/null 2>&1 || skip "jq is required to read cask metadata"
+
+    run bash -c '
+        set -euo pipefail
+
+        export HOME="'"${TEST_TMPDIR}"'/sandbox-home"
+        export TEST_ROOT="'"${TEST_TMPDIR}"'/brew-picker"
+        export TEST_BIN="${TEST_ROOT}/bin"
+        export TEST_LOG="${TEST_TMPDIR}/brew-picker.log"
+        export TEST_BUNDLE="${TEST_TMPDIR}/bundle-picker.txt"
+        export TEST_CHOOSE="${TEST_TMPDIR}/gum-choose-args.txt"
+        other_bin="${TEST_TMPDIR}/other-bin"
+        export PATH="${TEST_BIN}:${other_bin}:/usr/bin:/bin"
+        export OSTYPE="darwin24"
+        # A regular file stands in for the terminal so the gum picker runs.
+        export BREW_TTY_DEVICE="${TEST_TMPDIR}/fake-tty"
+        export BREW_APP_DIRS="${HOME}/Applications"
+
+        mkdir -p "${HOME}/Applications/Claude.app" "${HOME}/Applications/Tailscale.app" \
+            "${TEST_BIN}" "${other_bin}"
+        : > "${TEST_LOG}"
+        : > "${BREW_TTY_DEVICE}"
+        ln -s "$(command -v jq)" "${TEST_BIN}/jq"
+        # wget installed by something other than Homebrew.
+        printf "#!/bin/sh\n" > "${other_bin}/wget"
+        chmod +x "${other_bin}/wget"
+
+        cat > "${TEST_BIN}/gum" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+case "${1:-}" in
+    choose)
+        printf "%s\n" "$@" > "${TEST_CHOOSE}"
+        printf "claude\n"
+        ;;
+    log)
+        shift 3
+        echo "$*"
+        ;;
+esac
+MOCK
+
+        cat > "${TEST_BIN}/brew" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf "brew %s\n" "$*" >> "${TEST_LOG}"
+
+case "${1:-}" in
+    --prefix)
+        printf "%s\n" "${TEST_ROOT}"
+        ;;
+    list)
+        case "${2:-}" in
+            --formula) printf "git\nhtop\n" ;;
+            --cask) printf "chatgpt\nclaude-code@latest\n" ;;
+        esac
+        ;;
+    info)
+        if [[ "$*" == *"--json=v2"* ]]; then
+            cat <<'"'"'JSON'"'"'
+{"casks":[
+  {"token":"claude","name":["Claude"],"artifacts":[{"app":["Claude.app"]}]},
+  {"token":"tailscale-app","name":["Tailscale"],"artifacts":[{"pkg":["Tailscale.pkg"]}]},
+  {"token":"firefox","name":["Mozilla Firefox"],"artifacts":[{"app":["Firefox.app"]}]}
+]}
+JSON
+        else
+            printf "{}\n"
+        fi
+        ;;
+    bundle)
+        if [[ "${2:-}" == "install" ]]; then
+            cp "${3#--file=}" "${TEST_BUNDLE}"
+        fi
+        ;;
+    --cache)
+        printf "%s\n" "${TEST_ROOT}/cache"
+        ;;
+esac
+exit 0
+MOCK
+
+        chmod +x "${TEST_BIN}/gum" "${TEST_BIN}/brew"
+
+        cd "'"${PROJECT_ROOT}"'"
+        ./homebrew/brew.sh --verbose
+
+        echo "--- choose"
+        cat "${TEST_CHOOSE}"
+        echo "--- bundle"
+        cat "${TEST_BUNDLE}"
+    '
+    assert_success
+    assert_output --partial "Already installed via Homebrew: htop, chatgpt, claude-code"
+    assert_output --regexp $'claude +installed outside Homebrew: [^\n]*/sandbox-home/Applications/Claude.app\tclaude'
+    assert_output --regexp $'tailscale-app +installed outside Homebrew: [^\n]*/sandbox-home/Applications/Tailscale.app\ttailscale-app'
+    assert_output --regexp $'wget +installed outside Homebrew: [^\n]*/other-bin/wget\twget'
+    assert_output --partial $'firefox\tfirefox'
+    refute_output --regexp $'\nclaude-code\t'
+    assert_output --partial $'--- bundle\ncask "claude"'
+}

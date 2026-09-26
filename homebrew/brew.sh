@@ -107,6 +107,15 @@ declare -a LINUX_SUPPORTED_CASKS=(
     "chezit"
 )
 
+join_by() {
+    local separator="$1"
+    local first="$2"
+
+    shift 2
+    printf '%s' "${first}" "${@/#/${separator}}"
+    printf '\n'
+}
+
 brew_entry_short_name() {
     local pkg_name="$1"
 
@@ -217,6 +226,102 @@ run_native_install() {
 
     chmod +x "${script}"
     "${script}"
+}
+
+# Homebrew casks that provide the same tool as a native entry. When one is
+# installed, the native installer would only add a second copy.
+native_entry_brew_casks() {
+    case "$1" in
+        claude-code)
+            printf '%s\n' claude-code claude-code@latest
+            ;;
+    esac
+}
+
+native_entry_is_brew_managed() {
+    local cask
+
+    while IFS= read -r cask; do
+        [[ -n "${cask}" ]] && _brew_has_cask "${cask}" && return 0
+    done < <(native_entry_brew_casks "$1")
+
+    return 1
+}
+
+native_entry_command() {
+    case "$1" in
+        claude-code)
+            printf 'claude\n'
+            ;;
+    esac
+}
+
+# Print "token<TAB>App.app[<TAB>...]" for each cask, naming the app bundles it
+# installs. Casks that ship a pkg instead fall back to "<name>.app". Prints
+# nothing when jq or the cask metadata is unavailable, which only disables the
+# "installed outside Homebrew" hints.
+cask_app_bundles() {
+    command -v jq >/dev/null 2>&1 || return 0
+
+    brew info --cask --json=v2 "$@" 2>/dev/null | jq -r '
+        .casks[]
+        | [.artifacts[]? | objects | .app? // empty
+            | ((map(objects | .target) | first) // first)
+            | strings | split("/") | last] as $apps
+        | [.token] + (if ($apps | length) > 0 then $apps else [.name[]? | . + ".app"] end)
+        | join("\t")
+    ' 2>/dev/null || true
+}
+
+# Print where an entry that Homebrew does not manage is already installed, if
+# anywhere: an app bundle for casks, or a command on PATH outside Homebrew.
+# BREW_APP_DIRS (colon-separated) overrides the app folders so tests can
+# isolate them.
+optional_entry_external_path() {
+    local pkg_type="$1"
+    local pkg_name="$2"
+    local app_bundles="$3"
+    local short_name
+    local line
+    local app
+    local dir
+    local cmd=""
+    local cmd_path=""
+    local -a apps=()
+    local -a app_dirs=()
+
+    IFS=: read -r -a app_dirs <<< "${BREW_APP_DIRS:-/Applications:${HOME}/Applications}"
+
+    case "${pkg_type}" in
+        cask)
+            short_name="$(brew_entry_short_name "${pkg_name}")"
+            while IFS= read -r line; do
+                [[ "${line}" == "${short_name}"$'\t'* ]] || continue
+                IFS=$'\t' read -r -a apps <<< "${line#*$'\t'}"
+                [[ "${#apps[@]}" -gt 0 ]] || continue
+                for app in "${apps[@]}"; do
+                    for dir in "${app_dirs[@]}"; do
+                        if [[ -e "${dir}/${app}" ]]; then
+                            printf '%s\n' "${dir}/${app}"
+                            return 0
+                        fi
+                    done
+                done
+            done <<< "${app_bundles}"
+            ;;
+        brew)
+            cmd="$(brew_entry_short_name "${pkg_name}")"
+            ;;
+        native)
+            cmd="$(native_entry_command "${pkg_name}")"
+            ;;
+    esac
+
+    [[ -n "${cmd}" ]] || return 0
+    cmd_path="$(command -v "${cmd}" 2>/dev/null || true)"
+    if [[ "${cmd_path}" == /* && "${cmd_path}" != "${brew_prefix}/"* ]]; then
+        printf '%s\n' "${cmd_path}"
+    fi
 }
 
 has_interactive_tty() {
@@ -459,6 +564,14 @@ prompt_optional_brewfile() {
     local -a selected_native=()
     local -a optional_entries=()
     local -a optional_names=()
+    local -a optional_labels=()
+    local -a pending_casks=()
+    local -a brew_installed=()
+    local -a native_installed=()
+    local app_bundles=""
+    local external_path
+    local name_width=0
+    local tty_device="${BREW_TTY_DEVICE:-/dev/tty}"
     local raw_line
     local line
     local pkg_type
@@ -493,26 +606,64 @@ prompt_optional_brewfile() {
         fi
 
         if optional_entry_is_installed "${pkg_type}" "${pkg_name}"; then
+            brew_installed+=("${pkg_name}")
             continue
         fi
 
         optional_entries+=("${pkg_type} \"${pkg_name}\"")
         optional_names+=("${pkg_name}")
+        [[ "${pkg_type}" == "cask" ]] && pending_casks+=("${pkg_name}")
         pending_count=$((pending_count + 1))
     done < "${optional_brewfile}"
 
     for pkg_name in "${NATIVE_OPTIONAL_ENTRIES[@]}"; do
-        optional_entry_is_installed native "${pkg_name}" && continue
+        if optional_entry_is_installed native "${pkg_name}"; then
+            native_installed+=("${pkg_name}")
+            continue
+        fi
+        if native_entry_is_brew_managed "${pkg_name}"; then
+            brew_installed+=("${pkg_name}")
+            continue
+        fi
         optional_entries+=("native \"${pkg_name}\"")
         optional_names+=("${pkg_name}")
         pending_count=$((pending_count + 1))
     done
+
+    # Guarded: bash 3.2 treats an empty array expansion as unbound under set -u.
+    if [[ "${#brew_installed[@]}" -gt 0 ]]; then
+        log_info "Already installed via Homebrew: $(join_by ', ' "${brew_installed[@]}")"
+    fi
+    if [[ "${#native_installed[@]}" -gt 0 ]]; then
+        log_info "Already installed with the vendor installer: $(join_by ', ' "${native_installed[@]}")"
+    fi
 
     if [[ "${pending_count}" -eq 0 ]]; then
         log_info "All ${prompt_label}s already installed"
         rm -f "${tmp_optional_brewfile}"
         return
     fi
+
+    if [[ "${#pending_casks[@]}" -gt 0 ]]; then
+        app_bundles="$(cask_app_bundles "${pending_casks[@]}")"
+    fi
+
+    for pkg_name in "${optional_names[@]}"; do
+        [[ "${#pkg_name}" -gt "${name_width}" ]] && name_width="${#pkg_name}"
+    done
+
+    # Entries Homebrew does not manage may still be installed another way (a
+    # vendor download or the App Store); label them so the picker shows it.
+    for idx in "${!optional_entries[@]}"; do
+        external_path="$(optional_entry_external_path \
+            "${optional_entries[${idx}]%% *}" "${optional_names[${idx}]}" "${app_bundles}")"
+        if [[ -n "${external_path}" ]]; then
+            optional_labels+=("$(printf '%-*s  installed outside Homebrew: %s' \
+                "${name_width}" "${optional_names[${idx}]}" "${external_path}")")
+        else
+            optional_labels+=("${optional_names[${idx}]}")
+        fi
+    done
 
     # Native entries run their installer script; everything else goes to brew bundle.
     select_optional_entry() {
@@ -549,13 +700,21 @@ prompt_optional_brewfile() {
             local tmp_gum_output
             tmp_gum_output="$(mktemp "${TMPDIR:-/tmp}/gum-output.XXXXXX")"
 
+            # gum shows each label and prints the matching name for selections.
+            local -a gum_options=()
+            for idx in "${!optional_names[@]}"; do
+                gum_options+=("${optional_labels[${idx}]}"$'\t'"${optional_names[${idx}]}")
+            done
+
+            # shellcheck disable=SC2094 # gum reads keys from and draws on the terminal.
             gum_choose_multiselect \
                 "Select optional packages to install" \
                 "${height}" \
-                "${optional_names[@]}" \
-                < /dev/tty \
+                --label-delimiter=$'\t' \
+                "${gum_options[@]}" \
+                < "${tty_device}" \
                 > "${tmp_gum_output}" \
-                2> /dev/tty || true
+                2> "${tty_device}" || true
 
             while IFS= read -r selected_name || [[ -n "${selected_name}" ]]; do
                 [[ -z "${selected_name}" ]] && continue
@@ -572,9 +731,9 @@ prompt_optional_brewfile() {
             log_info "Optional Homebrew packages available. Press Enter to install a package, or n to skip."
 
             for idx in "${!optional_entries[@]}"; do
-                display_entry="${optional_names[${idx}]}"
-                printf "Install %s %s? [Y/n] " "${prompt_label}" "${display_entry}" > /dev/tty
-                read -r reply < /dev/tty
+                display_entry="${optional_labels[${idx}]}"
+                printf "Install %s %s? [Y/n] " "${prompt_label}" "${display_entry}" > "${tty_device}"
+                read -r reply < "${tty_device}" || reply="n"
                 if [[ -z "${reply}" || "${reply}" =~ ^[Yy]$ ]]; then
                     select_optional_entry "${idx}"
                 fi
