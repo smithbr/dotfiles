@@ -90,3 +90,37 @@ load test_helper
 
     assert_success
 }
+
+# Runs only the zshrc nvm block, so the rest of the interactive setup stays out.
+run_nvm_block() {
+    local block="${TEST_TMPDIR}/nvm_block.zsh"
+    awk '/^# nvm/ { on = 1 } on { print } on && /^unset nvm_sh$/ { exit }' \
+        "${PROJECT_ROOT}/dotfiles/dot_config/zsh/dot_zshrc" > "${block}"
+    [[ -s "${block}" ]] || { echo "nvm block not found"; return 1; }
+    run env -i PATH="/usr/bin:/bin" NVM_DIR="${TEST_TMPDIR}/nvm" "$@" \
+        zsh -f -c "source '${block}'; print -r -- \"loaded=\${NVM_LOADED:-no}\""
+}
+
+@test "zshrc nvm block is quiet when nvm is not installed" {
+    command -v zsh >/dev/null 2>&1 || skip "zsh not installed"
+    setup_tmpdir
+
+    run_nvm_block HOMEBREW_PREFIX="${TEST_TMPDIR}/brew"
+    assert_success
+    assert_output "loaded=no"
+
+    teardown_tmpdir
+}
+
+@test "zshrc nvm block loads nvm.sh from the Homebrew prefix" {
+    command -v zsh >/dev/null 2>&1 || skip "zsh not installed"
+    setup_tmpdir
+    mkdir -p "${TEST_TMPDIR}/brew/opt/nvm"
+    printf 'NVM_LOADED="$1"\n' > "${TEST_TMPDIR}/brew/opt/nvm/nvm.sh"
+
+    run_nvm_block HOMEBREW_PREFIX="${TEST_TMPDIR}/brew"
+    assert_success
+    assert_output "loaded=--no-use"
+
+    teardown_tmpdir
+}

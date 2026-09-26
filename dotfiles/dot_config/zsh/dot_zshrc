@@ -42,8 +42,12 @@ setopt HIST_VERIFY SHARE_HISTORY
 [[ -f "${XDG_CONFIG_HOME}/shell/aliases" ]] && source "${XDG_CONFIG_HOME}/shell/aliases"
 [[ -f "${XDG_CONFIG_HOME}/shell/functions" ]] && source "${XDG_CONFIG_HOME}/shell/functions"
 
-# nvm
-source ${NVM_DIR}/nvm.sh --no-use
+# nvm: Homebrew installs nvm.sh under its prefix; NVM_DIR only holds versions.
+for nvm_sh in "${NVM_DIR}/nvm.sh" ${HOMEBREW_PREFIX:+"${HOMEBREW_PREFIX}/opt/nvm/nvm.sh"} \
+    /opt/homebrew/opt/nvm/nvm.sh /usr/local/opt/nvm/nvm.sh /home/linuxbrew/.linuxbrew/opt/nvm/nvm.sh; do
+    [[ -f "${nvm_sh}" ]] && { source "${nvm_sh}" --no-use; break; }
+done
+unset nvm_sh
 
 # 1Password
 op_sock="${HOME}/.1password/agent.sock"
