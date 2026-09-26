@@ -94,6 +94,11 @@ CHEZMOI_CONFIG_FILE="${CHEZMOI_CONFIG_DIR}/chezmoi.json"
 LOCAL_INSTALL_SSH_KEY_PATH="${HOME}/.ssh/id_ed25519"
 HAS_GUM=false
 command -v gum >/dev/null 2>&1 && [[ -t 1 ]] && HAS_GUM=true
+STEP_INDEX=0
+STEP_TOTAL=0
+# Follow-ups gathered during the run and shown together at the end, so they
+# are not lost in the scrollback of Homebrew and chezmoi output.
+declare -a NEXT_STEPS=()
 
 _header() {
     if [[ "${HAS_GUM}" == true ]]; then
@@ -109,6 +114,34 @@ _item() {
     else
         printf '  %s\n' "$1"
     fi
+}
+
+_check() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 76 "  $(printf '\xe2\x9c\x93') $1"
+    else
+        printf '  ok: %s\n' "$1"
+    fi
+}
+
+_cross() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 196 "  $(printf '\xe2\x9c\x97') $1"
+    else
+        printf '  failed: %s\n' "$1"
+    fi
+}
+
+_skip() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum style --foreground 244 "  - $1"
+    else
+        printf '  skipped: %s\n' "$1"
+    fi
+}
+
+_next_step() {
+    NEXT_STEPS+=("$1")
 }
 
 _box() {
@@ -138,6 +171,16 @@ begin_section() {
     _header "$1"
 }
 
+# Numbered section: "[2/7] SSH key" plus one line saying what the step is for.
+begin_step() {
+    local title="$1"
+    local purpose="$2"
+
+    STEP_INDEX=$((STEP_INDEX + 1))
+    begin_section "[${STEP_INDEX}/${STEP_TOTAL}] ${title}"
+    _item "${purpose}"
+}
+
 run_boxed() {
     local tmp_output=""
     local output=""
@@ -149,16 +192,21 @@ run_boxed() {
     fi
 
     tmp_output="$(mktemp "${TMPDIR:-/tmp}/install-output.XXXXXX")"
-    if ! "$@" > "${tmp_output}" 2>&1; then
-        status=$?
-    fi
-    output="$(cat "${tmp_output}")"
+    "$@" > "${tmp_output}" 2>&1 || status=$?
+    # Drop the "INFO " prefix: inside a step, plain progress needs no label,
+    # which leaves WARN/ERROR lines standing out.
+    output="$(sed 's/^INFO //' "${tmp_output}")"
     rm -f "${tmp_output}"
 
-    if [[ -n "${output}" ]]; then
+    if [[ "${status}" -eq 0 && -n "${output}" && "${output}" != *$'\n'* && "${output}" != WARN* ]]; then
+        _check "${output}"
+    elif [[ -n "${output}" ]]; then
         _box "${output}"
-    else
-        _box "Done."
+    fi
+    if [[ "${status}" -ne 0 ]]; then
+        _cross "Failed (exit ${status})"
+    elif [[ -z "${output}" ]]; then
+        _check "Nothing to change"
     fi
 
     return "${status}"
@@ -222,21 +270,18 @@ copy_and_list_local_example_files() {
 
         if [[ ! -e "${local_path}" && ! -L "${local_path}" ]]; then
             if [[ "${dry_run}" -eq 1 ]]; then
-                log_info " Would create ${local_path} from example ${target_path}"
+                log_info "Would create ${local_path} from ${target_path}"
             else
                 cp "${target_path}" "${local_path}"
-                log_info " Local config ${local_path} doesn't exist yet, creating one from example: ${local_path}"
+                log_info "Created ${local_path} from ${target_path}"
             fi
         fi
     done < <(find "${BASEDIR}/dotfiles" -type f -name '*.local.example' -print0)
 
-    review_message=$'Check these local config files:\n\n'
-    review_message+=$'  - ~/.config/git/config.local\n'
-    review_message+=$'  - ~/.config/zsh/.zshrc.local\n'
-    review_message+=$'  - ~/.ssh/config.local\n'
-    review_message+=$'  - ~/.config/1Password/ssh/agent.toml'
-
-    printf '%s\n' "${review_message}"
+    review_message='Review machine-specific settings in ~/.config/git/config.local,'
+    review_message+=' ~/.config/zsh/.zshrc.local, ~/.ssh/config.local,'
+    review_message+=' and ~/.config/1Password/ssh/agent.toml'
+    _next_step "${review_message}"
 }
 
 ensure_dotfiles_repo_link() {
@@ -264,6 +309,7 @@ ensure_chezmoi() {
 
     chezmoi_path="$(command -v chezmoi || true)"
     if [[ -n "${chezmoi_path}" ]]; then
+        log_info "chezmoi already installed at ${chezmoi_path}"
         return 0
     fi
 
@@ -303,6 +349,46 @@ log_pending_chezmoi_changes() {
 
     pending_count="$(printf '%s\n' "${status_output}" | awk 'NF { count++ } END { print count + 0 }')"
     log_info "chezmoi reports ${pending_count} pending change(s) before apply"
+    explain_overwrite_prompts "${status_output}"
+}
+
+# chezmoi stops to ask before replacing a file that was edited since it last
+# wrote it. Name those files up front so the question is expected, not a hang.
+explain_overwrite_prompts() {
+    local status_output="$1"
+    local edited=""
+    local arg=""
+    local tty_device="${INSTALL_TTY_DEVICE:-/dev/tty}"
+
+    # --dry-run still prompts, so only --force skips the questions.
+    for arg in ${chezmoi_args[@]+"${chezmoi_args[@]}"}; do
+        [[ "${arg}" == "--force" ]] && return 0
+    done
+
+    # Column 1 = changed on disk since chezmoi's last write; column 2 = apply
+    # would change it. Both set means chezmoi will prompt.
+    edited="$(printf '%s\n' "${status_output}" \
+        | awk 'substr($0, 1, 1) != " " && substr($0, 2, 1) != " " && length($0) > 3 { print "  ~/" substr($0, 4) }')"
+    [[ -n "${edited}" ]] || return 0
+
+    # chezmoi asks on /dev/tty; without a controlling terminal it cannot ask
+    # and the apply fails instead.
+    if ! ( : < "${tty_device}" ) 2>/dev/null; then
+        log_warn "These files were edited on this machine, and chezmoi cannot ask about them without a terminal:"
+        printf '%s\n' "${edited}" >&2
+        log_warn "Tip: re-run from a terminal, or pass -- --force to replace them with the repo versions"
+        return 0
+    fi
+
+    _box "These files were edited on this machine and differ from the repo:
+${edited}
+
+chezmoi will ask about each one. Choose:
+  diff           show what would change
+  overwrite      replace it with the repo version
+  all-overwrite  replace this and every remaining file
+  skip           keep your local version for now
+  quit           stop applying"
 }
 
 resolve_dir_path() {
@@ -334,8 +420,8 @@ run_chezmoi_apply() {
     log_warn "chezmoi apply failed; retrying without externals"
     "${apply_cmd[@]}" --exclude=externals
 
-    log_warn "Applied without externals. Register this host's SSH key with GitHub, then re-run:"
-    log_warn "  chezmoi --source ${CHEZMOI_SOURCE} apply"
+    log_warn "Applied without externals (usually a GitHub SSH key that isn't registered yet)"
+    _next_step "Add ~/.ssh/id_ed25519.pub to GitHub (https://github.com/settings/keys), then run: chezmoi --source ${CHEZMOI_SOURCE} apply"
 }
 
 apply_dotfiles() {
@@ -390,73 +476,91 @@ review_existing_files() {
 
 cd "${BASEDIR}"
 
-begin_section "Repository"
-_item "Running dotfiles repo link check"
-_item "Running ln -sfn ${BASEDIR} ${HOME}/.dotfiles when needed"
+run_mode="Installing"
+[[ "${dry_run}" -eq 1 ]] && run_mode="Dry run (nothing will be changed)"
+declare -a skipped_steps=()
+STEP_TOTAL=5
+if [[ "${run_system_bootstrap}" -eq 1 ]]; then
+    STEP_TOTAL=$((STEP_TOTAL + 1))
+else
+    skipped_steps+=("system packages")
+fi
+if [[ "${run_brew}" -eq 1 ]]; then
+    STEP_TOTAL=$((STEP_TOTAL + 1))
+else
+    skipped_steps+=("Homebrew")
+fi
+if [[ "${run_shell_setup}" -eq 1 ]]; then
+    STEP_TOTAL=$((STEP_TOTAL + 1))
+else
+    skipped_steps+=("login shell")
+fi
+
+_header "Dotfiles setup"
+_item "${run_mode} from ${BASEDIR}"
+if [[ "${#skipped_steps[@]}" -gt 0 ]]; then
+    _item "Skipping: $(printf '%s, ' "${skipped_steps[@]}" | sed 's/, $//')"
+fi
+if [[ "${VERBOSE}" -eq 0 ]]; then
+    _item "Use --verbose to stream full command output"
+fi
+
+begin_step "Repository link" "Point ~/.dotfiles at this checkout"
 run_boxed ensure_dotfiles_repo_link
 
-begin_section "SSH Key"
-_item "Running SSH key existence check"
-_item "Running ssh-keygen when the local install key is missing"
+begin_step "SSH key" "Make sure this machine has ${LOCAL_INSTALL_SSH_KEY_PATH} for GitHub and signing"
 run_boxed ensure_local_install_ssh_key
 
 if [[ "${run_system_bootstrap}" -eq 1 ]]; then
-    begin_section "System Bootstrap"
+    case "${OSTYPE}" in
+        darwin*) os_label="macOS" ;;
+        linux*) os_label="Linux" ;;
+        *) os_label="${OSTYPE}" ;;
+    esac
+    begin_step "System packages" "Run the ${os_label} bootstrap script (system tools and settings)"
     if [[ "${dry_run}" -eq 1 ]]; then
-        _box "Dry run: skipping the system bootstrap script."
+        _skip "Dry run: skipping the system bootstrap script."
     else
         case "${OSTYPE}" in
             darwin*)
-                _item "Running chmod +x scripts/bootstrap/macos/setup.sh"
-                _item "Running ./scripts/bootstrap/macos/setup.sh"
                 chmod +x scripts/bootstrap/macos/setup.sh
                 ./scripts/bootstrap/macos/setup.sh
                 ;;
             linux*)
-                _item "Running chmod +x scripts/bootstrap/linux/setup.sh"
-                _item "Running ./scripts/bootstrap/linux/setup.sh"
                 chmod +x scripts/bootstrap/linux/setup.sh
                 ./scripts/bootstrap/linux/setup.sh
                 ;;
         esac
-        _box "System bootstrap completed."
+        _check "System bootstrap complete"
     fi
 fi
 
 if [[ "${run_brew}" -eq 1 ]]; then
-    begin_section "Homebrew"
+    begin_step "Homebrew" "Install Homebrew if needed, then the packages in homebrew/Brewfile.*"
     if [[ "${dry_run}" -eq 1 ]]; then
-        _box "Dry run: skipping Homebrew install/update/bundle."
+        _skip "Dry run: skipping Homebrew install/update/bundle."
     else
-        _item "Running chmod +x homebrew/brew.sh"
-        _item "Running ./homebrew/brew.sh"
         chmod +x homebrew/brew.sh
         ./homebrew/brew.sh
-        _box "Homebrew setup completed."
+        _check "Homebrew packages up to date"
     fi
 fi
 
-begin_section "Configuration"
-_item "Running chezmoi availability check"
-_item "Running brew install chezmoi or the standalone installer when needed"
+begin_step "Dotfiles" "Install chezmoi if needed, then write the managed files into your home"
 run_boxed ensure_chezmoi
 
 # Remove invalid config so chezmoi apply can regenerate it from the template
 if [[ -f "${CHEZMOI_CONFIG_FILE}" ]] && command -v chezmoi >/dev/null 2>&1 \
     && ! chezmoi --source "${CHEZMOI_SOURCE}" dump-config &>/dev/null; then
-    _item "Running chezmoi --source ${CHEZMOI_SOURCE} dump-config"
     if [[ "${dry_run}" -eq 1 ]]; then
         _box "Would remove invalid ${CHEZMOI_CONFIG_FILE}."
     else
-        _item "Running rm -f ${CHEZMOI_CONFIG_FILE}"
         log_warn "Removing invalid ${CHEZMOI_CONFIG_FILE}"
         rm -f "${CHEZMOI_CONFIG_FILE}"
-        _box "Removed invalid ${CHEZMOI_CONFIG_FILE}."
+        _box "Removed invalid ${CHEZMOI_CONFIG_FILE}; chezmoi will regenerate it."
     fi
 fi
 
-_item "Running chezmoi status"
-_item "Running chezmoi apply"
 # Not boxed: chezmoi prompts before overwriting files changed since it last
 # wrote them, and capturing its output would hide the prompt while it waits.
 apply_dotfiles
@@ -471,7 +575,11 @@ fi
 
 zsh_path=""
 if [[ "${run_shell_setup}" -eq 1 ]]; then
+    begin_step "Login shell" "Make zsh your login shell"
     zsh_path="$(command -v zsh || true)"
+    if [[ -z "${zsh_path}" ]]; then
+        _skip "zsh is not installed"
+    fi
 fi
 if [[ -n "${zsh_path}" ]]; then
     if ! grep -qxF "${zsh_path}" /etc/shells; then
@@ -480,7 +588,7 @@ if [[ -n "${zsh_path}" ]]; then
         elif [[ "${dry_run}" -eq 1 ]]; then
             _item "Would add ${zsh_path} to /etc/shells"
         else
-            _item "Running printf '%s\\n' '${zsh_path}' | sudo tee -a /etc/shells >/dev/null"
+            _item "Adding ${zsh_path} to /etc/shells (may ask for your password)"
             bash -c "printf '%s\n' '${zsh_path}' | sudo tee -a /etc/shells >/dev/null"
         fi
     fi
@@ -488,22 +596,35 @@ if [[ -n "${zsh_path}" ]]; then
         if [[ "${dry_run}" -eq 1 ]]; then
             _item "Would run chsh -s ${zsh_path}"
         else
-            _item "Running chsh -s ${zsh_path}"
+            _item "Changing login shell to ${zsh_path} (may ask for your password)"
             chsh -s "${zsh_path}"
         fi
     fi
-    _box "Shell setup completed."
+    _check "Login shell is ${zsh_path}"
 fi
 
-begin_section "Finish"
-_item "Running local example file scan"
+begin_step "Local config" "Create machine-specific *.local files from their examples"
 run_boxed copy_and_list_local_example_files
 
-begin_section "Existing files"
+begin_step "Existing files" "List leftover dotfiles that the repo no longer manages"
 review_existing_files
 
 if [[ -n "${zsh_path:-}" && "${dry_run}" -eq 0 ]]; then
-    _box "Run 'exec -l \$SHELL' (or open a new terminal) to reload your shell"
+    _next_step "Reload your shell: exec -l \$SHELL (or open a new terminal)"
 fi
 
-printf "\nDone.\n"
+printf '\n'
+if [[ "${dry_run}" -eq 1 ]]; then
+    _header "Done. Dry run finished; nothing was changed."
+else
+    _header "Done. Setup finished in $((SECONDS / 60))m $((SECONDS % 60))s."
+fi
+if [[ "${#NEXT_STEPS[@]}" -gt 0 ]]; then
+    next_steps_text="Next steps:"
+    step_number=0
+    for next_step in "${NEXT_STEPS[@]}"; do
+        step_number=$((step_number + 1))
+        next_steps_text+=$'\n'"  ${step_number}. ${next_step}"
+    done
+    _box "${next_steps_text}"
+fi
