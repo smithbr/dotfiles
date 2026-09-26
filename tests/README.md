@@ -102,6 +102,12 @@ This is process-level isolation, not a real container or VM.
 - Verifies bulk archival preserves contents and symlinks, excludes protected paths, and is safe to repeat
 - Checks closed stdin, invalid selections, failed inventory queries, alternate destinations, and installer report integration
 
+[`home_audit.bats`](/Users/bran/.dotfiles/tests/home_audit.bats)
+
+- Runs `home-audit` against a sandboxed home, a fixture xdg-ninja database, and a stubbed `chezmoi`
+- Verifies JUNK/LEFTOVER/MOVE/REVIEW/KEEP classification, environment-redirect detection, and `--days`/`--all`
+- Checks that the audited home is left untouched and that missing data sources are reported
+
 [`install.bats`](/Users/bran/.dotfiles/tests/install.bats)
 
 - Tests `install.sh` argument parsing
