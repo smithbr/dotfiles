@@ -352,6 +352,42 @@ apply_dotfiles() {
     log_info "chezmoi apply complete"
 }
 
+review_existing_files() {
+    local index=0
+    local review_only="${dry_run}"
+    local -a review_args=(--source "${CHEZMOI_SOURCE}")
+
+    if ! command -v chezmoi >/dev/null 2>&1; then
+        log_warn "File review unavailable until chezmoi is installed"
+        return
+    fi
+    while [[ "${index}" -lt "${#chezmoi_args[@]}" ]]; do
+        case "${chezmoi_args[index]}" in
+            -n|--dry-run|--dry-run=true)
+                review_only=1
+                ;;
+            -D|--destination)
+                index=$((index + 1))
+                if [[ "${index}" -ge "${#chezmoi_args[@]}" ]]; then
+                    log_warn "File review skipped: missing destination argument"
+                    return
+                fi
+                review_args+=(--destination "${chezmoi_args[index]}")
+                ;;
+            --destination=*)
+                review_args+=(--destination "${chezmoi_args[index]#*=}")
+                ;;
+        esac
+        index=$((index + 1))
+    done
+    if [[ "${review_only}" -eq 0 && -t 0 && -t 1 ]]; then
+        review_args+=(--cleanup)
+    fi
+    if ! bash "${BASEDIR}/scripts/chezmoi-abandoned.sh" "${review_args[@]}"; then
+        log_warn "File review incomplete; inspect the errors above before cleaning up"
+    fi
+}
+
 cd "${BASEDIR}"
 
 begin_section "Repository"
@@ -462,6 +498,9 @@ fi
 begin_section "Finish"
 _item "Running local example file scan"
 run_boxed copy_and_list_local_example_files
+
+begin_section "Existing files"
+review_existing_files
 
 if [[ -n "${zsh_path:-}" && "${dry_run}" -eq 0 ]]; then
     _box "Run 'exec -l \$SHELL' (or open a new terminal) to reload your shell"
