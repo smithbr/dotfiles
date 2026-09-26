@@ -909,3 +909,81 @@ MOCK
     assert_output --partial "Dry run: skipping the system bootstrap script."
     assert_output --partial "Dry run: skipping Homebrew install/update/bundle."
 }
+
+# ---------------------------------------------------------------------------
+# explain_overwrite_prompts
+# ---------------------------------------------------------------------------
+
+@test "run_boxed preserves failures with collected and streamed output" {
+    for verbose in 0 1; do
+        run bash -c '
+            set -euo pipefail
+            VERBOSE="$1"
+            _box() { printf "%s\n" "$1"; }
+            _check() { printf "ok: %s\n" "$1"; }
+            _cross() { printf "failed: %s\n" "$1"; }
+            eval "$(sed -n '\''/^run_boxed() {$/,/^}$/p'\'' "$PROJECT_ROOT/install.sh")"
+            fail_command() { printf "command failed\n"; return 7; }
+            run_boxed fail_command
+        ' _ "${verbose}"
+        assert_equal "${status}" 7
+        assert_output --partial "command failed"
+        refute_output --partial "ok:"
+    done
+}
+
+# Run the shipped explain_overwrite_prompts against a canned `chezmoi status`.
+# INSTALL_TTY_DEVICE picks whether a terminal is available to chezmoi.
+run_explain() {
+    local tty_device="$1" status_output="$2"
+    shift 2
+
+    run env INSTALL_TTY_DEVICE="${tty_device}" bash -c "
+        set -euo pipefail
+        _box() { printf 'BOX:%s\n' \"\$1\"; }
+        log_warn() { printf 'WARN:%s\n' \"\$*\"; }
+        chezmoi_args=(\"\${@:2}\")
+        $(sed -n '/^explain_overwrite_prompts() {/,/^}/p' "${PROJECT_ROOT}/install.sh")
+        explain_overwrite_prompts \"\$1\"
+    " bash "${status_output}" "$@"
+}
+
+@test "explain_overwrite_prompts names locally edited files before chezmoi asks" {
+    local status_output=$' R backup-agent-symlinks.sh\nMM .ssh/config\n M .zshrc\nMM Library/Application Support/Code/User/settings.json'
+
+    run_explain /dev/null "${status_output}"
+    assert_success
+    assert_output --partial "BOX:These files were edited on this machine"
+    assert_output --partial "  ~/.ssh/config"
+    assert_output --partial "  ~/Library/Application Support/Code/User/settings.json"
+    assert_output --partial "overwrite      replace it with the repo version"
+    refute_output --partial ".zshrc"
+    refute_output --partial "backup-agent-symlinks.sh"
+}
+
+@test "explain_overwrite_prompts stays quiet when nothing was edited locally" {
+    run_explain /dev/null $' M .zshrc\n A .config/new'
+    assert_success
+    assert_output ""
+}
+
+@test "explain_overwrite_prompts stays quiet when --force skips the questions" {
+    run_explain /dev/null "MM .ssh/config" --force
+    assert_success
+    assert_output ""
+}
+
+@test "explain_overwrite_prompts still explains during a dry run" {
+    run_explain /dev/null "MM .ssh/config" --dry-run
+    assert_success
+    assert_output --partial "BOX:These files were edited"
+}
+
+@test "explain_overwrite_prompts gives a tip when no terminal can answer" {
+    run_explain "${TEST_TMPDIR}/missing-tty" "MM .ssh/config"
+    assert_success
+    assert_output --partial "WARN:These files were edited on this machine, and chezmoi cannot ask"
+    assert_output --partial "~/.ssh/config"
+    assert_output --partial "pass -- --force"
+    refute_output --partial "BOX:"
+}
