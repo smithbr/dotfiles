@@ -13,6 +13,7 @@ theme = dark:Catppuccin Frappe,light:Catppuccin Latte
 font-family = Jetbrains Mono Nerd Font
 font-size = 14
 font-thicken = false
+minimum-contrast = 3
 window-theme = system
 window-height = 40
 window-width = 110
