@@ -113,9 +113,21 @@ _item() {
 
 _box() {
     local content="$1"
+    local columns=0
+    local longest=0
+    local -a width_args=()
 
     if [[ "${HAS_GUM}" == true ]]; then
-        printf '%s' "${content}" | gum style --border rounded --border-foreground 240 --margin "0 0" --padding "0 1"
+        # gum style never wraps on its own, so a line wider than the terminal
+        # gets soft-wrapped by the terminal and tears the border apart. Cap the
+        # box (content + padding; the border adds 2) to the terminal width, but
+        # only when needed so short messages keep a snug box.
+        columns="${COLUMNS:-$(tput cols 2>/dev/null || printf '80')}"
+        longest="$(printf '%s\n' "${content}" | awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }')"
+        if (( longest + 4 > columns && columns > 12 )); then
+            width_args=(--width "$((columns - 2))")
+        fi
+        printf '%s' "${content}" | gum style --border rounded --border-foreground 240 --margin "0 0" --padding "0 1" ${width_args[@]+"${width_args[@]}"}
     else
         printf '%s\n' "${content}" | sed 's/^/  /'
     fi
