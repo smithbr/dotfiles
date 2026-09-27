@@ -56,6 +56,7 @@ Unrecognized arguments and everything after `--` are passed to `stow` through `s
 ## Keeping the workflow accurate
 
 - Keep `README.md` focused on installation and discovery. Document installer details and maintenance rules here, and test-suite details in `tests/README.md`; update the corresponding guidance when behavior changes.
+- When behavior changes, also update the notes in Bran's Obsidian vault (`~/Obsidian/blife`) that describe this repo, starting with `Resources/dotfiles.md`; find the rest with `grep -rl dotfiles ~/Obsidian/blife/{Tasks,Projects,Areas,Resources,People}`, and follow the vault's own `AGENTS.md` when editing there.
 - Keep CI and local validation aligned through `tests/run_tests.sh`. If test discovery or lint coverage changes, verify that the intended files and tests actually run.
 
 ## Existing files and cleanup
