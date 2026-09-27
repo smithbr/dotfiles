@@ -26,6 +26,7 @@ USE_OP_FLAG=false
 USE_GH_FLAG=false
 COMMAND=""
 KEY_NAME=""
+TEMP_FILES=()
 
 HAS_GUM=false
 command -v gum >/dev/null 2>&1 && [[ -t 1 ]] && HAS_GUM=true
@@ -111,6 +112,12 @@ _spin() {
 }
 
 # --- core helpers ---
+
+cleanup_temp_files() {
+    if [[ "${#TEMP_FILES[@]}" -gt 0 ]]; then
+        rm -f "${TEMP_FILES[@]}"
+    fi
+}
 
 usage() {
     local help_text
@@ -850,27 +857,28 @@ op_list_keys() {
     vault="$(resolve_onepassword_vault)"
 
     op item list --categories "SSH Key" --vault "${vault}" --format=json 2>/dev/null \
-        | python3 -c "
+        | python3 -c '
 import json
 import subprocess
 import sys
 
+vault = sys.argv[1]
 raw = sys.stdin.read().strip()
 if not raw:
     sys.exit(0)
 
 for item in json.loads(raw):
     detail = json.loads(subprocess.check_output([
-        'op', 'item', 'get', item['id'], '--vault', '${vault}', '--format=json'
+        "op", "item", "get", item["id"], "--vault", vault, "--format=json"
     ], stderr=subprocess.DEVNULL))
-    blob = ''
-    for field in detail.get('fields', []):
-        if field.get('id') == 'public_key':
-            parts = field.get('value', '').split()
-            blob = parts[1] if len(parts) > 1 else field.get('value', '')
+    blob = ""
+    for field in detail.get("fields", []):
+        if field.get("id") == "public_key":
+            parts = field.get("value", "").split()
+            blob = parts[1] if len(parts) > 1 else field.get("value", "")
             break
-    print(f\"{item['id']}\t{item['title']}\t{blob}\")
-"
+    print("\t".join([item["id"], item["title"], blob]))
+' "${vault}"
 }
 
 remove_local_key_files() {
@@ -1036,7 +1044,6 @@ generate_onepassword_key() {
     local key_path="$1"
     local title="$2"
     local public_key=""
-    local private_key=""
     local vault=""
     local create_output=""
 
@@ -1066,19 +1073,13 @@ generate_onepassword_key() {
 
     [[ -n "${public_key}" ]] || die "1Password did not return a public key"
 
-    if ! private_key="$(
-        printf '%s\n' "${create_output}" \
-            | python3 -c "import json, sys; data=json.load(sys.stdin); [print(field['value']) for field in data.get('fields', []) if field.get('id') == 'private_key']"
-    )"; then
-        die "1Password returned an unreadable response while extracting the private key"
-    fi
-
-    [[ -n "${private_key}" ]] || die "1Password did not return a private key"
-
-    printf '%s\n' "${private_key}" > "${key_path}"
-    chmod 600 "${key_path}"
+    # The private key stays in 1Password and is served by its SSH agent; only
+    # the public half lands on disk so IdentityFile can select it.
     printf '%s\n' "${public_key}" > "${key_path}.pub"
-    ssh-add "${key_path}"
+    chmod 644 "${key_path}.pub"
+    if ! op_agent_socket >/dev/null 2>&1; then
+        _warn "1Password SSH agent socket not found; enable the SSH agent in 1Password to use this key"
+    fi
 }
 
 should_use_1password() {
@@ -1663,6 +1664,7 @@ cleanup_command() {
 
     if [[ -f "${known_hosts_path}" ]]; then
         known_hosts_filtered_tmp="$(mktemp "${TMPDIR:-/tmp}/sshkey-known-hosts-filtered.XXXXXX")"
+        TEMP_FILES+=("${known_hosts_filtered_tmp}")
         while IFS= read -r line || [[ -n "${line}" ]]; do
             [[ -n "${line//[[:space:]]/}" ]] || continue
 
@@ -1678,6 +1680,7 @@ cleanup_command() {
         done < "${known_hosts_path}"
 
         known_hosts_tmp="$(mktemp "${TMPDIR:-/tmp}/sshkey-known-hosts.XXXXXX")"
+        TEMP_FILES+=("${known_hosts_tmp}")
         awk 'NF && !seen[$0]++' "${known_hosts_filtered_tmp}" > "${known_hosts_tmp}"
         rm -f "${known_hosts_filtered_tmp}"
 
@@ -1884,28 +1887,40 @@ main() {
     local key_path=""
     local resolved_key_name=""
 
+    trap cleanup_temp_files EXIT
+
     load_config
     parse_args "$@"
     if command_uses_profile; then
         resolve_selected_profile
     fi
 
+    # Names from the config file or SSHKEY_GITHUB_KEY_NAME become paths under
+    # ~/.ssh, so they get the same validation as a name on the command line.
+    case "${COMMAND}" in
+        gh|create|delete)
+            resolved_key_name="$(resolved_key_name_for_command)"
+            validate_key_name "${resolved_key_name}"
+            key_path="$(ssh_key_path "${resolved_key_name}")"
+            ;;
+        doctor)
+            resolved_key_name="$(resolved_profile_key_name)"
+            validate_key_name "${resolved_key_name}"
+            ;;
+    esac
+
     case "${COMMAND}" in
         profiles)
             profiles_command
             ;;
         gh)
-            resolved_key_name="$(resolved_key_name_for_command)"
-            key_path="$(ssh_key_path "${resolved_key_name}")"
             create_key_command "github" "${resolved_key_name}" "${key_path}"
             ;;
         create)
-            resolved_key_name="$(resolved_key_name_for_command)"
-            key_path="$(ssh_key_path "${resolved_key_name}")"
             create_key_command "custom" "${resolved_key_name}" "${key_path}"
             ;;
         delete)
-            delete_key_command "$(resolved_key_name_for_command)"
+            delete_key_command "${resolved_key_name}"
             ;;
         list)
             list_command

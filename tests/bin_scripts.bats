@@ -2811,6 +2811,125 @@ MOCK
     refute_output --partial "Bad public key permissions"
 }
 
+# sshkey: a mock `op` that records each call and answers with fixed JSON.
+sshkey_mock_op() {
+    local python_path=""
+
+    python_path="$(command -v python3 || true)"
+    [[ -n "${python_path}" ]] || skip "python3 is required"
+    ln -sf "${python_path}" "${BIN_SANDBOX}/python3"
+
+    cat > "${BIN_SANDBOX}/op" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${TEST_TMPDIR}/op.log"
+for arg in "$@"; do
+    printf '[%s]' "${arg}" >> "${TEST_TMPDIR}/op.args"
+done
+printf '\n' >> "${TEST_TMPDIR}/op.args"
+case "${1:-} ${2:-}" in
+    "account list") exit 0 ;;
+    "vault get") exit 0 ;;
+    "item list") printf '[{"id":"item1","title":"work key"}]\n' ;;
+    "item get") printf '{"fields":[{"id":"public_key","value":"ssh-ed25519 OPBLOB x"}]}\n' ;;
+    "item create")
+        printf '{"fields":[{"id":"public_key","value":"ssh-ed25519 OPBLOB x"},'
+        printf '{"id":"private_key","value":"-----BEGIN OPENSSH PRIVATE KEY-----"}]}\n'
+        ;;
+    *) exit 1 ;;
+esac
+MOCK
+    cat > "${BIN_SANDBOX}/ssh-add" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${TEST_TMPDIR}/ssh-add.log"
+exit 0
+MOCK
+    chmod +x "${BIN_SANDBOX}/op" "${BIN_SANDBOX}/ssh-add"
+}
+
+@test "sshkey rejects a config key_name that escapes ~/.ssh" {
+    mkdir -p "${TEST_TMPDIR}/home/.config/sshkey"
+    cat > "${TEST_TMPDIR}/home/.config/sshkey/config.toml" <<'EOF'
+default_profile = "work"
+
+[profiles.work]
+key_name = "../escaped"
+storage = "local"
+EOF
+    cat > "${BIN_SANDBOX}/ssh-keygen" <<'MOCK'
+#!/usr/bin/env bash
+printf 'ssh-keygen %s\n' "$*" >> "${TEST_TMPDIR}/ssh-keygen.log"
+MOCK
+    chmod +x "${BIN_SANDBOX}/ssh-keygen"
+
+    for command in "create -y" "delete -y" "gh -y" "doctor"; do
+        # shellcheck disable=SC2086 # split the command and its flag
+        run env HOME="${TEST_TMPDIR}/home" XDG_CONFIG_HOME="${TEST_TMPDIR}/home/.config" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+            "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" ${command}
+        assert_failure
+        assert_output --partial "Key name must not contain /"
+    done
+    [[ ! -e "${TEST_TMPDIR}/ssh-keygen.log" ]]
+    [[ ! -e "${TEST_TMPDIR}/home/escaped" ]]
+}
+
+@test "sshkey rejects an unsafe SSHKEY_GITHUB_KEY_NAME" {
+    run env HOME="${TEST_TMPDIR}/home" SSHKEY_GITHUB_KEY_NAME="../../outside" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" gh -p personal -y
+    assert_failure
+    assert_output --partial "Key name must not contain /"
+}
+
+@test "sshkey 1Password create keeps the private key out of ~/.ssh" {
+    sshkey_mock_op
+    mkdir -p "${TEST_TMPDIR}/home"
+
+    run env HOME="${TEST_TMPDIR}/home" USER="sandbox-user" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" create opkey -1p -y
+    assert_success
+    assert_output --partial "saved public key to ${TEST_TMPDIR}/home/.ssh/opkey.pub"
+    [[ ! -e "${TEST_TMPDIR}/home/.ssh/opkey" ]]
+    run cat "${TEST_TMPDIR}/home/.ssh/opkey.pub"
+    assert_output "ssh-ed25519 OPBLOB x"
+    run grep -rF "PRIVATE KEY" "${TEST_TMPDIR}/home"
+    assert_failure
+}
+
+@test "sshkey passes a quoted vault name to op as one argument" {
+    sshkey_mock_op
+    mkdir -p "${TEST_TMPDIR}/home"
+
+    run env HOME="${TEST_TMPDIR}/home" SSHKEY_1PASSWORD_VAULT="Bob's '], 'x" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" list -1p
+    assert_success
+    assert_output --partial "work key"
+    run grep -F "[item][get][item1][--vault][Bob's '], 'x][--format=json]" "${TEST_TMPDIR}/op.args"
+    assert_success
+}
+
+@test "sshkey cleanup removes its known_hosts temp files when a step fails" {
+    mkdir -p "${TEST_TMPDIR}/home/.ssh" "${TEST_TMPDIR}/tmp"
+    chmod 700 "${TEST_TMPDIR}/home/.ssh"
+    printf 'example.com ssh-ed25519 AAAA\nexample.com ssh-ed25519 AAAA\n' > "${TEST_TMPDIR}/home/.ssh/known_hosts"
+    chmod 644 "${TEST_TMPDIR}/home/.ssh/known_hosts"
+    cat > "${BIN_SANDBOX}/ssh-add" <<'MOCK'
+#!/usr/bin/env bash
+exit 1
+MOCK
+    cat > "${BIN_SANDBOX}/mv" <<'MOCK'
+#!/usr/bin/env bash
+exit 1
+MOCK
+    chmod +x "${BIN_SANDBOX}/ssh-add" "${BIN_SANDBOX}/mv"
+
+    run env HOME="${TEST_TMPDIR}/home" TMPDIR="${TEST_TMPDIR}/tmp" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" cleanup -y
+    assert_failure
+    run find "${TEST_TMPDIR}/tmp" -name 'sshkey-known-hosts*'
+    assert_success
+    assert_output ""
+}
+
 # ph-agent-setup: mock the identity and platform so each step runs in the sandbox.
 agent_setup_sandbox() {
     local user="${1}"
