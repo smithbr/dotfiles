@@ -491,7 +491,7 @@ MOCK
         [[ -f "${HOME}/.ssh/id_ed25519" ]] || { echo "missing private key"; exit 1; }
         [[ -f "${HOME}/.ssh/id_ed25519.pub" ]] || { echo "missing public key"; exit 1; }
         grep -qx "brew install stow" "${TEST_LOG}" || { echo "missing brew install stow"; exit 1; }
-        grep -q "^stow --dir '"${PROJECT_ROOT}"'/stow --target ${HOME} --no-folding --restow .* --adopt common " "${TEST_LOG}" || {
+        grep -q "^stow --dir '"${PROJECT_ROOT}"'/stow --target ${HOME} --no-folding --restow .* --adopt common\( \|$\)" "${TEST_LOG}" || {
             echo "missing stow run"
             cat "${TEST_LOG}"
             exit 1

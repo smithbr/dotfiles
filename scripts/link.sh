@@ -5,6 +5,8 @@
 #                           repo, so editing the live file edits the repo.
 #   seed/common, seed/<os>  copied once when missing, then owned by the app
 #                           (docker and gh rewrite these themselves).
+#   editors/<name>          one copy of shared editor settings, linked into each
+#                           editor's user directory listed in editor_dirs.
 #   AGENT_LINKS             symlinks into the private agents checkout, which is
 #                           cloned into ~/.config/agents and refreshed weekly.
 #
@@ -39,6 +41,23 @@ AGENT_LINKS=(
     ".cursor/skills|skills"
 )
 
+# destination directory|directory under editors/, one line per editor. Every
+# file in the editors/ directory is linked into the destination directory.
+editor_dirs() {
+    case "$(platform)" in
+        darwin)
+            printf '%s\n' \
+                "Library/Application Support/Code/User|code" \
+                "Library/Application Support/Cursor/User|code"
+            ;;
+        linux)
+            printf '%s\n' \
+                ".config/Code/User|code" \
+                ".config/Cursor/User|code"
+            ;;
+    esac
+}
+
 # Directories that hold credentials or private agent state.
 PRIVATE_DIRS=(.ssh .claude .config/glow)
 
@@ -47,7 +66,7 @@ usage() {
 Usage: link.sh [OPTIONS] [COMMAND] [-- STOW_ARGS...]
 
 Commands:
-  apply     Link packages, agent links and seed files (default)
+  apply     Link packages, editor settings, agent links and seed files (default)
   managed   Print every destination path the repo owns
   status    Report missing, replaced, foreign and broken links
 
@@ -299,6 +318,50 @@ link_agents() {
     done
 }
 
+# destination|source for every shared editor file on this platform.
+editor_links() {
+    local entry dir name relative
+    while IFS= read -r entry; do
+        dir="${entry%%|*}"
+        name="${entry#*|}"
+        [[ -d "${REPO}/editors/${name}" ]] || continue
+        while IFS= read -r relative; do
+            printf '%s/%s|%s/editors/%s/%s\n' "${dir}" "${relative}" "${REPO}" "${name}" "${relative}"
+        done < <(package_files editors "${name}")
+    done < <(editor_dirs)
+}
+
+# Same rules as the stow packages: an identical copy is replaced, anything
+# else is backed up first. A link into the repo's old stow/ copy of the file
+# is ours and is replaced quietly.
+link_editors() {
+    local entry relative target source
+    while IFS= read -r entry; do
+        relative="${entry%%|*}"
+        source="${entry#*|}"
+        target="${DEST}/${relative}"
+        is_linked "${target}" "${source}" && continue
+
+        if [[ -L "${target}" && "$(readlink "${target}")" == */stow/"$(platform)/${relative}" ]]; then
+            [[ "${DRY_RUN}" -eq 0 ]] && rm -f "${target}"
+        elif [[ -f "${target}" && ! -L "${target}" ]] && cmp -s "${target}" "${source}"; then
+            [[ "${DRY_RUN}" -eq 0 ]] && rm -f "${target}"
+        elif [[ -e "${target}" || -L "${target}" ]]; then
+            if [[ "${DRY_RUN}" -eq 1 ]]; then
+                printf 'Would back up %s before linking\n' "${target}"
+                continue
+            fi
+            backup_path "${target}"
+        fi
+        if [[ "${DRY_RUN}" -eq 1 ]]; then
+            printf 'Would link %s -> %s\n' "${target}" "${source}"
+            continue
+        fi
+        mkdir -p "$(dirname "${target}")"
+        ln -s "${source}" "${target}"
+    done < <(editor_links)
+}
+
 copy_seeds() {
     local package relative target
     while IFS= read -r package; do
@@ -336,31 +399,40 @@ print_managed() {
             done < <(package_files "${kind}" "${package}")
         done < <(packages_in "${kind}")
     done
+    while IFS= read -r entry; do
+        printf '%s/%s\n' "${DEST}" "${entry%%|*}"
+    done < <(editor_links)
     for entry in "${AGENT_LINKS[@]}"; do
         printf '%s/%s\n' "${DEST}" "${entry%%|*}"
     done
     printf '%s/.config/agents\n' "${DEST}"
 }
 
+print_link_state() {
+    local target="$1" source="$2"
+    if is_linked "${target}" "${source}"; then
+        return 0
+    elif [[ -L "${target}" ]]; then
+        printf 'foreign %s\n' "${target}"
+    elif [[ -e "${target}" ]]; then
+        printf 'replaced %s\n' "${target}"
+    else
+        printf 'missing %s\n' "${target}"
+    fi
+}
+
 # One line per problem: <state> <path>. States: missing, replaced (a real file
 # where a link belongs), foreign (a link to somewhere else), broken.
 print_status() {
-    local package relative target source entry link_target
+    local package relative target entry link_target
     while IFS= read -r package; do
         while IFS= read -r relative; do
-            target="${DEST}/${relative}"
-            source="${REPO}/stow/${package}/${relative}"
-            if is_linked "${target}" "${source}"; then
-                continue
-            elif [[ -L "${target}" ]]; then
-                printf 'foreign %s\n' "${target}"
-            elif [[ -e "${target}" ]]; then
-                printf 'replaced %s\n' "${target}"
-            else
-                printf 'missing %s\n' "${target}"
-            fi
+            print_link_state "${DEST}/${relative}" "${REPO}/stow/${package}/${relative}"
         done < <(package_files stow "${package}")
     done < <(packages_in stow)
+    while IFS= read -r entry; do
+        print_link_state "${DEST}/${entry%%|*}" "${entry#*|}"
+    done < <(editor_links)
 
     for entry in "${AGENT_LINKS[@]}"; do
         target="${DEST}/${entry%%|*}"
@@ -399,6 +471,7 @@ main() {
         status) print_status ;;
         apply)
             run_stow
+            link_editors
             sync_agents_repo
             link_agents
             copy_seeds
