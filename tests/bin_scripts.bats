@@ -3089,10 +3089,13 @@ KEYS
     assert_output --partial "/usr/local/bin/ph-agent-setup"
     assert_output --partial "/usr/local/bin/vault-lint"
     assert_output --partial "/usr/local/bin/vault-mv"
+    assert_output --partial "/usr/local/bin/vault-cp"
     run grep -c -- "-o agent" "${TEST_TMPDIR}/calls"
     assert_output "1"
     run cat "${TEST_TMPDIR}/root/usr/local/bin/vault-mv"
     assert_output --partial 'exec /usr/local/bin/ph-agent-setup mv "$@"'
+    run cat "${TEST_TMPDIR}/root/usr/local/bin/vault-cp"
+    assert_output --partial 'exec /usr/local/bin/ph-agent-setup cp "$@"'
 }
 
 @test "ph-agent-setup schedule keeps exactly one tagged cron entry" {
@@ -3156,7 +3159,7 @@ MOCK
     touch "${TEST_TMPDIR}/home/blife/_inbox/scan.pdf"
     export PH_AGENT_BIN_DIR="${TEST_TMPDIR}/rootbin"
     local tool home="${TEST_TMPDIR}/home"
-    for tool in vault-lint vault-mv; do
+    for tool in vault-lint vault-mv vault-cp; do
         printf '#!/usr/bin/env bash\n' > "${PH_AGENT_BIN_DIR}/${tool}"
         chmod +x "${PH_AGENT_BIN_DIR}/${tool}"
     done
@@ -3187,6 +3190,7 @@ MOCK
     refute_output --partial "find"
     refute_output --partial "Bash(cp"
     refute_output --partial "Bash(mv"
+    assert_output --partial "Bash(vault-cp *)"
     run jq -r '.permissions.allow[] | select(test("^(Write|Edit)"))' "${TEST_TMPDIR}/settings.json"
     assert_output "$(printf 'Write(/%s/blife/**)\nEdit(/%s/blife/**)' "${home}" "${home}")"
     run jq -r '.permissions.deny[]' "${TEST_TMPDIR}/settings.json"
@@ -3255,5 +3259,40 @@ MOCK
     assert_success
     assert [ ! -e "${vault}/_inbox/scan.pdf" ]
     run cat "${vault}/_attachments/day/scan.pdf"
+    assert_output "scan"
+}
+
+@test "ph-agent-setup cp copies a file within the vault and nowhere else" {
+    agent_setup_sandbox agent
+    local vault="${TEST_TMPDIR}/home/blife"
+    mkdir -p "${vault}/_attachments/_raw" "${vault}/_attachments/day" "${vault}/.claude" "${TEST_TMPDIR}/home/.local/bin"
+    printf 'scan\n' > "${vault}/_attachments/_raw/scan.pdf"
+    printf 'taken\n' > "${vault}/_attachments/day/taken.pdf"
+    printf 'secret\n' > "${TEST_TMPDIR}/outside"
+    ln -s "${TEST_TMPDIR}/outside" "${vault}/_attachments/_raw/link.pdf"
+
+    run_agent_setup cp "${vault}/_attachments/_raw/scan.pdf" "${TEST_TMPDIR}/home/.local/bin/vault-lint"
+    assert_failure
+    assert_output --partial "outside the vault"
+    run_agent_setup cp "${vault}/_attachments/_raw/scan.pdf" "${vault}/.claude/settings.json"
+    assert_failure
+    run_agent_setup cp "${vault}/_attachments/_raw/scan.pdf" "${vault}/_attachments/day/taken.pdf"
+    assert_failure
+    assert_output --partial "destination exists"
+    run_agent_setup cp "${vault}/_attachments/_raw/link.pdf" "${vault}/_attachments/day/"
+    assert_failure
+    assert_output --partial "not a regular file"
+    run_agent_setup cp "${TEST_TMPDIR}/outside" "${vault}/_attachments/day/"
+    assert_failure
+    assert_output --partial "source is outside the vault"
+    assert [ ! -e "${TEST_TMPDIR}/home/.local/bin/vault-lint" ]
+    run cat "${vault}/_attachments/day/taken.pdf"
+    assert_output "taken"
+
+    run_agent_setup cp "${vault}/_attachments/_raw/scan.pdf" "${vault}/_attachments/day/scan-2026.pdf"
+    assert_success
+    run cat "${vault}/_attachments/_raw/scan.pdf"
+    assert_output "scan"
+    run cat "${vault}/_attachments/day/scan-2026.pdf"
     assert_output "scan"
 }
