@@ -80,7 +80,7 @@ stat_mode() {
     [ -d "${DEST}/.config/git" ] && [ ! -L "${DEST}/.config/git" ]
 }
 
-@test "shares one editor settings file between the platform paths" {
+@test "shares one editor settings file between Code and Cursor, and only where the persona wants it" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     run_link
     assert_success
@@ -93,12 +93,12 @@ stat_mode() {
     [ -d "${DEST}/Library/Application Support/Code/User" ] && [ ! -L "${DEST}/Library/Application Support/Code/User" ]
     [ ! -e "${DEST}/.config/Code" ]
 
+    # Linux defaults to the server persona, which takes no editor settings.
     DEST="${TEST_TMPDIR}/linux-home"
     DOTFILES_OS=linux run_link
     assert_success
-    for app in Code Cursor; do
-        [ "$(readlink "${DEST}/.config/${app}/User/keybindings.json")" = "${PROJECT_ROOT}/editors/code/keybindings.json" ]
-    done
+    [ ! -e "${DEST}/.config/Code" ]
+    [ ! -e "${DEST}/.config/Cursor" ]
     [ ! -e "${DEST}/Library" ]
     [ ! -e "${DEST}/.config/docker" ]
 }
@@ -489,4 +489,122 @@ plant_old_links() {
     refute_output --partial "Backed up"
     [ "$(readlink "${DEST}/.keep")" = "../fixture/stow/common/.keep" ]
     [ ! -e "${DEST}/.local/state/dotfiles/clobbered" ]
+}
+
+# ---------------------------------------------------------------------------
+# Personas
+# ---------------------------------------------------------------------------
+
+persona_state() {
+    cat "${DEST}/.local/state/dotfiles/persona"
+}
+
+@test "lists the personas this OS can use" {
+    run_link personas
+    assert_success
+    assert_line --partial "home"$'\t'
+    assert_line --partial "work"$'\t'
+    DOTFILES_OS=linux run_link personas
+    assert_success
+    refute_line --partial "home"$'\t'
+    assert_line --partial "server"$'\t'
+    assert_line --partial "sandbox"$'\t'
+}
+
+@test "uses the OS default until a persona is chosen, and says so" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    run_link persona
+    assert_output "home default"
+    DOTFILES_OS=linux run_link persona
+    assert_output "server default"
+
+    run_link
+    assert_success
+    assert_output --partial "No persona chosen"
+    [ ! -e "${DEST}/.local/state/dotfiles/persona" ]
+}
+
+@test "a chosen persona is saved privately and reused by later runs" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    run_link --persona work
+    assert_success
+    assert_output --partial "Saved persona work"
+    [ "$(persona_state)" = "work" ]
+    [ "$(stat_mode "${DEST}/.local/state/dotfiles")" = "700" ]
+
+    run_link persona
+    assert_output "work saved"
+    run_link
+    assert_success
+    refute_output --partial "No persona chosen"
+    refute_output --partial "Saved persona"
+}
+
+@test "the persona from the environment is used and saved like the flag" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    DOTFILES_PERSONA=sandbox run_link persona
+    assert_output "sandbox env"
+    DOTFILES_PERSONA=sandbox run_link
+    assert_success
+    [ "$(persona_state)" = "sandbox" ]
+    # The flag wins over the environment.
+    DOTFILES_PERSONA=sandbox run_link --persona work persona
+    assert_output "work flag"
+}
+
+@test "a dry run never saves the persona" {
+    run_link --dry-run --persona work
+    assert_success
+    [ ! -e "${DEST}/.local/state/dotfiles/persona" ]
+}
+
+@test "a persona without agents or editors links only the shared files" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    run_link --persona sandbox
+    assert_success
+    [ -L "${DEST}/.zshenv" ]
+    [ ! -e "${DEST}/.config/agents" ]
+    [ ! -e "${DEST}/.claude/CLAUDE.md" ]
+    [ ! -e "${DEST}/Library/Application Support/Code" ]
+
+    run_link managed
+    refute_line "${DEST}/.config/agents"
+    refute_line --partial "Application Support"
+    run_link status
+    assert_success
+    assert_output ""
+}
+
+@test "switching to a persona without editors removes the editor links" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    run_link --persona home
+    assert_success
+    [ -L "${DEST}/Library/Application Support/Code/User/settings.json" ]
+
+    run_link --persona server
+    assert_success
+    assert_output --partial "Removed stale link ${DEST}/Library/Application Support/Code/User/settings.json"
+    [ ! -e "${DEST}/Library/Application Support/Code/User/settings.json" ]
+    [ -L "${DEST}/.zshenv" ]
+    [ "$(persona_state)" = "server" ]
+}
+
+@test "rejects an unknown persona or one for another OS before changing anything" {
+    run_link --persona nope
+    assert_failure 2
+    assert_output --partial "Unknown persona 'nope'"
+    run_link --persona ../home
+    assert_failure 2
+    DOTFILES_OS=linux run_link --persona home
+    assert_failure 2
+    assert_output --partial "Persona 'home' is not for linux"
+    [ -z "$(ls -A "${DEST}")" ]
+}
+
+@test "a saved persona that no longer exists fails clearly" {
+    mkdir -p "${DEST}/.local/state/dotfiles"
+    printf 'retired\n' > "${DEST}/.local/state/dotfiles/persona"
+    run_link status
+    assert_failure 2
+    assert_output --partial "Unknown persona 'retired'"
 }

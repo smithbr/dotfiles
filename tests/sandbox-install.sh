@@ -88,7 +88,7 @@ mkdir -p /home/tester/.dotfiles
 tar -xzf /tmp/dotfiles.tar.gz -C /home/tester/.dotfiles
 chown -R tester:tester /home/tester/.dotfiles
 
-sudo -u tester -H bash -c 'cd ~/.dotfiles && ./install.sh --skip-brew --skip-shell'
+sudo -u tester -H bash -c 'cd ~/.dotfiles && ./install.sh --skip-brew --skip-shell --persona sandbox'
 status=$?
 
 if [[ "${status}" -ne 0 ]]; then
@@ -121,6 +121,8 @@ check "~/.config/zsh/.zshrc linked"  test -L /home/tester/.config/zsh/.zshrc -a 
 check "~/.config is a real dir"      test ! -L /home/tester/.config
 check "zsh login exports XDG paths"  zsh -lc '[[ "${XDG_CONFIG_HOME}" == "${HOME}/.config" ]]'
 check "no optional installs ran"     bash -lc '! command -v docker && ! command -v tailscale'
+check "sandbox persona saved"        grep -qx sandbox /home/tester/.local/state/dotfiles/persona
+check "no private agents checkout"   test ! -e /home/tester/.config/agents
 
 exit "${fail}"
 GUEST

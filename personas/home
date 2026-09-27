@@ -1,0 +1,5 @@
+# Your own Mac: GUI apps, shared editor settings, and the private agents repo.
+os=darwin
+layers=common
+agents=yes
+editors=yes
