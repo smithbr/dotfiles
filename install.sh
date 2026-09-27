@@ -482,7 +482,7 @@ if [[ -n "${zsh_path}" ]]; then
             _item "Would add ${zsh_path} to /etc/shells"
         else
             _item "Adding ${zsh_path} to /etc/shells (may ask for your password)"
-            bash -c "printf '%s\n' '${zsh_path}' | sudo tee -a /etc/shells >/dev/null"
+            printf '%s\n' "${zsh_path}" | sudo tee -a /etc/shells >/dev/null
         fi
     fi
     if [[ "${SHELL}" != "${zsh_path}" ]]; then
