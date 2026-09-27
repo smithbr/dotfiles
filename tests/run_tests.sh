@@ -65,6 +65,9 @@ ensure_bats_dependencies() {
     if [[ "${#missing_formulae[@]}" -gt 0 ]]; then
         echo "Installing test dependencies: ${missing_formulae[*]}"
         brew tap bats-core/bats-core >/dev/null 2>&1 || true
+        # Newer Homebrew refuses formulae from taps nobody has trusted; older
+        # releases have no trust command, so a failure here is not fatal.
+        brew trust bats-core/bats-core >/dev/null 2>&1 || true
         brew install "${missing_formulae[@]}"
     fi
 }
