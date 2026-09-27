@@ -81,6 +81,7 @@ This is process-level isolation, not a real container or VM.
 - Runs `ph-backup` against mocked Pi-hole, Unbound, and Tailscale and inspects the resulting zip
 - Runs `ts-test` in a fully mocked sandbox
 - Runs `sshkey` help, local key creation, and cleanup flows inside an isolated home directory
+- Runs `ph-agent-setup` steps with mocked identity, sudo, git, crontab, `ob`, and `claude`: wrong-user and off-Linux refusals, the fetch-only key line, one cron entry, and an empty-inbox import that never starts Claude
 
 [`brew.bats`](/Users/bran/.dotfiles/tests/brew.bats)
 
