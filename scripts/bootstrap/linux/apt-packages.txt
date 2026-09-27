@@ -5,6 +5,7 @@ git
 htop
 net-tools
 nethogs
+openssh-client
 stow
 tcpdump
 tree

@@ -725,3 +725,24 @@ MOCK
         refute_output --partial "ok:"
     done
 }
+
+@test "ensure_local_install_ssh_key fails clearly when ssh-keygen is missing" {
+    local bin="${TEST_TMPDIR}/no-keygen-bin"
+    mkdir -p "${bin}"
+    ln -s "$(command -v mkdir)" "${bin}/mkdir"
+    ln -s "$(command -v chmod)" "${bin}/chmod"
+
+    run env -i HOME="${TEST_TMPDIR}/home" PATH="${bin}" "${BASH}" -c "
+        set -euo pipefail
+        log_info() { printf 'INFO:%s\n' \"\$*\"; }
+        log_error() { printf 'ERROR:%s\n' \"\$*\"; }
+        dry_run=0
+        LOCAL_INSTALL_SSH_KEY_PATH=\"\${HOME}/.ssh/id_ed25519\"
+        $(sed -n '/^require_ssh_keygen() {/,/^}/p;/^ensure_local_install_ssh_key() {/,/^}/p' "${PROJECT_ROOT}/install.sh")
+        ensure_local_install_ssh_key
+    "
+    assert_failure
+    assert_output --partial "ERROR:ssh-keygen is not installed"
+    refute_output --partial "Creating local SSH key"
+    [ ! -e "${TEST_TMPDIR}/home/.ssh/id_ed25519" ]
+}
