@@ -9,3 +9,37 @@ lg() {
         rm -f "${LAZYGIT_NEW_DIR_FILE}" > /dev/null
     fi
 }
+
+# new alias: save to the dotfiles repo and define it now
+#   na hg 'history 1 | grep '
+na() {
+    if [[ $# -ne 2 || -z "$1" ]]; then
+        echo "usage: na NAME 'COMMAND'" >&2
+        return 2
+    fi
+    local name="$1" value="$2"
+    local file="${DOTFILES_DIR:-${HOME}/.dotfiles}/stow/common/.config/shell/aliases"
+
+    if [[ ! "${name}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+        echo "na: invalid alias name: ${name}" >&2
+        return 2
+    fi
+    if [[ ! -f "${file}" ]]; then
+        echo "na: missing ${file}" >&2
+        return 1
+    fi
+    if grep -q "^[[:space:]]*alias ${name}=" "${file}"; then
+        echo "na: ${name} already exists in ${file}" >&2
+        return 1
+    fi
+
+    # keep $, `, " and \ literal so they evaluate when the alias runs
+    local escaped="${value//\\/\\\\}"
+    escaped="${escaped//\"/\\\"}"
+    escaped="${escaped//\$/\\\$}"
+    escaped="${escaped//\`/\\\`}"
+
+    printf 'alias %s="%s"\n' "${name}" "${escaped}" >> "${file}"
+    alias "${name}=${value}"
+    echo "added: alias ${name}=\"${escaped}\""
+}

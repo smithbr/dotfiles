@@ -1,6 +1,7 @@
 # navigation
 alias cdd="cd ~/.dotfiles"
 alias h="history"
+alias hg="history 1 | grep "
 alias lsa="ls -FGlAhp"
 alias xb="cd ~/.local/bin"
 alias xc="cd ~/.config"
