@@ -134,14 +134,160 @@ padd_logo_3="${bold_text}${green_text}|   ${red_text}/${yellow_text}-${green_tex
 
 ############################################# FTL ##################################################
 
+# jq definition that removes control characters (C0, DEL, C1) from strings, so
+# API data cannot inject terminal escape sequences or extra key=value lines
+jq_clean='def clean: if type == "string" then gsub("\\p{Cc}"; "") else . end;'
+
+# Prints $1 as a non-negative decimal integer, or 0 when it is not one.
+# API values must pass through this before they reach $(( )): bash running as
+# sh evaluates array subscripts such as a[$(cmd)] inside arithmetic.
+toInteger() {
+    local value
+    value="${1%%.*}"
+    case "${value}" in
+        ''|*[!0-9]*) value=0 ;;
+    esac
+    # Drop leading zeros so the value is not read as octal, and refuse lengths
+    # that would overflow shell arithmetic
+    value="${value#"${value%%[!0]*}"}"
+    if [ "${#value}" -gt 18 ]; then
+        value=0
+    fi
+    printf '%s\n' "${value:-0}"
+}
+
+# Prints the host of an http(s) URL without userinfo, brackets, or port
+apiURLHost() {
+    local hostport
+    hostport="${1#*://}"
+    hostport="${hostport%%/*}"
+    hostport="${hostport##*@}"
+    case "${hostport}" in
+        \[*)
+            hostport="${hostport#\[}"
+            printf '%s\n' "${hostport%%\]*}"
+            ;;
+        *)
+            printf '%s\n' "${hostport%%:*}"
+            ;;
+    esac
+}
+
+isLoopbackHost() {
+    case "$1" in
+        localhost|localhost.|::1)
+            return 0
+            ;;
+        127.*)
+            case "$1" in
+                *[!0-9.]*) return 1 ;;
+            esac
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+# Rebuilds a URL discovered through CHAOS TXT so it points at host $2. The TXT
+# reply is unauthenticated, so its host is always discarded and its scheme,
+# port, and path are kept only when they look valid.
+NormalizeDiscoveredAPIURL() {
+    local scheme rest hostport port path host
+    host="$2"
+
+    case "$1" in
+        http://*) scheme=http ;;
+        https://*) scheme=https ;;
+        *) return 1 ;;
+    esac
+
+    rest="${1#*://}"
+    hostport="${rest%%/*}"
+    path="${rest#"${hostport}"}"
+
+    case "${hostport}" in
+        \[*\]:*) port="${hostport##*\]:}" ;;
+        \[*) port="" ;;
+        *:*) port="${hostport##*:}" ;;
+        *) port="" ;;
+    esac
+    case "${port}" in
+        *[!0-9]*) port="" ;;
+    esac
+
+    case "${path}" in
+        ''|*[!A-Za-z0-9/._-]*) path="/api/" ;;
+    esac
+    case "${path}" in
+        */) ;;
+        *) path="${path}/" ;;
+    esac
+
+    case "${host}" in
+        *:*) host="[${host}]" ;;
+    esac
+
+    printf '%s://%s%s%s\n' "${scheme}" "${host}" "${port:+:${port}}" "${path}"
+}
+
+# Chooses how curl checks the certificate of API URL $1 and fails for plain
+# http:// to anything but loopback. Loopback skips verification because
+# Pi-hole's default certificate is self-signed for pi.hole.
+SetCurlTLSMode() {
+    local host
+    host="$(apiURLHost "$1")"
+
+    case "$1" in
+        https://*) ;;
+        http://*)
+            isLoopbackHost "${host}" || return 1
+            curl_tls_mode=none
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    if isLoopbackHost "${host}" || [ "${insecureTLS}" = true ]; then
+        curl_tls_mode=insecure
+    elif [ -n "${cacert}" ]; then
+        curl_tls_mode=cacert
+    else
+        curl_tls_mode=verify
+    fi
+}
+
+# Runs curl against the Pi-hole API with the TLS settings from SetCurlTLSMode.
+# Secrets never go in the arguments: callers send the session header as curl
+# config (-K -) or the login body (--data @-) on stdin.
+CurlAPI() {
+    case "${curl_tls_mode}" in
+        insecure) set -- --insecure "$@" ;;
+        cacert) set -- --cacert "${cacert}" "$@" ;;
+    esac
+    curl --connect-timeout 2 --max-time 4 --proto =http,https "$@"
+}
+
+# Prints curl config that carries the session ID header, for curl -K -
+sessionConfig() {
+    if [ -n "${SID}" ] && [ "${SID}" != null ]; then
+        printf 'header = "sid: %s"\n' "${SID}"
+    fi
+}
+
 TestAPIAvailability() {
 
-    local chaos_api_list authResponse authStatus authData apiAvailable
+    local chaos_api_list authResponse authStatus authData apiAvailable refusedURL
 
     # Check if an API location was specified with --api
     if [ -n "${API_LOCATION}" ]; then
         # The list of available API URLs is just the provided URL
         chaos_api_list="${API_LOCATION}"
+        if ! SetCurlTLSMode "${API_LOCATION}"; then
+            moveXOffset; printf '%s\n' "Refusing API URL ${API_LOCATION}: use https:// (plain http:// is only allowed for localhost)."
+            exit 1
+        fi
     else
         # Query the API URLs from FTL using CHAOS TXT
         # The result is a space-separated enumeration of full URLs
@@ -159,35 +305,37 @@ TestAPIAvailability() {
                 exit 1
             fi
         fi
+        # dig may print several lines; treat them as one space-separated list
+        chaos_api_list="$(printf '%s' "${chaos_api_list}" | tr '\n' ' ')"
     fi
 
     apiAvailable=false
 
     # Iterate over space-separated list of URLs
     while [ -n "${chaos_api_list}" ]; do
-        # Get the first URL
+        # Take the first URL off the list
         API_URL="${chaos_api_list%% *}"
+        if [ "${API_URL}" = "${chaos_api_list}" ]; then
+            chaos_api_list=""
+        else
+            chaos_api_list="${chaos_api_list#* }"
+        fi
         # Strip leading and trailing quotes
         API_URL="${API_URL%\"}"
         API_URL="${API_URL#\"}"
 
-        # If $SERVER is user-specified by IP, the returned API_URL might contain a domain which can't be resolved by the host
-        # Therefore, we substitute the domain with the IP
-        if [ -n "${SERVER}" ]; then
-            # Check if SERVER is an IPv6
-            case "${SERVER}" in
-                *:*)
-                    # Replace the domain with the IP
-                    # Add square brackets for IPv6 (as recommended by RFC2732)
-                    API_URL=$(echo "${API_URL}" | sed -E "s#(https?://)[^/:]+(:[0-9]+)#\1[${SERVER}]\2#");;
-                *)
-                    # Replace the domain with the IP
-                    API_URL=$(echo "${API_URL}" | sed -E "s#(https?://)[^/:]+(:[0-9]+)#\1${SERVER}\2#");;
-            esac
+        if [ -z "${API_LOCATION}" ]; then
+            # The CHAOS TXT reply is unauthenticated: always point the URL at
+            # the server that was queried, whatever host the reply names
+            API_URL="$(NormalizeDiscoveredAPIURL "${API_URL}" "${SERVER:-localhost}")" || continue
+            if ! SetCurlTLSMode "${API_URL}"; then
+                refusedURL="${API_URL}"
+                continue
+            fi
         fi
 
         # Test if the API is available at this URL, include delimiter for ease in splitting payload
-        authResponse=$(curl --connect-timeout 2 --max-time 4 -skS -w ">>%{http_code}" "${API_URL}auth")
+        authResponse=$(CurlAPI -sS -w ">>%{http_code}" "${API_URL}auth")
 
         # authStatus is the response http_code, eg. 200, 401.
         # Shell parameter expansion, remove everything up to and including the >> delim
@@ -208,25 +356,17 @@ TestAPIAvailability() {
             apiAvailable=true
             needAuth=true
             # Check if 2FA is required
-            needTOTP=$(echo "${authData}"| jq --raw-output .session.totp 2>/dev/null)
+            needTOTP=$(printf '%s\n' "${authData}" | jq --raw-output .session.totp 2>/dev/null)
             break
-        else
-            # API is not available at this port/protocol combination
-            # Remove the first URL from the list
-            local last_api_list
-            last_api_list="${chaos_api_list}"
-            chaos_api_list="${chaos_api_list#* }"
-
-            # If the list did not change, we are at the last element
-            if [ "${last_api_list}" = "${chaos_api_list}" ]; then
-                # Remove the last element
-                chaos_api_list=""
-            fi
         fi
+        # API is not available at this port/protocol combination; try the next URL
     done
 
     # if apiAvailable is false, no working API was found
     if [ "${apiAvailable}" != "true" ]; then
+        if [ -n "${refusedURL}" ]; then
+            moveXOffset; printf '%s\n' "Refusing plain http:// API URL ${refusedURL}: only https:// is allowed for a remote server."
+        fi
         moveXOffset; echo "API not available at: ${SERVER:-localhost}"
         moveXOffset; echo "Exiting."
         exit 1
@@ -251,7 +391,7 @@ LoginAPI() {
     fi
 
     if [ -z "${password}" ]; then
-        # no password was supplied as argument or read from CLI file
+        # no password was supplied via PADD_PASSWORD or read from CLI file
         moveXOffset; echo "No password supplied. Please enter your password:"
         # secretly read the password
         moveXOffset; secretRead; printf '\n'
@@ -264,7 +404,7 @@ LoginAPI() {
         moveXOffset; read -r totp
     fi
 
-    # Try to authenticate using the supplied password (CLI file, argument or user input) and TOTP
+    # Try to authenticate using the supplied password (CLI file, PADD_PASSWORD or user input) and TOTP
     Authenticate
 
     # Try to login again until the session is valid
@@ -273,11 +413,11 @@ LoginAPI() {
 
         # Print the error message if there is one
         if  [ "${sessionError}" != "null"  ]; then
-            moveXOffset; echo "Error: ${sessionError}"
+            moveXOffset; printf '%s\n' "Error: ${sessionError}"
         fi
         # Print the session message if there is one
         if  [ "${sessionMessage}" != "null"  ]; then
-            moveXOffset; echo "Error: ${sessionMessage}"
+            moveXOffset; printf '%s\n' "Error: ${sessionMessage}"
         fi
 
         moveXOffset; echo "Please enter the correct password:"
@@ -305,7 +445,8 @@ DeleteSession() {
     # SID is not null (successful authenthication only), delete the session
     if [ "${validSession}" = true ] && [ "${SID}" != null ]; then
         # Try to delete the session. Omit the output, but get the http status code
-        deleteResponse=$(curl --connect-timeout 2 --max-time 4 -skS -o /dev/null -w "%{http_code}" -X DELETE "${API_URL}auth"  -H "Accept: application/json" -H "sid: ${SID}")
+        # The session ID goes to curl as config on stdin so it stays out of argv
+        deleteResponse=$(sessionConfig | CurlAPI -K - -sS -o /dev/null -w "%{http_code}" -X DELETE "${API_URL}auth" -H "Accept: application/json")
 
         printf "\n\n"
         case "${deleteResponse}" in
@@ -320,7 +461,11 @@ DeleteSession() {
 }
 
 Authenticate() {
-    sessionResponse="$(curl --connect-timeout 2 --max-time 4 -skS -X POST "${API_URL}auth" --user-agent "PADD ${padd_version}" --data "{\"password\":\"${password}\", \"totp\":${totp:-null}}" )"
+    # The password reaches jq and curl on stdin, never in argv, and jq builds the
+    # JSON so quotes or backslashes in it cannot break the request body
+    sessionResponse="$(printf '%s' "${password}" \
+        | jq -Rsc --arg totp "${totp}" '{password: ., totp: ($totp | tonumber? // null)}' \
+        | CurlAPI -sS -X POST "${API_URL}auth" --user-agent "PADD ${padd_version}" -H "Content-Type: application/json" --data @-)"
 
     if [ -z "${sessionResponse}" ]; then
         moveXOffset; echo "No response from FTL server. Please check connectivity and use the options to set the API URL"
@@ -328,12 +473,13 @@ Authenticate() {
         exit 1
     fi
     # obtain validity, session ID and sessionMessage from session response
-    validSession=$(echo "${sessionResponse}"| jq .session.valid 2>/dev/null)
-    SID=$(echo "${sessionResponse}"| jq --raw-output .session.sid 2>/dev/null)
-    sessionMessage=$(echo "${sessionResponse}"| jq --raw-output .session.message 2>/dev/null)
+    validSession=$(printf '%s\n' "${sessionResponse}" | jq .session.valid 2>/dev/null)
+    # Keep only base64 characters: the SID is written into curl config later
+    SID=$(printf '%s\n' "${sessionResponse}" | jq --raw-output .session.sid 2>/dev/null | tr -cd 'A-Za-z0-9+/=_-')
+    sessionMessage=$(printf '%s\n' "${sessionResponse}" | jq --raw-output "${jq_clean}"' .session.message | clean' 2>/dev/null)
 
     # obtain the error message from the session response
-    sessionError=$(echo "${sessionResponse}"| jq --raw-output .error.message 2>/dev/null)
+    sessionError=$(printf '%s\n' "${sessionResponse}" | jq --raw-output "${jq_clean}"' .error.message | clean' 2>/dev/null)
 }
 
 GetFTLData() {
@@ -342,7 +488,8 @@ GetFTLData() {
     local status
 
     # get the data from querying the API as well as the http status code, include delimiter for ease in splitting payload
-    response=$(curl --connect-timeout 2 --max-time 4 -sk -w ">>%{http_code}" -X GET "${API_URL}$1$2" -H "Accept: application/json" -H "sid: ${SID}" )
+    # The session ID goes to curl as config on stdin so it stays out of argv
+    response=$(sessionConfig | CurlAPI -K - -s -w ">>%{http_code}" -X GET "${API_URL}$1$2" -H "Accept: application/json")
 
     # status is the response http_code, eg. 200, 401.
     # Shell parameter expansion, remove everything up to and including the >> delim
@@ -352,7 +499,7 @@ GetFTLData() {
     data=${response%>>*}
 
     if [ "${status}" = 200 ]; then
-        echo "${data}"
+        printf '%s\n' "${data}"
     elif [ "${status}" = 000 ]; then
         # connection lost
         echo "000"
@@ -384,12 +531,16 @@ GetPADDData() {
         # Using "paths(scalars | true)" will return null and false values.
         # We also check if the value is exactly `null` and, in this case, return the
         # string "null", as jq would return an empty string for nulls.
-        padd_data=$(echo "${response}" | jq -r 'paths(scalars | true) as $p | [$p | join(".")] + [if getpath($p)!=null then getpath($p) else "null" end] | join("=")' 2>/dev/null)
+        # Control characters are removed from keys and string values so API data
+        # cannot add lines or send terminal escape sequences.
+        padd_data=$(printf '%s\n' "${response}" | jq -r "${jq_clean}"' paths(scalars | true) as $p | [$p | join(".") | clean] + [getpath($p) | if . == null then "null" else clean end] | join("=")' 2>/dev/null)
     fi
 }
 
 GetPADDValue() {
-    echo "${padd_data}" | sed -n "s/^$1=//p" 2>/dev/null
+    # Also strip control characters here (except newline) as a second line of
+    # defense for everything read from padd_data
+    printf '%s\n' "${padd_data}" | sed -n "s/^$1=//p" 2>/dev/null | tr -d '\000-\011\013-\037\177'
 }
 
 UnboundConfigPaths() {
@@ -505,8 +656,15 @@ GetUnboundInformation() {
 
     cache_hits="$(GetUnboundStatsValue total.num.cachehits)"
     cache_queries="$(GetUnboundStatsValue total.num.queries)"
+    # unbound-control output is data: accept plain integers only
+    case "${cache_hits}" in
+        *[!0-9]*) cache_hits="" ;;
+    esac
+    case "${cache_queries}" in
+        *[!0-9]*) cache_queries="" ;;
+    esac
     if [ -n "${cache_hits}" ] && [ -n "${cache_queries}" ] && [ "${cache_queries}" -gt 0 ] 2>/dev/null; then
-        cache_rate=$(awk "BEGIN { printf \"%.0f\", (${cache_hits} / ${cache_queries}) * 100 }")
+        cache_rate=$(awk -v hits="${cache_hits}" -v queries="${cache_queries}" 'BEGIN { printf "%.0f", (hits / queries) * 100 }')
         unbound_cache_status="${cache_rate}% hit"
 
         if [ "${cache_rate}" -ge 70 ]; then
@@ -562,7 +720,7 @@ GetSummaryInformation() {
 
     cache_size=$(GetPADDValue cache.size)
     cache_evictions=$(GetPADDValue cache.evicted)
-    cache_inserts=$(echo "${padd_data}"| GetPADDValue cache.inserted)
+    cache_inserts=$(GetPADDValue cache.inserted)
 
     latest_blocked_raw=$(GetPADDValue recent_blocked)
 
@@ -609,13 +767,13 @@ GetSystemInformation() {
     fi
 
     # System uptime
-    system_uptime_raw=$(GetPADDValue system.uptime)
+    system_uptime_raw=$(toInteger "$(GetPADDValue system.uptime)")
 
     # CPU temperature and unit
     cpu_temp_raw=$(GetPADDValue sensors.cpu_temp)
     if [ "${cpu_temp_raw}" != null ]; then
         cpu_temp=$(printf "%.1f" "${cpu_temp_raw}")
-        temp_unit=$(echo "${padd_data}" | GetPADDValue sensors.unit)
+        temp_unit=$(GetPADDValue sensors.unit)
     fi
 
     # Temp + Unit
@@ -810,11 +968,11 @@ GetNetworkInformation() {
     iface_name="${gateway_v4_iface}"
     tx_bytes="$(GetPADDValue iface.v4.tx_bytes.value)"
     tx_bytes_unit="$(GetPADDValue iface.v4.tx_bytes.unit)"
-    tx_bytes=$(printf "%.1f %b" "${tx_bytes}" "${tx_bytes_unit}")
+    tx_bytes=$(printf "%.1f %s" "${tx_bytes}" "${tx_bytes_unit}")
 
     rx_bytes="$(GetPADDValue iface.v4.rx_bytes.value)"
     rx_bytes_unit="$(GetPADDValue iface.v4.rx_bytes.unit)"
-    rx_bytes=$(printf "%.1f %b" "${rx_bytes}" "${rx_bytes_unit}")
+    rx_bytes=$(printf "%.1f %s" "${rx_bytes}" "${rx_bytes_unit}")
 
     # If IPv4 and IPv6 interfaces are not the same, add a "*" to the interface
     # name to highlight that there are two different interfaces and the
@@ -1036,7 +1194,7 @@ GetVersionInformation() {
 GetPADDInformation() {
 
     # PADD version information...
-    padd_version_latest="$(curl --connect-timeout 5 --silent https://api.github.com/repos/pi-hole/PADD/releases/latest | grep '"tag_name":' | awk -F \" '{print $4}')"
+    padd_version_latest="$(curl --connect-timeout 5 --silent https://api.github.com/repos/pi-hole/PADD/releases/latest | grep '"tag_name":' | awk -F \" '{print $4}' | tr -cd 'A-Za-z0-9._-')"
     # is PADD up-to-date?
     padd_out_of_date_flag=false
     if [ -z "${padd_version_latest}" ]; then
@@ -1386,7 +1544,7 @@ HeatmapGenerator () {
         load=$(printf "%.0f" "${1}")
     # if two numbers are provided, do some math to make a percentage to figure out the colors
     else
-        load=$(printf "%.0f" "$(echo "$1 $2" | awk '{print ($1 / $2) * 100}')")
+        load=$(printf "%.0f" "$(printf '%s %s\n' "$1" "$2" | awk '{print ($1 / $2) * 100}')")
     fi
 
     # Color logic
@@ -1410,7 +1568,7 @@ HeatmapGenerator () {
 # $3: colored flag, if "color" backfill with color
 BarGenerator() {
     # number of filled in cells in the bar
-    barNumber=$(printf %.f "$(echo "$1 $2" | awk '{print ($1 / 100) * $2}')")
+    barNumber=$(toInteger "$(printf %.f "$(printf '%s %s\n' "$1" "$2" | awk '{print ($1 / 100) * $2}')")")
     frontFill=$(for i in $(seq "${barNumber}"); do printf "%b" "■"; done)
 
     # remaining "unfilled" cells in the bar
@@ -1520,7 +1678,7 @@ SizeChecker(){
 # converts a given version string e.g. v3.7.1 to 3007001000 to allow for easier comparison of multi digit version numbers
 # credits https://apple.stackexchange.com/a/123408
 VersionConverter() {
-    echo "$@" | tr -d '[:alpha:]' | awk -F. '{ printf("%d%03d%03d%03d\n", $1,$2,$3,$4); }';
+    printf '%s\n' "$*" | tr -d '[:alpha:]' | awk -F. '{ printf("%d%03d%03d%03d\n", $1,$2,$3,$4); }';
 }
 
 moveYOffset(){
@@ -1553,7 +1711,7 @@ filterModel() {
     #    `-v`      : set $FILTERLIST into a variable called `list`
     #    `gsub()`  : replace all list items (ignoring case) with an empty string, deleting them
     #    `{$1=$1}1`: remove all extra spaces. The last "1" evaluates as true, printing the result
-    echo "$1" | awk -v list="${FILTERLIST}" '{IGNORECASE=1; gsub(list,"")}; {$1=$1}1'
+    printf '%s\n' "$1" | awk -v list="${FILTERLIST}" '{IGNORECASE=1; gsub(list,"")}; {$1=$1}1'
 }
 
 # Truncates a given string and appends three '...'
@@ -1568,20 +1726,23 @@ truncateString() {
     if [ "${length}" -gt "${2}" ]; then
         # if length of the string is larger then the specified max length
         # cut every char from the string exceeding length $shorted and add three dots
-        truncatedString=$(echo "$1" | cut -c1-${shorted})"..."
-        echo "${truncatedString}"
+        truncatedString=$(printf '%s\n' "$1" | cut -c1-${shorted})"..."
+        printf '%s\n' "${truncatedString}"
     else
-        echo "$1"
+        printf '%s\n' "$1"
     fi
 }
 
 # Converts seconds to days, hours, minutes
 # https://unix.stackexchange.com/a/338844
 convertUptime() {
+    local seconds D H M
 
-    local D=$(($1/60/60/24))
-    local H=$(($1/60/60%24))
-    local M=$(($1/60%60))
+    # Only a validated integer may reach $(( )), see toInteger
+    seconds="$(toInteger "$1")"
+    D=$((seconds/60/60/24))
+    H=$((seconds/60/60%24))
+    M=$((seconds/60%60))
 
     printf "%d days, %02d hours, %02d minutes" "${D}" "${H}" "${M}"
 }
@@ -1763,10 +1924,10 @@ StartupRoutine(){
         GetNetworkInformation
         GetPADDInformation
         if [ "${DOCKER_VERSION}" != "null" ]; then
-        moveXOffset; echo "  - Docker Tag ${DOCKER_VERSION}"
+        moveXOffset; printf '%s\n' "  - Docker Tag ${DOCKER_VERSION}"
         else
-        moveXOffset; echo "  - Core ${CORE_VERSION}, Web ${WEB_VERSION}"
-        moveXOffset; echo "  - FTL ${FTL_VERSION}, PADD ${padd_version}"
+        moveXOffset; printf '%s\n' "  - Core ${CORE_VERSION}, Web ${WEB_VERSION}"
+        moveXOffset; printf '%s\n' "  - FTL ${FTL_VERSION}, PADD ${padd_version}"
         fi
 
     else
@@ -1801,12 +1962,12 @@ StartupRoutine(){
 
         GetPADDInformation
         if [ "${DOCKER_VERSION}" != "null" ]; then
-        moveXOffset; echo "  - Docker Tag ${DOCKER_VERSION}"
+        moveXOffset; printf '%s\n' "  - Docker Tag ${DOCKER_VERSION}"
         else
-        moveXOffset; echo "  - Pi-hole Core ${CORE_VERSION}"
-        moveXOffset; echo "  - Web Admin ${WEB_VERSION}"
-        moveXOffset; echo "  - FTL ${FTL_VERSION}"
-        moveXOffset; echo "  - PADD ${padd_version}"
+        moveXOffset; printf '%s\n' "  - Pi-hole Core ${CORE_VERSION}"
+        moveXOffset; printf '%s\n' "  - Web Admin ${WEB_VERSION}"
+        moveXOffset; printf '%s\n' "  - FTL ${FTL_VERSION}"
+        moveXOffset; printf '%s\n' "  - PADD ${padd_version}"
         fi
     fi
 
@@ -1912,31 +2073,6 @@ NormalPADD() {
   done
 }
 
-Update() {
-
-    GetPADDInformation
-
-    if [ "${padd_out_of_date_flag}" = "true" ]; then
-        echo "${check_box_info} Updating PADD from ${padd_version} to ${padd_version_latest}"
-
-        padd_script_path=$(realpath "$0")
-
-        echo "${check_box_info} Downloading PADD update ..."
-
-        if  curl --connect-timeout 5 -sSL https://install.padd.sh -o "${padd_script_path}" > /dev/null 2>&1; then
-            echo "${check_box_good} ... done. Restart PADD for the update to take effect"
-        else
-            echo "${check_box_bad} Cannot download PADD update"
-            echo "${check_box_info} Go to https://install.padd.sh to download the update manually"
-            exit 1
-        fi
-    else
-        echo "${check_box_good} You are already using the latest PADD version ${padd_version}"
-    fi
-
-    exit 0
-}
-
 DisplayHelp() {
     cat << EOM
 
@@ -1949,12 +2085,21 @@ DisplayHelp() {
 :::
 :::  --server <DOMAIN|IP>    domain or IP of your Pi-hole (default: localhost)
 :::  --api <API URL>         API URL location of your Pi-hole (example: https://pi.hole/api/)
-:::  --secret <password>     your Pi-hole's password, required to access the API
+:::  --cacert <FILE>         trust this CA or self-signed certificate for a remote Pi-hole;
+:::                          it must be valid for the --server or --api host name
+:::  --insecure              skip TLS certificate verification for a remote Pi-hole
 :::  --2fa <2fa>             your Pi-hole's 2FA code, if 2FA is enabled
 :::  --runonce               display output once and exit
-:::  -u, --update            update to the latest version
 :::  -v, --version           show PADD version info
 :::  -h, --help              display this help text
+:::
+::: Environment:
+:::  PADD_PASSWORD           your Pi-hole's password (otherwise PADD prompts for it)
+:::  PADD_CACERT             same as --cacert
+:::
+::: TLS certificates are verified for remote servers. localhost skips verification
+::: because Pi-hole's default certificate is self-signed. Plain http:// is only
+::: used for localhost.
 
 EOM
 }
@@ -2046,7 +2191,7 @@ main(){
 # Process all options (if present)
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        "-u" | "--update"   ) xOffset=0; doUpdate=true;;
+        "-u" | "--update"   ) printf '%s\n' "ph-padd is managed by ~/.dotfiles; update it there."; exit 0;;
         "-h" | "--help"     ) DisplayHelp; exit 0;;
         "-v" | "--version"  ) xOffset=0; versionOnly=true ;;
         "--runonce"         ) runOnce=true;;
@@ -2054,12 +2199,32 @@ while [ "$#" -gt 0 ]; do
         "--yoff"            ) yOffset="${2}"; yOffOrig="${2}"; shift;;
         "--server"          ) SERVER="${2}"; shift;;
         "--api"             ) API_LOCATION="${2}"; shift;;
-        "--secret"          ) password="${2}"; shift;;
+        "--secret"          ) printf '%s\n' "--secret was removed because it exposes the password in the process list." "Set PADD_PASSWORD in the environment instead."; exit 1;;
+        "--cacert"          ) cacert="${2}"; shift;;
+        "--insecure"        ) insecureTLS=true;;
         "--2fa"             ) totp="${2}"; shift;;
         *                   ) DisplayHelp; exit 1;;
     esac
     shift
 done
+
+# Take the password from the environment, then drop it so child processes
+# (curl, jq, dig) do not inherit it
+password="${PADD_PASSWORD:-}"
+unset PADD_PASSWORD
+
+cacert="${cacert:-${PADD_CACERT:-}}"
+if [ -n "${cacert}" ] && [ ! -r "${cacert}" ]; then
+    echo "CA certificate is not readable: ${cacert}"
+    exit 1
+fi
+
+case "${SERVER}" in
+    *[!A-Za-z0-9.:_-]*)
+        echo "Invalid --server value. Use a host name or an IP address without brackets."
+        exit 1
+        ;;
+esac
 
 if [ -n "${API_LOCATION}" ] && [ -n "${SERVER}" ]; then
     moveXOffset; echo "Do not set --server and --api simultaneously."
@@ -2069,10 +2234,6 @@ fi
 
 if [ "${versionOnly}" ]; then
     ShowVersion
-fi
-
-if [ "${doUpdate}" ]; then
-    Update
 fi
 
 main
