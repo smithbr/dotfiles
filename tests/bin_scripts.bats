@@ -265,7 +265,7 @@ MOCK
 }
 
 @test "os-update runs linux apt and Homebrew updates" {
-    mkdir -p "${TEST_TMPDIR}/brew-cache-linux"
+    mkdir -p "${TEST_TMPDIR}/.cache/Homebrew"
 
     cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
 #!/usr/bin/env bash
@@ -280,7 +280,7 @@ MOCK
     cat > "${BIN_SANDBOX}/brew" <<'MOCK'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--cache" ]]; then
-    printf '%s\n' "${TEST_TMPDIR}/brew-cache-linux"
+    printf '%s\n' "${TEST_TMPDIR}/.cache/Homebrew"
     exit 0
 fi
 
@@ -299,12 +299,12 @@ MOCK
     assert_output --partial "brew update"
     assert_output --partial "brew upgrade"
     assert_output --partial "brew cleanup --prune=all"
-    [[ ! -d "${TEST_TMPDIR}/brew-cache-linux" ]]
+    [[ ! -d "${TEST_TMPDIR}/.cache/Homebrew" ]]
 }
 
 @test "os-update runs macOS system and Homebrew updates" {
     mkdir -p "${TEST_TMPDIR}/Applications/Xcode.app"
-    mkdir -p "${TEST_TMPDIR}/brew-cache-macos"
+    mkdir -p "${TEST_TMPDIR}/Library/Caches/Homebrew"
 
     cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
 #!/usr/bin/env bash
@@ -319,7 +319,7 @@ MOCK
     cat > "${BIN_SANDBOX}/brew" <<'MOCK'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--cache" ]]; then
-    printf '%s\n' "${TEST_TMPDIR}/brew-cache-macos"
+    printf '%s\n' "${TEST_TMPDIR}/Library/Caches/Homebrew"
     exit 0
 fi
 
@@ -366,7 +366,109 @@ MOCK
     assert_output --partial "brew update"
     assert_output --partial "brew upgrade"
     assert_output --partial "brew cleanup --prune=all"
-    [[ ! -d "${TEST_TMPDIR}/brew-cache-macos" ]]
+    [[ ! -d "${TEST_TMPDIR}/Library/Caches/Homebrew" ]]
+}
+
+@test "os-update sources the repo common.sh through its stow symlink, not a planted one" {
+    local home="${TEST_TMPDIR}/home"
+    mkdir -p "${home}/.local/bin" "${TEST_TMPDIR}/scripts"
+    ln -s "${PROJECT_ROOT}/stow/common/.local/bin/os-update" "${home}/.local/bin/os-update"
+
+    # Three levels above the link: the path the old lookup sourced.
+    cat > "${TEST_TMPDIR}/scripts/common.sh" <<'PLANTED'
+printf 'PLANTED common.sh\n'
+touch "${TEST_TMPDIR}/planted-ran"
+PLANTED
+
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+printf 'sudo %s\n' "$*"
+MOCK
+
+    cat > "${BIN_SANDBOX}/apt-get" <<'MOCK'
+#!/usr/bin/env bash
+printf 'apt-get %s\n' "$*"
+MOCK
+
+    # The repo common.sh exports XDG_CONFIG_HOME; the inline fallback does not.
+    cat > "${BIN_SANDBOX}/brew" <<'MOCK'
+#!/usr/bin/env bash
+[[ "${1:-}" == "--cache" ]] && exit 0
+printf 'brew %s xdg=%s\n' "$*" "${XDG_CONFIG_HOME:-unset}"
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/apt-get" "${BIN_SANDBOX}/brew"
+
+    run env -u XDG_CONFIG_HOME HOME="${home}" DOTFILES_DIR="${TEST_TMPDIR}/no-dotfiles" \
+        TEST_TMPDIR="${TEST_TMPDIR}" PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        "${home}/.local/bin/os-update"
+    assert_success
+    assert_output --partial "brew update xdg=${home}/.config"
+    refute_output --partial "PLANTED"
+    [[ ! -e "${TEST_TMPDIR}/planted-ran" ]]
+}
+
+@test "os-update only sources a fallback common.sh that others cannot write" {
+    local copy_dir="${TEST_TMPDIR}/elsewhere/stow/common/.local/bin"
+    local dotfiles="${TEST_TMPDIR}/dots"
+    mkdir -p "${copy_dir}" "${dotfiles}/scripts"
+    cp "${PROJECT_ROOT}/stow/common/.local/bin/os-update" "${copy_dir}/os-update"
+    printf 'printf "FALLBACK SOURCED\\n"\n' > "${dotfiles}/scripts/common.sh"
+
+    chmod 666 "${dotfiles}/scripts/common.sh"
+    run env DOTFILES_DIR="${dotfiles}" "${copy_dir}/os-update" --help
+    assert_success
+    assert_output --partial "not sourcing ${dotfiles}/scripts/common.sh"
+    refute_output --partial "FALLBACK SOURCED"
+
+    chmod 644 "${dotfiles}/scripts/common.sh"
+    run env DOTFILES_DIR="${dotfiles}" "${copy_dir}/os-update" --help
+    assert_success
+    assert_output --partial "FALLBACK SOURCED"
+    refute_output --partial "not sourcing"
+}
+
+@test "os-update refuses to clear a Homebrew cache path that is not a Homebrew directory" {
+    local home="${TEST_TMPDIR}/home"
+    local reply=""
+    mkdir -p "${home}" "${TEST_TMPDIR}/other-cache"
+
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+printf 'sudo %s\n' "$*"
+MOCK
+
+    cat > "${BIN_SANDBOX}/apt-get" <<'MOCK'
+#!/usr/bin/env bash
+printf 'apt-get %s\n' "$*"
+MOCK
+
+    cat > "${BIN_SANDBOX}/brew" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--cache" ]]; then
+    printf '%s\n' "${BREW_CACHE_REPLY}"
+    exit 0
+fi
+printf 'brew %s\n' "$*"
+MOCK
+
+    # Record deletions instead of performing them, so a broken guard cannot
+    # remove anything real.
+    cat > "${BIN_SANDBOX}/rm" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${TEST_TMPDIR}/rm.log"
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/apt-get" "${BIN_SANDBOX}/brew" "${BIN_SANDBOX}/rm"
+
+    for reply in "" "/" "${home}" "${TEST_TMPDIR}/other-cache"; do
+        run env HOME="${home}" TEST_TMPDIR="${TEST_TMPDIR}" BREW_CACHE_REPLY="${reply}" \
+            PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+            "${PROJECT_ROOT}/stow/common/.local/bin/os-update"
+        assert_success
+        assert_output --partial "not clearing unexpected Homebrew cache path"
+        [[ ! -e "${TEST_TMPDIR}/rm.log" ]]
+    done
 }
 
 @test "ph-update displays help" {

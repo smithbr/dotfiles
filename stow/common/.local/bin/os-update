@@ -2,10 +2,65 @@
 
 set -euo pipefail
 
-BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-COMMON_SH="${BASEDIR}/scripts/common.sh"
+# Follow the stow symlink chain without GNU readlink -f, which macOS lacks.
+resolve_script_path() {
+    local path="${1}"
+    local dir=""
+    local target=""
 
-if [[ -f "${COMMON_SH}" ]]; then
+    while [[ -L "${path}" ]]; do
+        dir="$(cd -P "$(dirname "${path}")" && pwd)"
+        target="$(readlink "${path}")"
+        case "${target}" in
+            /*) path="${target}" ;;
+            *) path="${dir}/${target}" ;;
+        esac
+    done
+
+    dir="$(cd -P "$(dirname "${path}")" && pwd)"
+    printf '%s/%s\n' "${dir}" "$(basename "${path}")"
+}
+
+# Only source a helper this user owns and nobody else can modify.
+is_trusted_file() {
+    local path="${1}"
+
+    [[ -f "${path}" && -O "${path}" ]] || return 1
+    [[ -z "$(find "${path}" -maxdepth 0 \( -perm -020 -o -perm -002 \) -print 2>/dev/null)" ]]
+}
+
+# The script lives at <repo>/stow/common/.local/bin/os-update.
+find_common_sh() {
+    local script_path=""
+    local candidate=""
+    local repo_dir=""
+    local fallback_dir="${DOTFILES_DIR:-${HOME:+${HOME}/.dotfiles}}"
+    local -a candidates=()
+
+    script_path="$(resolve_script_path "${BASH_SOURCE[0]}")"
+    if repo_dir="$(cd "$(dirname "${script_path}")/../../../.." 2>/dev/null && pwd)"; then
+        candidates+=("${repo_dir}/scripts/common.sh")
+    fi
+    if [[ -n "${fallback_dir}" && "${fallback_dir}" != "${repo_dir}" ]]; then
+        candidates+=("${fallback_dir}/scripts/common.sh")
+    fi
+
+    for candidate in "${candidates[@]+"${candidates[@]}"}"; do
+        [[ -e "${candidate}" ]] || continue
+
+        if is_trusted_file "${candidate}"; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+
+        printf 'warning: not sourcing %s: it must be a regular file you own that is not group- or world-writable\n' \
+            "${candidate}" >&2
+    done
+
+    return 1
+}
+
+if COMMON_SH="$(find_common_sh)"; then
     # shellcheck disable=SC1090,SC1091
     source "${COMMON_SH}"
 else
@@ -242,9 +297,40 @@ run_brew_updates() {
     "${BREW_BIN}" cleanup --prune=all
 
     brew_cache="$("${BREW_BIN}" --cache)"
-    rm -rf "${brew_cache}"
+    clear_brew_cache "${brew_cache}"
 
     add_result "PASS" "Homebrew updates completed"
+}
+
+# `brew --cache` honors HOMEBREW_CACHE, so refuse anything that is not plainly
+# a Homebrew cache directory before deleting it.
+clear_brew_cache() {
+    local brew_cache="${1}"
+    local resolved=""
+    local home_dir="${HOME%/}"
+    local home_real=""
+
+    # Nothing to delete; an already-missing cache is not a problem.
+    if [[ -n "${brew_cache}" && ! -e "${brew_cache}" && ! -L "${brew_cache}" ]]; then
+        return 0
+    fi
+
+    if [[ -n "${brew_cache}" && -d "${brew_cache}" ]]; then
+        resolved="$(cd -P "${brew_cache}" 2>/dev/null && pwd)" || resolved=""
+    fi
+    home_real="$(cd -P "${HOME:-/}" 2>/dev/null && pwd)" || home_real="/"
+
+    case "${resolved}" in
+        ""|/|"${home_dir}"|"${home_real}")
+            ;;
+        */Homebrew|*/Homebrew/*)
+            rm -rf "${resolved}"
+            return 0
+            ;;
+    esac
+
+    _warn "Warning: not clearing unexpected Homebrew cache path: ${brew_cache:-<empty>}"
+    add_result "WARN" "Skipped clearing unexpected Homebrew cache path: ${brew_cache:-<empty>}"
 }
 
 run_linux_updates() {
