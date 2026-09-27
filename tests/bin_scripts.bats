@@ -2995,19 +2995,28 @@ run_agent_setup() {
     assert_output --partial "run 'import' as agent"
 }
 
-@test "ph-agent-setup authorize adds one fetch-only key from stdin" {
+# Runs authorize with the contents of file ${1} on stdin.
+run_agent_authorize() {
+    run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        "${PROJECT_ROOT}/stow/common/.local/bin/ph-agent-setup" authorize < "${1}"
+}
+
+@test "ph-agent-setup authorize adds one fetch-only key from stdin without its comment" {
     agent_setup_sandbox pi
-    local key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest agent@pihole vault read-only"
+    ssh-keygen -q -t ed25519 -N "" -C "agent@pihole vault read-only" -f "${TEST_TMPDIR}/ro"
+    local blob
+    blob="$(cut -d' ' -f2 "${TEST_TMPDIR}/ro.pub")"
     printf 'ssh-ed25519 AAAApersonal bran\n' > "${TEST_TMPDIR}/home/.ssh/authorized_keys"
-    run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        bash -c "printf '%s\n' '${key}' | '${PROJECT_ROOT}/stow/common/.local/bin/ph-agent-setup' authorize"
+    run_agent_authorize "${TEST_TMPDIR}/ro.pub"
     assert_success
-    run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        bash -c "printf '%s\n' '${key}' | '${PROJECT_ROOT}/stow/common/.local/bin/ph-agent-setup' authorize"
+    run_agent_authorize "${TEST_TMPDIR}/ro.pub"
     assert_success
     assert_output --partial "already authorized"
-    run grep -c "restrict,command=\"git upload-pack 'git/vault.git'\" ${key}" "${TEST_TMPDIR}/home/.ssh/authorized_keys"
+    run grep -c "${blob}" "${TEST_TMPDIR}/home/.ssh/authorized_keys"
     assert_output "1"
+    run grep -Fx "restrict,command=\"git upload-pack 'git/vault.git'\" ssh-ed25519 ${blob} agent-vault-ro" \
+        "${TEST_TMPDIR}/home/.ssh/authorized_keys"
+    assert_success
     run grep -c "uploadpack.allowReachableSHA1InWant true" "${TEST_TMPDIR}/calls"
     assert_output "2"
 }
@@ -3015,11 +3024,75 @@ run_agent_setup() {
 @test "ph-agent-setup authorize rejects input that is not a public key" {
     agent_setup_sandbox pi
     touch "${TEST_TMPDIR}/home/.ssh/authorized_keys"
-    run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        bash -c "printf 'command=evil\n' | '${PROJECT_ROOT}/stow/common/.local/bin/ph-agent-setup' authorize"
+    printf 'command=evil\n' > "${TEST_TMPDIR}/input"
+    run_agent_authorize "${TEST_TMPDIR}/input"
     assert_failure
     assert_output --partial "not an ed25519 public key"
+    refute_output --partial "evil"
     assert [ ! -s "${TEST_TMPDIR}/home/.ssh/authorized_keys" ]
+}
+
+@test "ph-agent-setup authorize rejects a second key line, other key types, and invalid keys" {
+    agent_setup_sandbox pi
+    ssh-keygen -q -t ed25519 -N "" -f "${TEST_TMPDIR}/ro"
+    ssh-keygen -q -t ed25519 -N "" -f "${TEST_TMPDIR}/extra"
+    ssh-keygen -q -t rsa -b 2048 -N "" -f "${TEST_TMPDIR}/rsa"
+    printf 'ssh-ed25519 AAAApersonal bran\n' > "${TEST_TMPDIR}/home/.ssh/authorized_keys"
+    cp "${TEST_TMPDIR}/home/.ssh/authorized_keys" "${TEST_TMPDIR}/before"
+    local input
+    # A valid key followed by a second, unrestricted one.
+    cat "${TEST_TMPDIR}/ro.pub" "${TEST_TMPDIR}/extra.pub" > "${TEST_TMPDIR}/two-lines"
+    # A carriage return between two keys, without a newline.
+    printf '%s\r%s\n' "$(cat "${TEST_TMPDIR}/ro.pub")" "$(cat "${TEST_TMPDIR}/extra.pub")" > "${TEST_TMPDIR}/cr"
+    # Right shape, but not a key ssh-keygen can read.
+    printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest agent\n' > "${TEST_TMPDIR}/bogus"
+    for input in two-lines cr rsa.pub bogus; do
+        run_agent_authorize "${TEST_TMPDIR}/${input}"
+        assert_failure
+        assert_output --partial "not an ed25519 public key"
+    done
+    run cmp "${TEST_TMPDIR}/before" "${TEST_TMPDIR}/home/.ssh/authorized_keys"
+    assert_success
+    run grep -c "uploadpack" "${TEST_TMPDIR}/calls"
+    assert_failure
+}
+
+@test "ph-agent-setup user gives agent root-owned keys and commands without option-bearing keys" {
+    agent_setup_sandbox pi
+    # Record each sudo call; mirror installed files under root/ and answer the sshd query.
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+printf 'sudo %s\n' "$*" >> "${TEST_TMPDIR}/calls"
+if [[ "${1}" == "install" && " $* " != *" -d "* ]]; then
+    dst="${*: -1}"
+    mkdir -p "${TEST_TMPDIR}/root$(dirname "${dst}")"
+    cp "${*: -2:1}" "${TEST_TMPDIR}/root${dst}"
+elif [[ "${1}" == "sshd" && "${2}" == "-T" ]]; then
+    printf 'authorizedkeysfile /etc/ssh/authorized_keys/%%u\n'
+fi
+MOCK
+    cat > "${TEST_TMPDIR}/home/.ssh/authorized_keys" <<'KEYS'
+ssh-ed25519 AAAApersonal bran@mac
+restrict,command="git receive-pack 'git/vault.git'" ssh-ed25519 AAAApush vault-push
+from="10.0.0.1" ssh-rsa AAAAfrom limited
+ecdsa-sha2-nistp256 AAAAecdsa bran@phone
+KEYS
+    run_agent_setup user
+    assert_success
+    run cat "${TEST_TMPDIR}/root/etc/ssh/authorized_keys/agent"
+    assert_output "$(printf 'ssh-ed25519 AAAApersonal bran@mac\necdsa-sha2-nistp256 AAAAecdsa bran@phone')"
+    run grep -F "sudo install -m 644 -o root -g root /dev/stdin /etc/ssh/authorized_keys/agent" "${TEST_TMPDIR}/calls"
+    assert_success
+    run grep -F "AuthorizedKeysFile /etc/ssh/authorized_keys/%u" "${TEST_TMPDIR}/root/etc/ssh/sshd_config.d/ph-agent-setup.conf"
+    assert_success
+    run grep -F "sudo install -m 755 -o root -g root" "${TEST_TMPDIR}/calls"
+    assert_output --partial "/usr/local/bin/ph-agent-setup"
+    assert_output --partial "/usr/local/bin/vault-lint"
+    assert_output --partial "/usr/local/bin/vault-mv"
+    run grep -c -- "-o agent" "${TEST_TMPDIR}/calls"
+    assert_output "1"
+    run cat "${TEST_TMPDIR}/root/usr/local/bin/vault-mv"
+    assert_output --partial 'exec /usr/local/bin/ph-agent-setup mv "$@"'
 }
 
 @test "ph-agent-setup schedule keeps exactly one tagged cron entry" {
@@ -3036,6 +3109,8 @@ MOCK
     run_agent_setup schedule
     assert_success
     run grep -c "# ph-agent-setup import" "${TEST_TMPDIR}/crontab"
+    assert_output "1"
+    run grep -c "^0 7 \* \* \* /usr/local/bin/ph-agent-setup import " "${TEST_TMPDIR}/crontab"
     assert_output "1"
     run grep -c "@reboot other-job" "${TEST_TMPDIR}/crontab"
     assert_output "1"
@@ -3060,4 +3135,112 @@ MOCK
     assert_output "1"
     run grep -c "^claude" "${TEST_TMPDIR}/calls"
     assert_output "0"
+}
+
+@test "ph-agent-setup import gives Claude a vault-scoped allowlist without find, cp, or mv" {
+    agent_setup_sandbox agent
+    mkdir -p "${TEST_TMPDIR}/home/blife/_inbox" "${TEST_TMPDIR}/rootbin"
+    touch "${TEST_TMPDIR}/home/blife/_inbox/scan.pdf"
+    export PH_AGENT_BIN_DIR="${TEST_TMPDIR}/rootbin"
+    local tool home="${TEST_TMPDIR}/home"
+    for tool in vault-lint vault-mv; do
+        printf '#!/usr/bin/env bash\n' > "${PH_AGENT_BIN_DIR}/${tool}"
+        chmod +x "${PH_AGENT_BIN_DIR}/${tool}"
+    done
+    for tool in ob flock; do
+        cat > "${BIN_SANDBOX}/${tool}" <<MOCK
+#!/usr/bin/env bash
+printf '${tool} %s\n' "\$*" >> "${TEST_TMPDIR}/calls"
+MOCK
+        chmod +x "${BIN_SANDBOX}/${tool}"
+    done
+    # Keep a copy of the settings file Claude was started with.
+    cat > "${BIN_SANDBOX}/claude" <<MOCK
+#!/usr/bin/env bash
+printf 'claude\n' >> "${TEST_TMPDIR}/calls"
+while [[ \$# -gt 0 ]]; do
+    [[ "\$1" == "--settings" ]] && cp "\$2" "${TEST_TMPDIR}/settings.json"
+    shift
+done
+MOCK
+    chmod +x "${BIN_SANDBOX}/claude"
+    run_agent_setup import
+    assert_success
+    run grep -c "^claude" "${TEST_TMPDIR}/calls"
+    assert_output "1"
+    run jq -r '.permissions.allow[]' "${TEST_TMPDIR}/settings.json"
+    assert_success
+    assert_output --partial "Glob"
+    refute_output --partial "find"
+    refute_output --partial "Bash(cp"
+    refute_output --partial "Bash(mv"
+    run jq -r '.permissions.allow[] | select(test("^(Write|Edit)"))' "${TEST_TMPDIR}/settings.json"
+    assert_output "$(printf 'Write(/%s/blife/**)\nEdit(/%s/blife/**)' "${home}" "${home}")"
+    run jq -r '.permissions.deny[]' "${TEST_TMPDIR}/settings.json"
+    assert_output --partial "Bash(curl *)"
+    assert_output --partial "Write(/${home}/.local/**)"
+    assert_output --partial "Edit(/${home}/.ssh/**)"
+    assert_output --partial "Write(/${home}/.claude/**)"
+    assert_output --partial "Edit(/${home}/.config/**)"
+    assert_output --partial "Write(/${home}/.local/share/blife-tools/**)"
+    assert_output --partial "Edit(**/.claude/**)"
+}
+
+@test "ph-agent-setup import refuses to start Claude without the root-owned helpers" {
+    agent_setup_sandbox agent
+    mkdir -p "${TEST_TMPDIR}/home/blife/_inbox" "${TEST_TMPDIR}/rootbin"
+    touch "${TEST_TMPDIR}/home/blife/_inbox/scan.pdf"
+    export PH_AGENT_BIN_DIR="${TEST_TMPDIR}/rootbin"
+    local tool
+    for tool in ob claude flock; do
+        cat > "${BIN_SANDBOX}/${tool}" <<MOCK
+#!/usr/bin/env bash
+printf '${tool} %s\n' "\$*" >> "${TEST_TMPDIR}/calls"
+MOCK
+        chmod +x "${BIN_SANDBOX}/${tool}"
+    done
+    run_agent_setup import
+    assert_failure
+    assert_output --partial "run 'ph-agent-setup user' as pi"
+    run grep -c "^claude" "${TEST_TMPDIR}/calls"
+    assert_output "0"
+}
+
+@test "ph-agent-setup mv moves a file within the vault and nowhere else" {
+    agent_setup_sandbox agent
+    local vault="${TEST_TMPDIR}/home/blife"
+    mkdir -p "${vault}/_inbox" "${vault}/_attachments/day" "${vault}/.claude" "${TEST_TMPDIR}/home/.local/bin"
+    printf 'scan\n' > "${vault}/_inbox/scan.pdf"
+    printf 'other\n' > "${vault}/_inbox/other.pdf"
+    printf 'taken\n' > "${vault}/_attachments/day/taken.pdf"
+    printf 'secret\n' > "${TEST_TMPDIR}/outside"
+    ln -s "${TEST_TMPDIR}/outside" "${vault}/_inbox/link.pdf"
+
+    run_agent_setup mv "${vault}/_inbox/other.pdf" "${TEST_TMPDIR}/home/.local/bin/vault-lint"
+    assert_failure
+    assert_output --partial "outside the vault"
+    run_agent_setup mv "${vault}/_inbox/other.pdf" "${vault}/_attachments/../../.local/bin/x"
+    assert_failure
+    run_agent_setup mv "${vault}/_inbox/other.pdf" "${vault}/.claude/settings.json"
+    assert_failure
+    run_agent_setup mv "${vault}/_inbox/other.pdf" "${vault}/_attachments/day/taken.pdf"
+    assert_failure
+    assert_output --partial "destination exists"
+    run_agent_setup mv "${vault}/_inbox/link.pdf" "${vault}/_attachments/day/"
+    assert_failure
+    assert_output --partial "not a regular file"
+    run_agent_setup mv "${TEST_TMPDIR}/outside" "${vault}/_attachments/day/"
+    assert_failure
+    assert_output --partial "source is outside the vault"
+    assert [ -f "${vault}/_inbox/other.pdf" ]
+    assert [ ! -e "${TEST_TMPDIR}/home/.local/bin/vault-lint" ]
+    assert [ ! -e "${TEST_TMPDIR}/home/.local/bin/x" ]
+    run cat "${vault}/_attachments/day/taken.pdf"
+    assert_output "taken"
+
+    run_agent_setup mv "${vault}/_inbox/scan.pdf" "${vault}/_attachments/day/"
+    assert_success
+    assert [ ! -e "${vault}/_inbox/scan.pdf" ]
+    run cat "${vault}/_attachments/day/scan.pdf"
+    assert_output "scan"
 }
