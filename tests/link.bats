@@ -119,6 +119,36 @@ stat_mode() {
     [ "$(readlink "$(backup_of .bashrc)")" = /somewhere/else ]
 }
 
+@test "creates backup directories privately" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    mkdir -p "${DEST}/.config/git"
+    printf 'my local edit\n' > "${DEST}/.config/git/ignore"
+
+    run_link
+    assert_success
+    local backup stamp_dir
+    backup="$(backup_of .config/git/ignore)"
+    stamp_dir="${backup%/.config/git/ignore}"
+    [ "$(stat_mode "${DEST}/.local/state/dotfiles/clobbered")" = 700 ]
+    [ "$(stat_mode "${stamp_dir}")" = 700 ]
+    [ "$(stat_mode "${stamp_dir}/.config")" = 700 ]
+    [ "$(stat_mode "${stamp_dir}/.config/git")" = 700 ]
+}
+
+@test "refuses to back up through a symlinked state directory" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    mkdir -p "${DEST}/.local" "${TEST_TMPDIR}/elsewhere" "${DEST}/.config/git"
+    ln -s "${TEST_TMPDIR}/elsewhere" "${DEST}/.local/state"
+    printf 'my local edit\n' > "${DEST}/.config/git/ignore"
+
+    run_link
+    assert_failure
+    assert_output --partial "Backup parent is a symlink: ${DEST}/.local/state"
+    [ ! -L "${DEST}/.config/git/ignore" ]
+    [ "$(cat "${DEST}/.config/git/ignore")" = 'my local edit' ]
+    [ -z "$(ls -A "${TEST_TMPDIR}/elsewhere")" ]
+}
+
 @test "a second run changes nothing" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     run_link
