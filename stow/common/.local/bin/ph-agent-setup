@@ -17,6 +17,12 @@ CONFIG_DIR="${PH_AGENT_CONFIG_DIR:-${HOME}/.config/blife-import}"
 DEVICE_NAME="${PH_AGENT_DEVICE_NAME:-zbox-agent}"
 CRON_SCHEDULE="${PH_AGENT_CRON:-0 7 * * *}"
 NODE_MAJOR="${PH_AGENT_NODE_MAJOR:-22}"
+OB_VERSION="${PH_AGENT_OB_VERSION:-0.0.14}"
+# Root-owned homes for what agent runs but must never be able to change: this script (run
+# by agent's cron) and the vault-lint/vault-mv wrappers the import may call.
+BIN_DIR="${PH_AGENT_BIN_DIR:-/usr/local/bin}"
+AGENT_KEYS_DIR="/etc/ssh/authorized_keys"
+SSHD_DROPIN="/etc/ssh/sshd_config.d/ph-agent-setup.conf"
 RO_KEY="${HOME}/.ssh/vault_ro"
 CRON_TAG="# ph-agent-setup import"
 
@@ -32,13 +38,16 @@ Set up the locked-down `agent` user on the Pi-hole box and run the daily blife `
 
 | Command | Run as | Does |
 |---------|--------|------|
-| `user` | pi (sudo) | Create `agent` with a mode-700 home and pi's personal SSH keys; install this script for it |
+| `user` | pi (sudo) | Create `agent` with a mode-700 home; let pi's personal SSH keys log in as agent through a root-owned key file; install this script, `vault-lint`, and `vault-mv` root-owned in `/usr/local/bin` |
 | `install` | agent | Node (checksum-verified), `obsidian-headless`, Claude Code, a read-only vault key |
 | `authorize` | pi (sudo, or the key on stdin) | Let agent's key fetch `~/git/vault.git` and nothing else |
 | `link` | agent | Sync the vault to `~/blife` (runs `ob login` if needed), check out `.scripts/` read-only |
 | `schedule` | agent | Install the daily cron job |
 | `import` | agent | One import run: sync, import `_inbox/` as the importer role, sync |
 | `status` | agent | Show versions, sync state, cron entry, and inbox count |
+
+The import calls `vault-lint ARGS` (`ph-agent-setup lint ARGS`) and `vault-mv SRC DEST`
+(`ph-agent-setup mv SRC DEST`, a move that stays inside the vault).
 
 ## Options
 
@@ -58,12 +67,13 @@ EOF
     cat <<'EOF'
 Usage:
   ph-agent-setup user|install|authorize|link|schedule|import|status
+  ph-agent-setup lint [ARGS...] | mv SRC DEST
   ph-agent-setup --help
 
 Set up the locked-down agent user on the Pi-hole box and run the daily blife
 _inbox/ import. Run the steps in order: user (as pi, uses sudo), install
 (as agent), authorize (as pi), link, schedule (as agent). Every step is safe
-to re-run.
+to re-run. lint and mv back the vault-lint and vault-mv commands the import uses.
 EOF
 }
 
@@ -82,12 +92,57 @@ require_not_user() {
     [[ "$(id -un)" != "${1}" ]] || die "run '${2}' as the admin user, not ${1}"
 }
 
+# The root-owned wrappers come first so nothing agent can write shadows them.
 use_local_bin() {
-    PATH="${HOME}/.local/bin:${PATH}"
+    PATH="${BIN_DIR}:${HOME}/.local/bin:${PATH}"
     export PATH
 }
 
 # ---- user: as pi, with sudo -------------------------------------------------
+
+# Agent's authorized_keys must not be writable by agent: a prompt-injected import could
+# otherwise add a key and log in without Claude's permission rules. StrictModes accepts a
+# root-owned file only when every directory above it is root-owned too, and agent needs to
+# write its own ~/.ssh (key, config, known_hosts), so sshd reads agent's keys from
+# /etc/ssh/authorized_keys/agent instead; the old ~/.ssh/authorized_keys is then ignored.
+install_agent_keys() {
+    local src="${HOME}/.ssh/authorized_keys" dropin current
+    [[ -r "${src}" ]] || die "no ${src} to copy personal keys from"
+    sudo install -d -m 755 -o root -g root "${AGENT_KEYS_DIR}"
+    # Personal keys only: a line with options (restrict, command=, from=), such as the vault
+    # push key, stays with pi.
+    { grep -E '^(ssh-ed25519|ssh-rsa|ecdsa-sha2-[^ ]+|sk-[^ ]+) ' "${src}" || true; } \
+        | sudo install -m 644 -o root -g root /dev/stdin "${AGENT_KEYS_DIR}/${AGENT_USER}"
+
+    dropin="$(printf '# Written by ph-agent-setup: agent cannot change its own login keys.\nMatch User %s\n    AuthorizedKeysFile %s/%%u\n' \
+        "${AGENT_USER}" "${AGENT_KEYS_DIR}")"
+    current="$(cat "${SSHD_DROPIN}" 2>/dev/null || true)"
+    if [[ "${current}" != "${dropin}" ]]; then
+        log "pointing sshd at ${AGENT_KEYS_DIR}/${AGENT_USER} for ${AGENT_USER}"
+        printf '%s\n' "${dropin}" | sudo install -m 644 -o root -g root /dev/stdin "${SSHD_DROPIN}"
+        if ! sudo sshd -t; then
+            sudo rm -f -- "${SSHD_DROPIN}"
+            die "sshd rejected ${SSHD_DROPIN}; removed it and left sshd unchanged"
+        fi
+        sudo systemctl reload ssh
+    fi
+    current="$(sudo sshd -T -C "user=${AGENT_USER},host=localhost,addr=127.0.0.1")" \
+        || die "could not read the effective sshd configuration"
+    grep -qixF "authorizedkeysfile ${AGENT_KEYS_DIR}/%u" <<< "${current}" \
+        || die "sshd ignores ${SSHD_DROPIN}; check that sshd_config includes sshd_config.d/*.conf"
+}
+
+install_commands() {
+    local cmd
+    sudo install -d -m 755 -o root -g root "${BIN_DIR}"
+    sudo install -m 755 -o root -g root "${BASH_SOURCE[0]}" "${BIN_DIR}/ph-agent-setup"
+    for cmd in lint mv; do
+        printf '#!/usr/bin/env bash\nexec %q %s "$@"\n' "${BIN_DIR}/ph-agent-setup" "${cmd}" \
+            | sudo install -m 755 -o root -g root /dev/stdin "${BIN_DIR}/vault-${cmd}"
+    done
+    # Earlier versions left agent-owned copies here; they would shadow the root-owned ones.
+    sudo rm -f -- "${AGENT_HOME}/.local/bin/ph-agent-setup" "${AGENT_HOME}/.local/bin/vault-lint"
+}
 
 step_user() {
     require_not_user "${AGENT_USER}" user
@@ -100,13 +155,9 @@ step_user() {
     sudo chmod 700 "${AGENT_HOME}"
     sudo install -d -m 700 -o "${AGENT_USER}" -g "${AGENT_USER}" \
         "${AGENT_HOME}/.ssh" "${AGENT_HOME}/.local" "${AGENT_HOME}/.local/bin"
-    # Personal keys only: restricted (command=) keys such as the vault push key stay with pi.
-    grep -v '^restrict' "${HOME}/.ssh/authorized_keys" \
-        | sudo install -m 600 -o "${AGENT_USER}" -g "${AGENT_USER}" /dev/stdin \
-            "${AGENT_HOME}/.ssh/authorized_keys"
-    sudo install -m 755 -o "${AGENT_USER}" -g "${AGENT_USER}" "${BASH_SOURCE[0]}" \
-        "${AGENT_HOME}/.local/bin/ph-agent-setup"
-    log "done. Next, as ${AGENT_USER}: ph-agent-setup install"
+    install_agent_keys
+    install_commands
+    log "done. Next, as ${AGENT_USER}: ph-agent-setup install (or, if set up before, ph-agent-setup schedule)"
 }
 
 # ---- install: as agent -------------------------------------------------------
@@ -131,6 +182,9 @@ install_node() {
     local tmp
     tmp="$(mktemp -d)"
     curl -fsSL -o "${tmp}/${file}" "${url}/${file}"
+    # This checks the download against SHASUMS256.txt from the same host over TLS, which
+    # catches corruption but not a compromised nodejs.org. Checking SHASUMS256.txt.asc would
+    # need the Node release team's signing keys pinned here and kept current.
     curl -fsSL "${url}/SHASUMS256.txt" | grep " ${file}\$" | (cd "${tmp}" && sha256sum -c -)
     mkdir -p "${HOME}/.local/opt" "${HOME}/.local/bin"
     tar -xJf "${tmp}/${file}" -C "${HOME}/.local/opt"
@@ -142,6 +196,19 @@ install_node() {
     done
 }
 
+install_claude() {
+    local installer
+    # Download the installer completely before running it, so a dropped connection cannot
+    # run a truncated script. Anthropic publishes no signature for it to check.
+    installer="$(mktemp)"
+    if ! curl -fsSL -o "${installer}" https://claude.ai/install.sh; then
+        rm -f -- "${installer}"
+        die "could not download the Claude Code installer"
+    fi
+    bash "${installer}" || { rm -f -- "${installer}"; die "the Claude Code installer failed"; }
+    rm -f -- "${installer}"
+}
+
 step_install() {
     require_linux
     require_user "${AGENT_USER}" install
@@ -149,13 +216,13 @@ step_install() {
     umask 077
     install_node
     npm config set prefix "${HOME}/.local"
-    log "installing obsidian-headless"
-    npm install -g obsidian-headless >/dev/null
+    log "installing obsidian-headless ${OB_VERSION}"
+    npm install -g "obsidian-headless@${OB_VERSION}" >/dev/null
     if command -v claude >/dev/null 2>&1; then
         log "Claude Code $(claude --version) installed (it updates itself)"
     else
         log "installing Claude Code"
-        curl -fsSL https://claude.ai/install.sh | bash
+        install_claude
     fi
     if [[ ! -f "${RO_KEY}" ]]; then
         log "creating read-only vault key"
@@ -166,20 +233,37 @@ step_install() {
 
 # ---- authorize: as pi --------------------------------------------------------
 
+# Prints the base64 blob of the single ed25519 public key in ${1}, or fails. The input is
+# agent-controlled, so it is never echoed and only the blob survives: no options, no comment.
+parse_agent_key() {
+    local raw="${1}" type="" blob="" tmp fingerprint
+    [[ "${raw}" != *$'\n'* && "${raw}" != *$'\r'* ]] || return 1
+    read -r type blob _ <<< "${raw}" || true
+    [[ "${type}" == "ssh-ed25519" && "${blob}" =~ ^[A-Za-z0-9+/]+={0,2}$ ]] || return 1
+    tmp="$(mktemp)"
+    printf 'ssh-ed25519 %s\n' "${blob}" > "${tmp}"
+    fingerprint="$(ssh-keygen -l -f "${tmp}" 2>/dev/null || true)"
+    rm -f -- "${tmp}"
+    [[ "${fingerprint}" == *"(ED25519)" ]] || return 1
+    printf '%s\n' "${blob}"
+}
+
 step_authorize() {
     require_not_user "${AGENT_USER}" authorize
-    local pub line keys="${HOME}/.ssh/authorized_keys"
+    local raw blob line keys="${HOME}/.ssh/authorized_keys"
     # The key comes on stdin (ssh agent@host cat .ssh/vault_ro.pub | ph-agent-setup authorize)
-    # or, without it, through sudo, since agent's home is closed to pi.
+    # or, without it, read as agent, since agent's home is closed to pi. Reading as agent
+    # rather than root keeps a planted symlink from exposing root-only files.
     if [[ -t 0 ]]; then
-        pub="$(sudo cat "${AGENT_HOME}/.ssh/vault_ro.pub")" || die "no key yet; run 'install' as ${AGENT_USER} first"
+        raw="$(sudo -u "${AGENT_USER}" cat -- "${AGENT_HOME}/.ssh/vault_ro.pub")" \
+            || die "no key yet; run 'install' as ${AGENT_USER} first"
     else
-        pub="$(cat)"
+        raw="$(head -c 4096)"
     fi
-    [[ "${pub}" == ssh-ed25519\ * ]] || die "not an ed25519 public key: ${pub:0:40}"
+    blob="$(parse_agent_key "${raw}")" || die "not an ed25519 public key (expected one 'ssh-ed25519 KEY' line)"
     # Fetch only: upload-pack serves clones and fetches and never accepts a push.
-    line="restrict,command=\"git upload-pack '${VAULT_REPO}'\" ${pub}"
-    if grep -qF "${pub}" "${keys}"; then
+    line="restrict,command=\"git upload-pack '${VAULT_REPO}'\" ssh-ed25519 ${blob} agent-vault-ro"
+    if [[ -f "${keys}" ]] && awk -v b="${blob}" '{ for (i = 1; i <= NF; i++) if ($i == b) f = 1 } END { exit !f }' "${keys}"; then
         log "agent key already authorized"
     else
         printf '%s\n' "${line}" >> "${keys}"
@@ -237,11 +321,7 @@ step_link() {
         git clone --quiet --depth 1 --filter=blob:none --sparse "vault-ro:${VAULT_REPO}" "${TOOLS_DIR}"
         git -C "${TOOLS_DIR}" sparse-checkout set .scripts
     fi
-    cat > "${HOME}/.local/bin/vault-lint" <<EOF
-#!/usr/bin/env bash
-exec python3 "${TOOLS_DIR}/.scripts/vault-lint" --root "${VAULT_DIR}" "\$@"
-EOF
-    chmod 700 "${HOME}/.local/bin/vault-lint"
+    [[ -x "${BIN_DIR}/vault-lint" ]] || die "no ${BIN_DIR}/vault-lint; run 'ph-agent-setup user' as ${ADMIN_USER}"
 
     if ! claude auth status >/dev/null 2>&1; then
         log "Claude Code is not signed in: run 'claude' once and log in, then re-run 'link'"
@@ -256,33 +336,107 @@ step_schedule() {
     require_user "${AGENT_USER}" schedule
     mkdir -p "${STATE_DIR}"
     local entry current
-    entry="${CRON_SCHEDULE} ${HOME}/.local/bin/ph-agent-setup import >> ${STATE_DIR}/cron.log 2>&1 ${CRON_TAG}"
+    entry="${CRON_SCHEDULE} ${BIN_DIR}/ph-agent-setup import >> ${STATE_DIR}/cron.log 2>&1 ${CRON_TAG}"
     current="$(crontab -l 2>/dev/null || true)"
     { printf '%s\n' "${current}" | grep -vF "${CRON_TAG}" || true; printf '%s\n' "${entry}"; } \
         | sed '/^$/d' | crontab -
     log "cron: ${entry}"
 }
 
+# ---- lint and mv: the import's helpers, as agent -----------------------------
+
+# vault-lint runs python3 from TOOLS_DIR, an agent-owned clone. The import must never be able
+# to write there (see the deny rules in write_claude_settings), or it could replace the linter
+# it is allowed to run with anything, including network access.
+step_lint() {
+    exec python3 "${TOOLS_DIR}/.scripts/vault-lint" --root "${VAULT_DIR}" "$@"
+}
+
+# Accepts a resolved absolute path inside the resolved vault root, outside the folders that
+# configure Obsidian or Claude.
+vault_path_ok() {
+    local path="${1}" root="${2}" rel
+    [[ "${path}" == "${root}/"* ]] || return 1
+    rel="/${path#"${root}"/}/"
+    case "${rel}" in
+        */./*|*/../*|//|*/.obsidian/*|*/.claude/*|*/.git/*|*/.mcp.json/*) return 1 ;;
+    esac
+}
+
+# The import's only way to move a file: both ends resolve inside the vault, the source is a
+# regular file (not a link), the destination folder already exists, and nothing is overwritten.
+step_move() {
+    local src dest root src_path dest_dir dest_name dest_path
+    require_user "${AGENT_USER}" mv
+    [[ $# -eq 2 ]] || die "usage: vault-mv SRC DEST"
+    src="${1}"
+    dest="${2}"
+    root="$(CDPATH='' cd -P -- "${VAULT_DIR}" && pwd -P)" || die "no vault at ${VAULT_DIR}"
+    [[ -f "${src}" && ! -L "${src}" ]] || die "not a regular file: ${src}"
+    src_path="$(CDPATH='' cd -P -- "$(dirname -- "${src}")" && pwd -P)/$(basename -- "${src}")"
+    if [[ -d "${dest}" && ! -L "${dest}" ]]; then
+        dest_dir="${dest}"
+        dest_name="$(basename -- "${src}")"
+    else
+        dest_dir="$(dirname -- "${dest}")"
+        dest_name="$(basename -- "${dest}")"
+    fi
+    dest_dir="$(CDPATH='' cd -P -- "${dest_dir}" 2>/dev/null && pwd -P)" \
+        || die "no folder for ${dest}; create it with mkdir -p first"
+    dest_path="${dest_dir}/${dest_name}"
+    vault_path_ok "${src_path}" "${root}" || die "source is outside the vault: ${src}"
+    vault_path_ok "${dest_path}" "${root}" || die "destination is outside the vault: ${dest}"
+    [[ ! -e "${dest_path}" && ! -L "${dest_path}" ]] || die "destination exists: ${dest}"
+    mv -n -- "${src_path}" "${dest_path}"
+    [[ ! -e "${src_path}" && -f "${dest_path}" ]] || die "could not move ${src} to ${dest}"
+}
+
 # ---- import: as agent (cron) -------------------------------------------------
 
+# Prints an absolute path for use inside a permission rule, or fails when it has characters
+# that JSON or the rule's glob syntax would treat specially.
+rule_path() {
+    [[ "${1}" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "unsupported characters in path: ${1}"
+    printf '%s\n' "${1%/}"
+}
+
 write_claude_settings() {
+    local vault home tools
+    vault="$(rule_path "${VAULT_DIR}")"
+    home="$(rule_path "${HOME}")"
+    tools="$(rule_path "${TOOLS_DIR}")"
     mkdir -p "${CONFIG_DIR}"
-    # Allowlist for unattended runs: file tools plus the few shell commands an import needs.
-    # dontAsk refuses everything else, and nothing here reaches the network.
-    cat > "${CONFIG_DIR}/claude-settings.json" <<'EOF'
+    # Allowlist for unattended runs: reading anywhere, writing only inside the vault, and the few
+    # shell commands an import needs; dontAsk refuses everything else. "//" starts an absolute
+    # path in a rule. The denies cover what would let a prompt-injected run outlast itself:
+    # ~/.local (node, claude, TOOLS_DIR), ~/.ssh, Claude's settings, and cron's state.
+    # Claude talks to Anthropic, and vault-lint is python3 from TOOLS_DIR, which can reach the
+    # network, so TOOLS_DIR must stay unwritable here. No cp or mv: they write anywhere agent can;
+    # vault-mv moves within the vault. No find: -exec/-fprintf run anything past the deny rules
+    # below; Glob covers discovery.
+    cat > "${CONFIG_DIR}/claude-settings.json" <<EOF
 {
   "permissions": {
     "allow": [
-      "Read", "Write", "Edit", "Glob", "Grep",
-      "Bash(vault-lint *)", "Bash(vault-lint)",
-      "Bash(ls *)", "Bash(find *)", "Bash(stat *)", "Bash(file *)", "Bash(wc *)",
+      "Read", "Glob", "Grep",
+      "Write(/${vault}/**)", "Edit(/${vault}/**)",
+      "Bash(vault-lint *)", "Bash(vault-lint)", "Bash(vault-mv *)",
+      "Bash(ls *)", "Bash(stat *)", "Bash(file *)", "Bash(wc *)",
       "Bash(grep *)", "Bash(head *)", "Bash(tail *)", "Bash(date *)", "Bash(date)",
-      "Bash(mkdir *)", "Bash(cp *)", "Bash(mv *)", "Bash(cmp *)", "Bash(sha256sum *)"
+      "Bash(mkdir *)", "Bash(cmp *)", "Bash(sha256sum *)"
     ],
     "deny": [
       "WebFetch", "WebSearch",
+      "Write(/${home}/.local/**)", "Edit(/${home}/.local/**)",
+      "Write(/${home}/.ssh/**)", "Edit(/${home}/.ssh/**)",
+      "Write(/${home}/.claude/**)", "Edit(/${home}/.claude/**)",
+      "Write(/${home}/.claude.json)", "Edit(/${home}/.claude.json)",
+      "Write(/${home}/.config/**)", "Edit(/${home}/.config/**)",
+      "Write(/${tools}/**)", "Edit(/${tools}/**)",
+      "Write(**/.claude/**)", "Edit(**/.claude/**)",
+      "Write(/${vault}/.mcp.json)", "Edit(/${vault}/.mcp.json)",
       "Bash(curl *)", "Bash(wget *)", "Bash(ssh *)", "Bash(scp *)", "Bash(git *)",
-      "Bash(rm *)", "Bash(sudo *)", "Bash(ob *)"
+      "Bash(cp *)", "Bash(mv *)", "Bash(rm *)", "Bash(sudo *)", "Bash(ob *)"
     ]
   }
 }
@@ -293,9 +447,9 @@ import_prompt() {
     cat <<EOF
 You are the importer for Bran's Obsidian vault at ${VAULT_DIR} (on the Pi-hole box, as the locked-down '${AGENT_USER}' user). This is an unattended daily run; Bran is not watching.
 
-On this machine, run the linter as \`vault-lint\` (it is \`python3 .scripts/vault-lint --root ${VAULT_DIR}\`; .scripts/ is not synced here). Wherever the manual says \`python3 .scripts/vault-lint ...\`, run \`vault-lint ...\` instead. There is no git here and you must not use the network.
+On this machine, run the linter as \`vault-lint\` (it is \`python3 .scripts/vault-lint --root ${VAULT_DIR}\`; .scripts/ is not synced here). Wherever the manual says \`python3 .scripts/vault-lint ...\`, run \`vault-lint ...\` instead. Move a file with \`vault-mv SRC DEST\`: both must be inside the vault, DEST's folder must already exist (create it with \`mkdir -p\`), and it never overwrites. There is no cp, mv, rm, or git here, you can write only inside the vault, and you must not use the network.
 
-1. Read AGENTS.md, then Agents/strict-rules.md, then Agents/roles/role-importer.md, and follow them exactly. Run \`vault-lint\` first for a baseline. The source is all of \`_inbox/\` (dot-files excepted): follow the role's steps, including moving each original to \`_attachments/raw/_inbox/YYYY-MM-DD/\` only after its note is written, writing the import log, and running \`vault-lint --fix\` on every changed file and then the full \`vault-lint\` (no new errors).
+1. Read AGENTS.md, then Agents/strict-rules.md, then Agents/roles/role-importer.md, and follow them exactly. Run \`vault-lint\` first for a baseline. The source is all of \`_inbox/\` (dot-files excepted): follow the role's steps, including moving each original to \`_attachments/_raw/_inbox/YYYY-MM-DD/\` with \`vault-mv\` only after its note is written, writing the import log, and running \`vault-lint --fix\` on every changed file and then the full \`vault-lint\` (no new errors).
 2. Never commit or push. Do nothing that leaves the vault: no email, messages, Notion, Monarch, web forms, or web requests. Never delete anything. When something needs Bran's decision (ambiguous destination or meaning), make the safest choice the manual allows, usually leaving the file in \`_inbox/\` or creating an \`inbox\` task, and list it under "Decisions for Bran".
 3. Finish by appending the report to Agents/logs/log-importer-YYYY-MM-DD.md as Agents/agent-protocol.md ("Run log") describes, and reply with a short summary: files in, notes created or updated, tasks created, files left in _inbox/ and why, and the decisions for Bran.
 EOF
@@ -324,6 +478,8 @@ step_import() {
         log "inbox empty"
         return 0
     fi
+    [[ -x "${BIN_DIR}/vault-lint" && -x "${BIN_DIR}/vault-mv" ]] \
+        || die "no ${BIN_DIR}/vault-lint or vault-mv; run 'ph-agent-setup user' as ${ADMIN_USER}"
     log "importing ${count} file(s)"
     write_claude_settings
     local status=0
@@ -352,6 +508,11 @@ step_status() {
 }
 
 main() {
+    [[ $# -ge 1 ]] || { usage >&2; exit 2; }
+    case "${1}" in
+        lint) shift; step_lint "$@"; return ;;
+        mv) shift; step_move "$@"; return ;;
+    esac
     [[ $# -eq 1 ]] || { usage >&2; exit 2; }
     case "${1}" in
         -h|--help) usage ;;
