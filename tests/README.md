@@ -112,6 +112,7 @@ This is process-level isolation, not a real container or VM.
 - Runs `home-audit` against a sandboxed home, a fixture xdg-ninja database, and a fixture dotfiles repo
 - Verifies JUNK/LEFTOVER/MOVE/REVIEW/KEEP classification, environment-redirect detection, and `--days`/`--all`
 - Checks that the audited home is left untouched and that missing data sources are reported, including a machine with no xdg-ninja at all
+- Verifies last-change ages in notes, the 1Password agent link and folder-to-command aliases, and `--tsv` output
 
 [`link.bats`](/Users/bran/.dotfiles/tests/link.bats)
 

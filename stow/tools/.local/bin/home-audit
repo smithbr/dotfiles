@@ -15,12 +15,18 @@
 # scripts/link.sh managed list marks what the dotfiles repo owns. To archive
 # what you decide against, run ~/.dotfiles/scripts/file-review.sh --cleanup.
 #
+# Each note says when the entry last changed, so an entry whose owner cannot
+# be found can still be judged by age.
+#
 # Usage:
-#   home-audit [--days N] [--home PATH] [--all]
+#   home-audit [--days N] [--home PATH] [--all] [--tsv]
 #
 #   --days N     inactivity threshold in days (default 90)
 #   --home PATH  audit another home directory (default $HOME)
 #   --all        also list KEEP entries
+#   --tsv        print every entry, KEEP included, as
+#                bucket<TAB>path<TAB>size<TAB>note lines for scripts
+#                (file-review.sh uses this)
 #
 # Environment:
 #   HOME_AUDIT_PROGRAMS  xdg-ninja programs directory (auto-detected)
@@ -34,6 +40,7 @@ set -euo pipefail
 days=90
 home_dir="${HOME}"
 show_all=0
+tsv=0
 
 usage() {
     sed -n '3,/^$/{s/^# \{0,1\}//;p;}' "$0"
@@ -52,6 +59,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --all) show_all=1; shift ;;
+        --tsv) tsv=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "home-audit: unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -106,17 +114,44 @@ is_managed() {
     [[ -n "${managed}" ]] && grep -qF "${path}/" <<<"${managed}"
 }
 
-# True when something at or under the path changed within $days.
-recently_active() {
-    local hit
-    hit="$(find "$1" -maxdepth 2 -mtime "-${days}" -print 2>/dev/null | head -n 1 || true)"
-    [[ -n "${hit}" ]]
+# stat arguments that print a modification time in epoch seconds (GNU, then BSD).
+if stat -c %Y / >/dev/null 2>&1; then
+    mtime_args=(-c %Y)
+else
+    mtime_args=(-f %m)
+fi
+now="$(date +%s)"
+
+# Whole days since anything at or under the path (two levels deep) changed.
+age_days() {
+    local newest
+    newest="$(find "$1" -maxdepth 2 -print0 2>/dev/null | xargs -0 stat "${mtime_args[@]}" 2>/dev/null | sort -n | tail -n 1 || true)"
+    [[ "${newest}" =~ ^[0-9]+$ ]] || newest="${now}"
+    printf '%d\n' $(((now - newest) / 86400))
+}
+
+age_text() {
+    case "$1" in
+        0) printf 'changed today' ;;
+        1) printf 'changed yesterday' ;;
+        *) printf 'changed %d days ago' "$1" ;;
+    esac
+}
+
+# Folders named after a product rather than its command.
+owner_alias() {
+    case "$1" in
+        vscode*) printf 'code\n' ;;
+        microsandbox) printf 'msb\n' ;;
+        factory) printf 'droid\n' ;;
+        kimi-code) printf 'kimi\n' ;;
+    esac
 }
 
 find_owner() {
     local name="$1" program="$2" base candidate app
     base="$(printf '%s' "${name#.}" | tr '[:upper:]' '[:lower:]')"
-    for candidate in "${program}" "${base}" "${base%%[-_.]*}"; do
+    for candidate in "${program}" "$(owner_alias "${base}")" "${base}" "${base%%[-_.]*}"; do
         [[ -n "${candidate}" ]] || continue
         if command -v "${candidate}" >/dev/null 2>&1; then
             printf '%s\n' "${candidate}"
@@ -148,10 +183,13 @@ printable() {
 
 declare -a junk=() leftover=() move=() review=() keep=()
 
+# Rows are path<TAB>display<TAB>size<TAB>note.
 add() {
-    local bucket="$1" path="$2" note="$3" line
+    local bucket="$1" path="$2" note="$3" line size=""
+    # Kept entries include ~/.cache and ~/.local, too big to size on every run.
+    [[ "${bucket}" == keep ]] || size="$(size_of "${path}")"
     # shellcheck disable=SC2088 # literal ~ for display
-    line="$(printf '%s\t%s\t%s' "$(printable "~/${path#"${home_dir}"/}")" "$([[ "${bucket}" == keep ]] || size_of "${path}")" "$(printable "${note}")")"
+    line="$(printf '%s\t%s\t%s\t%s' "$(printable "${path}")" "$(printable "~/${path#"${home_dir}"/}")" "${size}" "$(printable "${note}")")"
     case "${bucket}" in
         junk) junk+=("${line}") ;;
         leftover) leftover+=("${line}") ;;
@@ -179,6 +217,10 @@ for path in "${home_dir}"/.*; do
     fi
     if [[ "${required_names}" == *" ${name} "* ]]; then
         add keep "${path}" "required"
+        continue
+    fi
+    if [[ "${name}" == .1password ]]; then
+        add keep "${path}" "1Password SSH agent socket link, made by the shell config"
         continue
     fi
 
@@ -209,16 +251,17 @@ for path in "${home_dir}"/.*; do
     fi
 
     owner="$(find_owner "${name}" "${program}")"
-    if recently_active "${path}"; then
+    age="$(age_days "${path}")"
+    if [[ "${age}" -lt "${days}" ]]; then
         if [[ -n "${owner}" ]]; then
-            add keep "${path}" "in use by ${owner}"
+            add keep "${path}" "in use by ${owner}; $(age_text "${age}")"
         else
-            add review "${path}" "active, but no installed owner found"
+            add review "${path}" "no installed owner found, but $(age_text "${age}")"
         fi
     elif [[ -n "${owner}" ]]; then
-        add review "${path}" "${owner} installed, but untouched ${days}+ days"
+        add review "${path}" "${owner} installed, but untouched ${age} days"
     else
-        add leftover "${path}" "no installed owner, untouched ${days}+ days"
+        add leftover "${path}" "no installed owner, untouched ${age} days"
     fi
 done
 
@@ -232,8 +275,24 @@ print_bucket() {
     shift 2
     [[ $# -gt 0 ]] || return 0
     printf '\n%s%s (%d)%s %s%s%s\n' "${bold}" "${title}" "$#" "${reset}" "${dim}" "${desc}" "${reset}"
-    printf '%s\n' "$@" | awk -F'\t' '{ printf "  %-28s %6s  %s\n", $1, $2, $3 }'
+    printf '%s\n' "$@" | awk -F'\t' '{ printf "  %-28s %6s  %s\n", $2, $3, $4 }'
 }
+
+print_tsv() {
+    local bucket="$1"
+    shift
+    [[ $# -gt 0 ]] || return 0
+    printf '%s\n' "$@" | awk -F'\t' -v b="${bucket}" 'BEGIN { OFS = "\t" } { print b, $1, $3, $4 }'
+}
+
+if [[ "${tsv}" -eq 1 ]]; then
+    print_tsv junk ${junk[@]+"${junk[@]}"}
+    print_tsv leftover ${leftover[@]+"${leftover[@]}"}
+    print_tsv move ${move[@]+"${move[@]}"}
+    print_tsv review ${review[@]+"${review[@]}"}
+    print_tsv keep ${keep[@]+"${keep[@]}"}
+    exit 0
+fi
 
 printf '%sHome audit%s %s(%s, inactive = %s+ days)%s\n' "${bold}" "${reset}" "${dim}" "$(printable "${home_dir}")" "${days}" "${reset}"
 [[ -n "${xdg_db}" ]] || printf '%snote: xdg-ninja data or jq not found; XDG checks skipped%s\n' "${dim}" "${reset}"
