@@ -256,6 +256,199 @@ MOCK
     unset PH_PADD_DNS_UNBOUND_CONF
 }
 
+@test "ph-padd-dns does not splice unbound stats into awk code" {
+    local marker="${TEST_TMPDIR}/awk-ran"
+
+    cat > "${BIN_SANDBOX}/unbound-control" <<MOCK
+#!/usr/bin/env bash
+case "\${1:-}" in
+    status) printf 'unbound is running as pid 1234\n' ;;
+    stats_noreset)
+        printf 'total.num.queries=2\n'
+        printf 'total.num.cachehits=1) + system("touch ${marker}") + (1\n'
+        ;;
+esac
+MOCK
+    chmod +x "${BIN_SANDBOX}/unbound-control"
+
+    PH_PADD_DNS_UNBOUND_MAIN_CONF="${TEST_TMPDIR}/missing.conf" \
+        run_padd_dns_unbound_probe "${PROJECT_ROOT}/stow/common/.local/bin/ph-padd-dns"
+
+    assert_success
+    assert_output --partial "cache=No stats"
+    assert [ ! -e "${marker}" ]
+}
+
+# Replaces main() of a PADD script with the shell code in $PADD_PROBE_MAIN
+# and runs it with the remaining arguments, with curl and dig mocked.
+run_padd_main_probe() {
+    local source_script="${1}"
+    local probe_script
+    probe_script="${TEST_TMPDIR}/probe-$(basename "${source_script}")"
+    shift
+
+    PADD_PROBE_MAIN="${PADD_PROBE_MAIN}" awk '
+        /^main\(\)\{$/ { print "main(){"; print ENVIRON["PADD_PROBE_MAIN"]; print "}"; skip=1; next }
+        skip && /^}$/ { skip=0; next }
+        skip { next }
+        { print }
+    ' "${source_script}" > "${probe_script}"
+    chmod +x "${probe_script}"
+
+    rm -f "${TEST_TMPDIR}/curl-args" "${TEST_TMPDIR}/curl-stdin"
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" "${probe_script}" "$@"
+}
+
+# curl mock: logs argv and stdin separately and prints curl-body (plus the
+# >>status suffix when called with -w). dig mock prints dig-reply.
+write_padd_network_mocks() {
+    ln -sf "$(command -v jq)" "${BIN_SANDBOX}/jq"
+
+    cat > "${BIN_SANDBOX}/curl" <<MOCK
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${TEST_TMPDIR}/curl-args"
+for arg in "\$@"; do
+    case "\${arg}" in
+        -|@-) cat >> "${TEST_TMPDIR}/curl-stdin"; printf '\n' >> "${TEST_TMPDIR}/curl-stdin" ;;
+    esac
+done
+cat "${TEST_TMPDIR}/curl-body" 2>/dev/null
+for arg in "\$@"; do
+    [[ "\${arg}" == "-w" ]] && printf '>>200'
+done
+exit 0
+MOCK
+
+    cat > "${BIN_SANDBOX}/dig" <<MOCK
+#!/usr/bin/env bash
+cat "${TEST_TMPDIR}/dig-reply" 2>/dev/null
+MOCK
+    chmod +x "${BIN_SANDBOX}/curl" "${BIN_SANDBOX}/dig"
+}
+
+@test "ph-padd scripts never evaluate API numbers in shell arithmetic" {
+    local marker="${TEST_TMPDIR}/pwned" script
+    write_padd_network_mocks
+    printf '{"system":{"uptime":"a[$(touch %s)]"}}' "${marker}" > "${TEST_TMPDIR}/curl-body"
+
+    for script in ph-padd ph-padd-dns; do
+        PADD_PROBE_MAIN='API_URL=https://127.0.0.1/api/; GetPADDData; convertUptime "$(GetPADDValue system.uptime)"; echo; convertUptime 90061' \
+            run_padd_main_probe "${PROJECT_ROOT}/stow/common/.local/bin/${script}"
+        assert_success
+        assert_output --partial "0 days, 00 hours, 00 minutes"
+        assert_output --partial "1 days, 01 hours, 01 minutes"
+        assert [ ! -e "${marker}" ]
+    done
+}
+
+@test "ph-padd scripts strip control characters from API strings" {
+    local script
+    write_padd_network_mocks
+    printf '%s' '{"node_name":"evil\u001b]0;t\u0007\nsystem.uptime=5"}' > "${TEST_TMPDIR}/curl-body"
+
+    for script in ph-padd ph-padd-dns; do
+        PADD_PROBE_MAIN='API_URL=https://127.0.0.1/api/; GetPADDData; printf "host=%s|uptime=%s\n" "$(GetPADDValue node_name)" "$(GetPADDValue system.uptime)"' \
+            run_padd_main_probe "${PROJECT_ROOT}/stow/common/.local/bin/${script}"
+        assert_success
+        assert_output "host=evil]0;tsystem.uptime=5|uptime="
+    done
+}
+
+@test "ph-padd scripts verify TLS for remote servers and pin discovered URLs to --server" {
+    local script
+    write_padd_network_mocks
+    printf '%s\n' '"https://attacker.example/api/" "http://attacker.example:80/api/"' > "${TEST_TMPDIR}/dig-reply"
+    : > "${TEST_TMPDIR}/ca.pem"
+    PADD_PROBE_MAIN='TestAPIAvailability; printf "api=%s\n" "${API_URL}"'
+
+    for script in ph-padd ph-padd-dns; do
+        run_padd_main_probe "${PROJECT_ROOT}/stow/common/.local/bin/${script}" --server 192.0.2.10
+        assert_success
+        assert_output --partial "api=https://192.0.2.10/api/"
+        run cat "${TEST_TMPDIR}/curl-args"
+        assert_output --partial "https://192.0.2.10/api/auth"
+        refute_output --partial "--insecure"
+        refute_output --regexp '(^| )-[a-zA-Z]*k'
+
+        run_padd_main_probe "${PROJECT_ROOT}/stow/common/.local/bin/${script}" --server 192.0.2.10 --cacert "${TEST_TMPDIR}/ca.pem"
+        assert_success
+        run cat "${TEST_TMPDIR}/curl-args"
+        assert_output --partial "--cacert ${TEST_TMPDIR}/ca.pem"
+        refute_output --partial "--insecure"
+
+        run_padd_main_probe "${PROJECT_ROOT}/stow/common/.local/bin/${script}" --server 192.0.2.10 --insecure
+        assert_success
+        run cat "${TEST_TMPDIR}/curl-args"
+        assert_output --partial "--insecure"
+
+        run_padd_main_probe "${PROJECT_ROOT}/stow/common/.local/bin/${script}" --server 127.0.0.1
+        assert_success
+        assert_output --partial "api=https://127.0.0.1/api/"
+        run cat "${TEST_TMPDIR}/curl-args"
+        assert_output --partial "--insecure"
+    done
+}
+
+@test "ph-padd scripts refuse plain http API URLs for remote hosts" {
+    local script
+    write_padd_network_mocks
+    printf '%s\n' '"http://attacker.example:80/api/"' > "${TEST_TMPDIR}/dig-reply"
+    PADD_PROBE_MAIN='TestAPIAvailability; printf "api=%s\n" "${API_URL}"'
+
+    for script in ph-padd ph-padd-dns; do
+        run_padd_main_probe "${PROJECT_ROOT}/stow/common/.local/bin/${script}" --server 192.0.2.10
+        assert_failure
+        assert_output --partial "Refusing plain http:// API URL http://192.0.2.10:80/api/"
+        assert [ ! -e "${TEST_TMPDIR}/curl-args" ]
+
+        run_padd_main_probe "${PROJECT_ROOT}/stow/common/.local/bin/${script}" --api http://192.0.2.10/api/
+        assert_failure
+        assert_output --partial "Refusing API URL http://192.0.2.10/api/"
+        assert [ ! -e "${TEST_TMPDIR}/curl-args" ]
+    done
+}
+
+@test "ph-padd scripts keep the password and session ID out of curl argv" {
+    local script
+    write_padd_network_mocks
+    printf '%s' '{"session":{"valid":true,"sid":"c2Vzc2lvbg=="}}' > "${TEST_TMPDIR}/curl-body"
+    PADD_PROBE_MAIN='API_URL=https://192.0.2.10/api/; Authenticate; printf "valid=%s\n" "${validSession}"; GetFTLData info/ftl >/dev/null'
+
+    for script in ph-padd ph-padd-dns; do
+        PADD_PASSWORD='hunter2"\x' run_padd_main_probe "${PROJECT_ROOT}/stow/common/.local/bin/${script}"
+        assert_success
+        assert_output --partial "valid=true"
+
+        run cat "${TEST_TMPDIR}/curl-args"
+        refute_output --partial "hunter2"
+        refute_output --partial "c2Vzc2lvbg"
+
+        run cat "${TEST_TMPDIR}/curl-stdin"
+        assert_output --partial '{"password":"hunter2\"\\x","totp":null}'
+        assert_output --partial 'header = "sid: c2Vzc2lvbg=="'
+    done
+}
+
+@test "ph-padd scripts reject --secret and skip self-update" {
+    local script
+
+    for script in ph-padd ph-padd-dns; do
+        run sh "${PROJECT_ROOT}/stow/common/.local/bin/${script}" --secret hunter2
+        assert_failure
+        assert_output --partial "PADD_PASSWORD"
+
+        # ph-update still calls -u, so it succeeds without downloading anything
+        run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" sh "${PROJECT_ROOT}/stow/common/.local/bin/${script}" --update
+        assert_success
+        assert_output "ph-padd is managed by ~/.dotfiles; update it there."
+
+        run sh "${PROJECT_ROOT}/stow/common/.local/bin/${script}" --help
+        assert_output --partial "--cacert"
+        assert_output --partial "--insecure"
+        refute_output --partial "--secret"
+    done
+}
+
 @test "os-update displays help" {
     run "${PROJECT_ROOT}/stow/common/.local/bin/os-update" --help
     assert_success
