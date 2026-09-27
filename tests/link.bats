@@ -608,3 +608,75 @@ persona_state() {
     assert_failure 2
     assert_output --partial "Unknown persona 'retired'"
 }
+
+# ---------------------------------------------------------------------------
+# Layers
+# ---------------------------------------------------------------------------
+
+@test "each persona links its own layers" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    run_link --persona home
+    assert_success
+    [ -L "${DEST}/.config/ghostty/config" ]
+    [ -L "${DEST}/.local/bin/sshkey" ]
+    [ ! -e "${DEST}/.local/bin/ph-update" ]
+
+    DEST="${TEST_TMPDIR}/pi-home"
+    DOTFILES_OS=linux run_link --persona server
+    assert_success
+    [ -L "${DEST}/.local/bin/ph-update" ]
+    [ -L "${DEST}/.local/bin/ph-agent-setup" ]
+    [ -L "${DEST}/.local/bin/sshkey" ]
+    [ ! -e "${DEST}/.config/ghostty" ]
+    [ ! -e "${DEST}/.config/1Password" ]
+
+    # A Mac server gets the shared tools but not the Linux-only Pi-hole ones.
+    DEST="${TEST_TMPDIR}/mini-home"
+    run_link --persona server
+    assert_success
+    [ -L "${DEST}/.local/bin/os-update" ]
+    [ ! -e "${DEST}/.local/bin/ph-update" ]
+
+    DEST="${TEST_TMPDIR}/sandbox-home"
+    DOTFILES_OS=linux run_link --persona sandbox
+    assert_success
+    [ -L "${DEST}/.zshenv" ]
+    [ ! -e "${DEST}/.local/bin" ]
+}
+
+# Links a run of the single-layer layout left: every tool under stow/common.
+plant_single_layer_links() {
+    local name
+    mkdir -p "${DEST}/.local/bin" "${DEST}/.config/ghostty"
+    for name in sshkey ph-update ph-agent-setup; do
+        ln -s "${PROJECT_ROOT}/stow/common/.local/bin/${name}" "${DEST}/.local/bin/${name}"
+    done
+    ln -s "${PROJECT_ROOT}/stow/common/.config/ghostty/config" "${DEST}/.config/ghostty/config"
+}
+
+@test "moving to layers relinks what the persona keeps and removes the rest" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    plant_single_layer_links
+    run_link --persona home
+    assert_success
+    refute_output --partial "Backed up"
+    [ "$(readlink "${DEST}/.local/bin/sshkey")" = "../../.dotfiles/stow/tools/.local/bin/sshkey" ] \
+        || [ "$(cd "${DEST}/.local/bin" && cd -P "$(dirname "$(readlink sshkey)")" && pwd)" = "${PROJECT_ROOT}/stow/tools/.local/bin" ]
+    [ -e "${DEST}/.config/ghostty/config" ]
+    [ ! -L "${DEST}/.local/bin/ph-update" ]
+    [ ! -L "${DEST}/.local/bin/ph-agent-setup" ]
+    [ ! -e "${DEST}/.local/state/dotfiles/clobbered" ]
+
+    DEST="${TEST_TMPDIR}/pi-home"
+    plant_single_layer_links
+    DOTFILES_OS=linux run_link --persona server
+    assert_success
+    refute_output --partial "Backed up"
+    [ -e "${DEST}/.local/bin/ph-update" ]
+    [ -e "${DEST}/.local/bin/ph-agent-setup" ]
+    [ ! -L "${DEST}/.config/ghostty/config" ]
+    [ ! -e "${DEST}/.local/state/dotfiles/clobbered" ]
+    DOTFILES_OS=linux run_link status
+    assert_success
+    assert_output ""
+}

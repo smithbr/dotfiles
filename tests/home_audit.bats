@@ -1,10 +1,10 @@
 #!/usr/bin/env bats
-# Tests for stow/common/.local/bin/home-audit — classification of top-level dotfiles.
+# Tests for stow/tools/.local/bin/home-audit — classification of top-level dotfiles.
 # shellcheck disable=SC2088 # "~/" is literal display text in expected output
 
 load test_helper
 
-SCRIPT="${PROJECT_ROOT}/stow/common/.local/bin/home-audit"
+SCRIPT="${PROJECT_ROOT}/stow/tools/.local/bin/home-audit"
 
 setup() {
     setup_tmpdir

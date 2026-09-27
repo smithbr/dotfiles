@@ -29,7 +29,7 @@ is_trusted_file() {
     [[ -z "$(find "${path}" -maxdepth 0 \( -perm -020 -o -perm -002 \) -print 2>/dev/null)" ]]
 }
 
-# The script lives at <repo>/stow/common/.local/bin/os-update.
+# The script lives at <repo>/stow/tools/.local/bin/os-update.
 find_common_sh() {
     local script_path=""
     local candidate=""

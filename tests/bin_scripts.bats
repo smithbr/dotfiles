@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# Tests for stow/common/.local/bin scripts — isolated smoke and behavior coverage.
+# Tests for the stow/*/.local/bin scripts — isolated smoke and behavior coverage.
 
 load test_helper
 
@@ -24,33 +24,33 @@ teardown() {
 }
 
 @test "ph-sec-audit defaults to a plan without applying changes" {
-    run bash "${PROJECT_ROOT}/stow/common/.local/bin/ph-sec-audit"
+    run bash "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-sec-audit"
     assert_success
     assert_output --partial "Without --apply"
     refute_output --partial "Backups:"
 
-    run bash "${PROJECT_ROOT}/stow/common/.local/bin/ph-sec-audit" --upgrade-packages
+    run bash "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-sec-audit" --upgrade-packages
     assert_success
     assert_output --partial "Without --apply"
     refute_output --partial "Backups:"
 }
 
 @test "ph-sec-audit requires a target and rejects malformed arguments" {
-    run bash "${PROJECT_ROOT}/stow/common/.local/bin/ph-sec-audit" --apply
+    run bash "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-sec-audit" --apply
     assert_failure
     assert_output --partial "requires an explicit valid --user and --host"
 
-    run bash "${PROJECT_ROOT}/stow/common/.local/bin/ph-sec-audit" --apply --user --host
+    run bash "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-sec-audit" --apply --user --host
     assert_failure
     assert_output --partial "Missing value"
 
-    run bash "${PROJECT_ROOT}/stow/common/.local/bin/ph-sec-audit" --unknown
+    run bash "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-sec-audit" --unknown
     assert_failure
     assert_output --partial "Unknown argument"
 }
 
 @test "ph-sec-audit refuses a different host before making changes" {
-    run bash "${PROJECT_ROOT}/stow/common/.local/bin/ph-sec-audit" \
+    run bash "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-sec-audit" \
         --apply --user operator --host "$(hostname)-wrong-target"
     assert_failure
     assert_output --partial "Host mismatch; no changes made"
@@ -84,7 +84,7 @@ PROBE
         /^restore_web_ports\(\) \{/ { copy=1 }
         copy { print }
         /^trap - ERR HUP INT TERM$/ { exit }
-    ' "${PROJECT_ROOT}/stow/common/.local/bin/ph-sec-audit" >> "${probe_script}"
+    ' "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-sec-audit" >> "${probe_script}"
 
     run env PROBE_FAILURE="${1}" bash "${probe_script}"
 }
@@ -177,7 +177,7 @@ run_padd_dns_unbound_probe() {
 }
 
 @test "ph-padd displays help" {
-    run sh "${PROJECT_ROOT}/stow/common/.local/bin/ph-padd" --help
+    run sh "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-padd" --help
     assert_success
     assert_output --partial "PADD displays stats about your Pi-hole"
     assert_output --partial "--api"
@@ -185,7 +185,7 @@ run_padd_dns_unbound_probe() {
 }
 
 @test "ph-padd-dns displays help" {
-    run sh "${PROJECT_ROOT}/stow/common/.local/bin/ph-padd-dns" --help
+    run sh "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-padd-dns" --help
     assert_success
     assert_output --partial "Unbound resolver details"
     assert_output --partial "--api"
@@ -200,7 +200,7 @@ exit 0
 MOCK
     chmod +x "${BIN_SANDBOX}/dig"
 
-    run_padd_api_probe "${PROJECT_ROOT}/stow/common/.local/bin/ph-padd"
+    run_padd_api_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-padd"
     assert_failure
     assert_output --partial "API not available at: localhost"
 
@@ -244,7 +244,7 @@ MOCK
     export PH_PADD_DNS_UNBOUND_MAIN_CONF="${main_conf}"
     export PH_PADD_DNS_UNBOUND_CONF="${include_conf}"
 
-    run_padd_dns_unbound_probe "${PROJECT_ROOT}/stow/common/.local/bin/ph-padd-dns"
+    run_padd_dns_unbound_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-padd-dns"
 
     assert_success
     assert_output --partial "status=Running"
@@ -272,7 +272,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/unbound-control"
 
     PH_PADD_DNS_UNBOUND_MAIN_CONF="${TEST_TMPDIR}/missing.conf" \
-        run_padd_dns_unbound_probe "${PROJECT_ROOT}/stow/common/.local/bin/ph-padd-dns"
+        run_padd_dns_unbound_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-padd-dns"
 
     assert_success
     assert_output --partial "cache=No stats"
@@ -333,7 +333,7 @@ MOCK
 
     for script in ph-padd ph-padd-dns; do
         PADD_PROBE_MAIN='API_URL=https://127.0.0.1/api/; GetPADDData; convertUptime "$(GetPADDValue system.uptime)"; echo; convertUptime 90061' \
-            run_padd_main_probe "${PROJECT_ROOT}/stow/common/.local/bin/${script}"
+            run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}"
         assert_success
         assert_output --partial "0 days, 00 hours, 00 minutes"
         assert_output --partial "1 days, 01 hours, 01 minutes"
@@ -348,7 +348,7 @@ MOCK
 
     for script in ph-padd ph-padd-dns; do
         PADD_PROBE_MAIN='API_URL=https://127.0.0.1/api/; GetPADDData; printf "host=%s|uptime=%s\n" "$(GetPADDValue node_name)" "$(GetPADDValue system.uptime)"' \
-            run_padd_main_probe "${PROJECT_ROOT}/stow/common/.local/bin/${script}"
+            run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}"
         assert_success
         assert_output "host=evil]0;tsystem.uptime=5|uptime="
     done
@@ -362,7 +362,7 @@ MOCK
     PADD_PROBE_MAIN='TestAPIAvailability; printf "api=%s\n" "${API_URL}"'
 
     for script in ph-padd ph-padd-dns; do
-        run_padd_main_probe "${PROJECT_ROOT}/stow/common/.local/bin/${script}" --server 192.0.2.10
+        run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --server 192.0.2.10
         assert_success
         assert_output --partial "api=https://192.0.2.10/api/"
         run cat "${TEST_TMPDIR}/curl-args"
@@ -370,18 +370,18 @@ MOCK
         refute_output --partial "--insecure"
         refute_output --regexp '(^| )-[a-zA-Z]*k'
 
-        run_padd_main_probe "${PROJECT_ROOT}/stow/common/.local/bin/${script}" --server 192.0.2.10 --cacert "${TEST_TMPDIR}/ca.pem"
+        run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --server 192.0.2.10 --cacert "${TEST_TMPDIR}/ca.pem"
         assert_success
         run cat "${TEST_TMPDIR}/curl-args"
         assert_output --partial "--cacert ${TEST_TMPDIR}/ca.pem"
         refute_output --partial "--insecure"
 
-        run_padd_main_probe "${PROJECT_ROOT}/stow/common/.local/bin/${script}" --server 192.0.2.10 --insecure
+        run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --server 192.0.2.10 --insecure
         assert_success
         run cat "${TEST_TMPDIR}/curl-args"
         assert_output --partial "--insecure"
 
-        run_padd_main_probe "${PROJECT_ROOT}/stow/common/.local/bin/${script}" --server 127.0.0.1
+        run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --server 127.0.0.1
         assert_success
         assert_output --partial "api=https://127.0.0.1/api/"
         run cat "${TEST_TMPDIR}/curl-args"
@@ -396,12 +396,12 @@ MOCK
     PADD_PROBE_MAIN='TestAPIAvailability; printf "api=%s\n" "${API_URL}"'
 
     for script in ph-padd ph-padd-dns; do
-        run_padd_main_probe "${PROJECT_ROOT}/stow/common/.local/bin/${script}" --server 192.0.2.10
+        run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --server 192.0.2.10
         assert_failure
         assert_output --partial "Refusing plain http:// API URL http://192.0.2.10:80/api/"
         assert [ ! -e "${TEST_TMPDIR}/curl-args" ]
 
-        run_padd_main_probe "${PROJECT_ROOT}/stow/common/.local/bin/${script}" --api http://192.0.2.10/api/
+        run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --api http://192.0.2.10/api/
         assert_failure
         assert_output --partial "Refusing API URL http://192.0.2.10/api/"
         assert [ ! -e "${TEST_TMPDIR}/curl-args" ]
@@ -415,7 +415,7 @@ MOCK
     PADD_PROBE_MAIN='API_URL=https://192.0.2.10/api/; Authenticate; printf "valid=%s\n" "${validSession}"; GetFTLData info/ftl >/dev/null'
 
     for script in ph-padd ph-padd-dns; do
-        PADD_PASSWORD='hunter2"\x' run_padd_main_probe "${PROJECT_ROOT}/stow/common/.local/bin/${script}"
+        PADD_PASSWORD='hunter2"\x' run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}"
         assert_success
         assert_output --partial "valid=true"
 
@@ -433,16 +433,16 @@ MOCK
     local script
 
     for script in ph-padd ph-padd-dns; do
-        run sh "${PROJECT_ROOT}/stow/common/.local/bin/${script}" --secret hunter2
+        run sh "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --secret hunter2
         assert_failure
         assert_output --partial "PADD_PASSWORD"
 
         # ph-update still calls -u, so it succeeds without downloading anything
-        run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" sh "${PROJECT_ROOT}/stow/common/.local/bin/${script}" --update
+        run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" sh "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --update
         assert_success
         assert_output "ph-padd is managed by ~/.dotfiles; update it there."
 
-        run sh "${PROJECT_ROOT}/stow/common/.local/bin/${script}" --help
+        run sh "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --help
         assert_output --partial "--cacert"
         assert_output --partial "--insecure"
         refute_output --partial "--secret"
@@ -450,7 +450,7 @@ MOCK
 }
 
 @test "os-update displays help" {
-    run "${PROJECT_ROOT}/stow/common/.local/bin/os-update" --help
+    run "${PROJECT_ROOT}/stow/tools/.local/bin/os-update" --help
     assert_success
     assert_output --partial "Usage:"
     assert_output --partial "os-update"
@@ -483,7 +483,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/apt-get" "${BIN_SANDBOX}/brew"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/os-update"
+        "${PROJECT_ROOT}/stow/tools/.local/bin/os-update"
     assert_success
     assert_output --partial "sudo apt-get update"
     assert_output --partial "sudo apt-get full-upgrade -y"
@@ -551,7 +551,7 @@ MOCK
         PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
         OSTYPE="darwin24" \
         XCODE_APP_PATH="${TEST_TMPDIR}/Applications/Xcode.app" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/os-update"
+        "${PROJECT_ROOT}/stow/tools/.local/bin/os-update"
     assert_success
     assert_output --partial "sudo softwareupdate --install --all"
     assert_output --partial "mas upgrade"
@@ -565,7 +565,7 @@ MOCK
 @test "os-update sources the repo common.sh through its stow symlink, not a planted one" {
     local home="${TEST_TMPDIR}/home"
     mkdir -p "${home}/.local/bin" "${TEST_TMPDIR}/scripts"
-    ln -s "${PROJECT_ROOT}/stow/common/.local/bin/os-update" "${home}/.local/bin/os-update"
+    ln -s "${PROJECT_ROOT}/stow/tools/.local/bin/os-update" "${home}/.local/bin/os-update"
 
     # Three levels above the link: the path the old lookup sourced.
     cat > "${TEST_TMPDIR}/scripts/common.sh" <<'PLANTED'
@@ -602,10 +602,10 @@ MOCK
 }
 
 @test "os-update only sources a fallback common.sh that others cannot write" {
-    local copy_dir="${TEST_TMPDIR}/elsewhere/stow/common/.local/bin"
+    local copy_dir="${TEST_TMPDIR}/elsewhere/stow/tools/.local/bin"
     local dotfiles="${TEST_TMPDIR}/dots"
     mkdir -p "${copy_dir}" "${dotfiles}/scripts"
-    cp "${PROJECT_ROOT}/stow/common/.local/bin/os-update" "${copy_dir}/os-update"
+    cp "${PROJECT_ROOT}/stow/tools/.local/bin/os-update" "${copy_dir}/os-update"
     printf 'printf "FALLBACK SOURCED\\n"\n' > "${dotfiles}/scripts/common.sh"
 
     chmod 666 "${dotfiles}/scripts/common.sh"
@@ -657,7 +657,7 @@ MOCK
     for reply in "" "/" "${home}" "${TEST_TMPDIR}/other-cache"; do
         run env HOME="${home}" TEST_TMPDIR="${TEST_TMPDIR}" BREW_CACHE_REPLY="${reply}" \
             PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-            "${PROJECT_ROOT}/stow/common/.local/bin/os-update"
+            "${PROJECT_ROOT}/stow/tools/.local/bin/os-update"
         assert_success
         assert_output --partial "not clearing unexpected Homebrew cache path"
         [[ ! -e "${TEST_TMPDIR}/rm.log" ]]
@@ -665,7 +665,7 @@ MOCK
 }
 
 @test "ph-update displays help" {
-    run "${PROJECT_ROOT}/stow/common/.local/bin/ph-update" --help
+    run "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update" --help
     assert_success
     assert_output --partial "Usage:"
     assert_output --partial "ph-update"
@@ -697,11 +697,11 @@ MOCK
     chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/apt-get" "${BIN_SANDBOX}/pihole" "${BIN_SANDBOX}/ph-padd"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-update"
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update"
     assert_success
     assert_output --partial "sudo apt-get update"
     refute_output --partial "PATH="
-    assert_output --partial "sudo PH_UPDATE_SKIP_OS_UPDATE=1 PH_UPDATE_PADD_BIN=${BIN_SANDBOX}/ph-padd ${PROJECT_ROOT}/stow/common/.local/bin/ph-update"
+    assert_output --partial "sudo PH_UPDATE_SKIP_OS_UPDATE=1 PH_UPDATE_PADD_BIN=${BIN_SANDBOX}/ph-padd ${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update"
 }
 
 @test "ph-update preserves -r through self-elevating sudo" {
@@ -728,7 +728,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/apt-get" "${BIN_SANDBOX}/pihole" "${BIN_SANDBOX}/ph-padd"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-update" -r
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update" -r
     assert_success
     assert_output --partial "PH_UPDATE_SKIP_OS_UPDATE=1"
     assert_output --partial "ph-update -r"
@@ -736,17 +736,17 @@ MOCK
 
 @test "ph-update rejects -r on non-linux hosts" {
     run env OSTYPE="darwin23" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-update" -r
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update" -r
     assert_failure
     assert_output --partial "-r/--restart is only supported on Linux"
 }
 
 @test "ph-update restarts Linux after a successful run when -r is set" {
     local probe_script="${TEST_TMPDIR}/ph-update"
-    ln -sf "${PROJECT_ROOT}/stow/common/.local/bin/os-update" "${TEST_TMPDIR}/os-update"
+    ln -sf "${PROJECT_ROOT}/stow/tools/.local/bin/os-update" "${TEST_TMPDIR}/os-update"
 
     sed 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-update" > "${probe_script}"
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update" > "${probe_script}"
     chmod +x "${probe_script}"
 
     cat > "${BIN_SANDBOX}/pihole" <<'MOCK'
@@ -788,7 +788,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/apt-get"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-update"
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update"
     assert_failure
     assert_output --partial "pihole command is unavailable"
     [[ "${output}" != *"sudo apt-get update"* ]]
@@ -802,7 +802,7 @@ MOCK
     # Take the root branch without being root; stay out of os-update and sudo.
     sed -e 's/^if (( EUID == 0 )); then$/if true; then/' \
         -e 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-update" > "${probe_script}"
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update" > "${probe_script}"
     chmod +x "${probe_script}"
 
     local cmd
@@ -825,9 +825,9 @@ MOCK
     # SUDO_USER as set by sudo.
     sed -e 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
         -e 's/if \[\[ "${EUID}" -eq 0 \&\& -n "${SUDO_USER:-}" \]\]; then/if [[ -n "${SUDO_USER:-}" ]]; then/' \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-update" > "${probe_script}"
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update" > "${probe_script}"
     chmod +x "${probe_script}"
-    ln -sf "${PROJECT_ROOT}/stow/common/.local/bin/os-update" "${TEST_TMPDIR}/os-update"
+    ln -sf "${PROJECT_ROOT}/stow/tools/.local/bin/os-update" "${TEST_TMPDIR}/os-update"
 
     cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
 #!/usr/bin/env bash
@@ -856,7 +856,7 @@ MOCK
 }
 
 @test "ph-test displays help" {
-    run "${PROJECT_ROOT}/stow/common/.local/bin/ph-test" --help
+    run "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test" --help
     assert_success
     assert_output --partial "Usage:"
     assert_output --partial "ph-test [dns-server-ip]"
@@ -871,10 +871,10 @@ MOCK
     chmod +x "${BIN_SANDBOX}/sudo"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-test" 192.0.2.53
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test" 192.0.2.53
     assert_success
     refute_output --partial "PATH="
-    assert_output --partial "sudo ${PROJECT_ROOT}/stow/common/.local/bin/ph-test 192.0.2.53"
+    assert_output --partial "sudo ${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test 192.0.2.53"
 }
 
 @test "ph-test finds unbound commands through supplemental sbin paths" {
@@ -936,7 +936,7 @@ MOCK
         "${unbound_sbin}/unbound-control"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" PH_TEST_SBIN_PATHS="${unbound_sbin}" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-test"
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test"
     assert_success
     [[ "${output}" != *"Missing dependency: unbound-control"* ]]
     [[ "${output}" != *"Missing dependency: unbound-checkconf"* ]]
@@ -989,7 +989,7 @@ MOCK
         PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
         PH_TEST_UNBOUND_CONF="${primary_conf}" \
         PH_TEST_UNBOUND_MAIN_CONF="${main_conf}" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-test"
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test"
     assert_success
     assert_output --partial "UNBOUND_CONF=${primary_conf}"
     assert_output --partial "interface=127.0.0.1"
@@ -1086,7 +1086,7 @@ MOCK
         PH_TEST_DIG_LOG="${dig_log}" \
         PH_TEST_UNBOUND_CONF="${conf_file}" \
         PH_TEST_UNBOUND_MAIN_CONF="${conf_file}" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-test"
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test"
     assert_success
     assert_output --partial "AD flag not exposed on direct query to 127.0.0.1:5335"
     assert_output --partial "Re-test the direct resolver socket: dig @127.0.0.1 -p 5335 google.com +dnssec +adflag"
@@ -1271,7 +1271,7 @@ MOCK
         PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
         PH_TEST_UNBOUND_CONF="${conf_file}" \
         PH_TEST_UNBOUND_MAIN_CONF="${conf_file}" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-test"
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test"
     assert_failure
     assert_output --partial "Summary"
     assert_output --partial "Could not retrieve stats"
@@ -1454,7 +1454,7 @@ MOCK
         PH_TEST_TIMEOUT_SECONDS=1 \
         PH_TEST_UNBOUND_CONF="${conf_file}" \
         PH_TEST_UNBOUND_MAIN_CONF="${conf_file}" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-test"
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test"
     assert_failure
     assert_output --partial "Summary"
     assert_output --partial "Could not retrieve stats (timed out after 1s)"
@@ -1639,7 +1639,7 @@ MOCK
         PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
         PH_TEST_UNBOUND_CONF="${conf_file}" \
         PH_TEST_UNBOUND_MAIN_CONF="${conf_file}" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-test"
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test"
     assert_success
     assert_output --partial "Summary"
     assert_output --partial "total.num.queries: 42"
@@ -1656,7 +1656,7 @@ MOCK
 
     # Take the root branch without being root.
     sed 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-test" > "${probe_script}"
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test" > "${probe_script}"
     chmod +x "${probe_script}"
 
     local cmd
@@ -1672,7 +1672,7 @@ MOCK
 }
 
 @test "ph-backup displays help" {
-    run "${PROJECT_ROOT}/stow/common/.local/bin/ph-backup" --help
+    run "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-backup" --help
     assert_success
     assert_output --partial "Usage:"
     assert_output --partial "ph-backup [-o|--output DIR]"
@@ -1688,7 +1688,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/sudo"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-backup" --bogus
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-backup" --bogus
     assert_failure
     assert_output --partial "Unknown argument: --bogus"
     refute_output --partial "sudo "
@@ -1696,7 +1696,7 @@ MOCK
 
 @test "ph-backup refuses to run off Linux" {
     run env OSTYPE="darwin23" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-backup"
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-backup"
     assert_failure
     assert_output --partial "only runs on the Linux host"
 }
@@ -1710,10 +1710,10 @@ MOCK
     chmod +x "${BIN_SANDBOX}/sudo"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-backup" -o /mnt/nas/pihole
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-backup" -o /mnt/nas/pihole
     assert_success
     refute_output --partial "PATH="
-    assert_output --partial "sudo ${PROJECT_ROOT}/stow/common/.local/bin/ph-backup -o /mnt/nas/pihole"
+    assert_output --partial "sudo ${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-backup -o /mnt/nas/pihole"
 }
 
 # ph-backup must run as root, so tests exercise a copy with the self-elevation
@@ -1809,7 +1809,7 @@ MOCK
         skip && /^fi$/ { skip = 0; next }
         skip { next }
         { print }
-    ' "${PROJECT_ROOT}/stow/common/.local/bin/ph-backup" > "${TEST_TMPDIR}/ph-backup"
+    ' "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-backup" > "${TEST_TMPDIR}/ph-backup"
 
     chmod +x "${TEST_TMPDIR}/ph-backup"
 }
@@ -2053,7 +2053,7 @@ MOCK
 
     # Take the root branch without being root.
     sed 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-backup" > "${probe_script}"
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-backup" > "${probe_script}"
     chmod +x "${probe_script}"
 
     local cmd
@@ -2208,7 +2208,7 @@ MOCK
 }
 
 @test "ts-test displays help" {
-    run bash "${PROJECT_ROOT}/stow/common/.local/bin/ts-test" --help
+    run bash "${PROJECT_ROOT}/stow/server.linux/.local/bin/ts-test" --help
     assert_success
     assert_output --partial "Usage:"
     assert_output --partial "ts-test run"
@@ -2257,7 +2257,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/tailscale" "${BIN_SANDBOX}/dig" "${BIN_SANDBOX}/systemctl"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        bash "${PROJECT_ROOT}/stow/common/.local/bin/ts-test"
+        bash "${PROJECT_ROOT}/stow/server.linux/.local/bin/ts-test"
     assert_success
     assert_output --partial "Platform: Linux"
     assert_output --partial "Backend: Running"
@@ -2267,7 +2267,7 @@ MOCK
 
 @test "sshkey displays help" {
     run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" --help
+        "${PROJECT_ROOT}/stow/tools/.local/bin/sshkey" --help
     assert_success
     assert_output --partial "Usage:"
     assert_output --partial "sshkey profiles"
@@ -2315,7 +2315,7 @@ MOCK
     mkdir -p "${TEST_TMPDIR}/home"
 
     run env HOME="${TEST_TMPDIR}/home" USER="sandbox-user" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" create devkey
+        "${PROJECT_ROOT}/stow/tools/.local/bin/sshkey" create devkey
     assert_success
     assert_output --partial "Generated local key at ${TEST_TMPDIR}/home/.ssh/devkey"
     [[ -f "${TEST_TMPDIR}/home/.ssh/devkey" ]]
@@ -2370,7 +2370,7 @@ storage = "local"
 EOF
 
     run env HOME="${TEST_TMPDIR}/home" XDG_CONFIG_HOME="${TEST_TMPDIR}/home/.config" USER="sandbox-user" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" create
+        "${PROJECT_ROOT}/stow/tools/.local/bin/sshkey" create
     assert_success
     assert_output --partial "Generated local key at ${TEST_TMPDIR}/home/.ssh/id_work"
     [[ -f "${TEST_TMPDIR}/home/.ssh/id_work" ]]
@@ -2423,7 +2423,7 @@ storage = "local"
 EOF
 
     run env HOME="${TEST_TMPDIR}/home" XDG_CONFIG_HOME="${TEST_TMPDIR}/home/.config" USER="sandbox-user" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" create -m home
+        "${PROJECT_ROOT}/stow/tools/.local/bin/sshkey" create -m home
     assert_success
     assert_output --partial "Generated local key at ${TEST_TMPDIR}/home/.ssh/id_personal"
     [[ -f "${TEST_TMPDIR}/home/.ssh/id_personal" ]]
@@ -2465,7 +2465,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/ssh-add"
 
     run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" cleanup -y
+        "${PROJECT_ROOT}/stow/tools/.local/bin/sshkey" cleanup -y
     assert_success
     assert_output --partial "Cleaned"
     [[ ! -e "${TEST_TMPDIR}/home/.ssh/id_orphan.pub" ]]
@@ -2522,7 +2522,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/ssh-add"
 
     run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" cleanup --dry-run
+        "${PROJECT_ROOT}/stow/tools/.local/bin/sshkey" cleanup --dry-run
     assert_success
     assert_output --partial "Would remove ${TEST_TMPDIR}/home/.ssh/id_orphan.pub"
     assert_output --partial "Would fix permissions on ${TEST_TMPDIR}/home/.ssh"
@@ -2597,7 +2597,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/ssh-add" "${BIN_SANDBOX}/ssh" "${BIN_SANDBOX}/stat"
 
     run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" doctor
+        "${PROJECT_ROOT}/stow/tools/.local/bin/sshkey" doctor
     assert_failure
     assert_output --partial "~/.ssh permissions OK"
     refute_output --partial "Bad private key permissions"
@@ -2637,7 +2637,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/ssh-add" "${BIN_SANDBOX}/ssh"
 
     run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" doctor
+        "${PROJECT_ROOT}/stow/tools/.local/bin/sshkey" doctor
     assert_success
     assert_output --partial "GitHub CLI not installed — skipping GitHub account checks"
     assert_output --partial "SSH auth to github.com works"
@@ -2694,7 +2694,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/ssh-add" "${BIN_SANDBOX}/ssh" "${BIN_SANDBOX}/stat" "${BIN_SANDBOX}/find"
 
     run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" doctor
+        "${PROJECT_ROOT}/stow/tools/.local/bin/sshkey" doctor
     assert_failure
     assert_output --partial "~/.ssh permissions OK"
     refute_output --partial "Bad private key permissions"
@@ -2745,7 +2745,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/ssh-add" "${BIN_SANDBOX}/ssh" "${BIN_SANDBOX}/gh"
 
     run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" doctor
+        "${PROJECT_ROOT}/stow/tools/.local/bin/sshkey" doctor
     assert_success
     assert_output --partial "GitHub CLI is not authenticated — skipping GitHub account checks"
     assert_output --partial "SSH auth to github.com works"
@@ -2804,7 +2804,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/ssh-add" "${BIN_SANDBOX}/ssh" "${BIN_SANDBOX}/stat" "${BIN_SANDBOX}/find" "${BIN_SANDBOX}/ls"
 
     run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" doctor
+        "${PROJECT_ROOT}/stow/tools/.local/bin/sshkey" doctor
     assert_failure
     assert_output --partial "~/.ssh permissions OK"
     refute_output --partial "Bad private key permissions"
@@ -2865,7 +2865,7 @@ MOCK
     for command in "create -y" "delete -y" "gh -y" "doctor"; do
         # shellcheck disable=SC2086 # split the command and its flag
         run env HOME="${TEST_TMPDIR}/home" XDG_CONFIG_HOME="${TEST_TMPDIR}/home/.config" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-            "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" ${command}
+            "${PROJECT_ROOT}/stow/tools/.local/bin/sshkey" ${command}
         assert_failure
         assert_output --partial "Key name must not contain /"
     done
@@ -2875,7 +2875,7 @@ MOCK
 
 @test "sshkey rejects an unsafe SSHKEY_GITHUB_KEY_NAME" {
     run env HOME="${TEST_TMPDIR}/home" SSHKEY_GITHUB_KEY_NAME="../../outside" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" gh -p personal -y
+        "${PROJECT_ROOT}/stow/tools/.local/bin/sshkey" gh -p personal -y
     assert_failure
     assert_output --partial "Key name must not contain /"
 }
@@ -2885,7 +2885,7 @@ MOCK
     mkdir -p "${TEST_TMPDIR}/home"
 
     run env HOME="${TEST_TMPDIR}/home" USER="sandbox-user" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" create opkey -1p -y
+        "${PROJECT_ROOT}/stow/tools/.local/bin/sshkey" create opkey -1p -y
     assert_success
     assert_output --partial "saved public key to ${TEST_TMPDIR}/home/.ssh/opkey.pub"
     [[ ! -e "${TEST_TMPDIR}/home/.ssh/opkey" ]]
@@ -2900,7 +2900,7 @@ MOCK
     mkdir -p "${TEST_TMPDIR}/home"
 
     run env HOME="${TEST_TMPDIR}/home" SSHKEY_1PASSWORD_VAULT="Bob's '], 'x" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" list -1p
+        "${PROJECT_ROOT}/stow/tools/.local/bin/sshkey" list -1p
     assert_success
     assert_output --partial "work key"
     run grep -F "[item][get][item1][--vault][Bob's '], 'x][--format=json]" "${TEST_TMPDIR}/op.args"
@@ -2923,7 +2923,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/ssh-add" "${BIN_SANDBOX}/mv"
 
     run env HOME="${TEST_TMPDIR}/home" TMPDIR="${TEST_TMPDIR}/tmp" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/sshkey" cleanup -y
+        "${PROJECT_ROOT}/stow/tools/.local/bin/sshkey" cleanup -y
     assert_failure
     run find "${TEST_TMPDIR}/tmp" -name 'sshkey-known-hosts*'
     assert_success
@@ -2956,11 +2956,11 @@ MOCK
 
 run_agent_setup() {
     run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-agent-setup" "$@"
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-agent-setup" "$@"
 }
 
 @test "ph-agent-setup displays help" {
-    run "${PROJECT_ROOT}/stow/common/.local/bin/ph-agent-setup" --help
+    run "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-agent-setup" --help
     assert_success
     assert_output --partial "Usage:"
     assert_output --partial "user|install|authorize|link|schedule|import|status"
@@ -2998,7 +2998,7 @@ run_agent_setup() {
 # Runs authorize with the contents of file ${1} on stdin.
 run_agent_authorize() {
     run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        "${PROJECT_ROOT}/stow/common/.local/bin/ph-agent-setup" authorize < "${1}"
+        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-agent-setup" authorize < "${1}"
 }
 
 @test "ph-agent-setup authorize adds one fetch-only key from stdin without its comment" {
