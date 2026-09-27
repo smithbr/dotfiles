@@ -155,12 +155,21 @@ is_linked() {
 }
 
 BACKUP_DIR=""
+# Backups can hold credentials, so the directories are private and never
+# reached through a symlinked parent (as in file-review.sh's archive).
 backup_path() {
-    local target="$1" relative="${1#"${DEST}"/}"
-    if [[ -z "${BACKUP_DIR}" ]]; then
-        BACKUP_DIR="${DEST}/.local/state/dotfiles/clobbered/$(date +%Y%m%d-%H%M%S)"
-    fi
-    mkdir -p "$(dirname "${BACKUP_DIR}/${relative}")"
+    local target="$1" relative="${1#"${DEST}"/}" parent backup_dir
+    backup_dir="${BACKUP_DIR:-${DEST}/.local/state/dotfiles/clobbered/$(date +%Y%m%d-%H%M%S)}"
+    for parent in "${DEST}/.local" "${DEST}/.local/state" "${DEST}/.local/state/dotfiles" \
+        "${DEST}/.local/state/dotfiles/clobbered" "${backup_dir}"; do
+        if [[ -L "${parent}" ]]; then
+            log_error "Backup parent is a symlink: ${parent}; not moving ${target}"
+            return 1
+        fi
+    done
+    BACKUP_DIR="${backup_dir}"
+    (umask 077 && mkdir -p "$(dirname "${BACKUP_DIR}/${relative}")")
+    chmod 700 "${BACKUP_DIR}"
     mv "${target}" "${BACKUP_DIR}/${relative}"
     printf 'Backed up %s -> %s\n' "${target}" "${BACKUP_DIR}/${relative}"
 }
