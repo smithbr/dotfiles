@@ -211,7 +211,11 @@ run_stow() {
     done < <(packages_in stow)
     [[ "${#packages[@]}" -gt 0 ]] || return 0
 
-    if ! command -v stow >/dev/null 2>&1; then
+    # A dry run on a fresh host still reports conflicts; install.sh installs
+    # stow before the real run.
+    local have_stow=1
+    command -v stow >/dev/null 2>&1 || have_stow=0
+    if [[ "${have_stow}" -eq 0 && "${DRY_RUN}" -eq 0 ]]; then
         log_error "GNU Stow is not installed (brew install stow, or apt-get install stow)"
         return 1
     fi
@@ -221,6 +225,10 @@ run_stow() {
     if [[ "${DRY_RUN}" -eq 1 ]]; then
         if [[ "${BLOCKED}" -gt 0 ]]; then
             printf 'Stow preview skipped until the paths above are cleared\n'
+            return 0
+        fi
+        if [[ "${have_stow}" -eq 0 ]]; then
+            printf 'Stow preview skipped: GNU Stow is not installed\n'
             return 0
         fi
         cmd+=(--simulate --verbose=1)
