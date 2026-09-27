@@ -141,3 +141,12 @@ bucket_of() {
     assert_failure 2
     assert_output --partial "unknown argument"
 }
+
+@test "home-audit replaces control characters in displayed names" {
+    touch "${SANDBOX_HOME}/.evil"$'\033'"[31mred.bak" "${SANDBOX_HOME}/.tab"$'\t'"name.bak"
+    run_audit
+    assert_success
+    [[ "${output}" != *$'\033'* ]]
+    assert_output --partial '~/.evil?[31mred.bak'
+    assert_output --partial '~/.tab?name.bak'
+}
