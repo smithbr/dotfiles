@@ -157,6 +157,14 @@ run_persona_prompt() {
     assert_output "home"
 }
 
+@test "install.sh skips Homebrew for a persona that installs none" {
+    run bash "${PROJECT_ROOT}/install.sh" --dry-run --skip-system --skip-shell --persona sandbox < /dev/null
+    assert_success
+    assert_output --partial "Persona: sandbox"
+    assert_output --partial "Homebrew (the sandbox persona installs none)"
+    refute_output --partial "[3/"$'\n'"Homebrew"
+}
+
 @test "install.sh rejects an unknown persona before changing anything" {
     run bash "${PROJECT_ROOT}/install.sh" --dry-run --persona nope < /dev/null
     assert_failure 2

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Claude Code native installation. Preferred over the Homebrew cask because the
+# Claude Code native installation, for macOS (brew.sh picker) and Linux
+# (bootstrap/linux/setup.sh). Preferred over the Homebrew cask because the
 # native build updates itself in the background; the cask only moves on
 # `brew upgrade`.
 # https://code.claude.com/docs/en/setup
 
 set -euo pipefail
 
-BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "${BASEDIR}/scripts/common.sh"
 
 if [[ -x "${HOME}/.local/bin/claude" ]]; then

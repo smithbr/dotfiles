@@ -420,7 +420,7 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
-# macos/claude-code.sh — native installer
+# claude-code.sh — native installer, shared by macOS and Linux
 # ---------------------------------------------------------------------------
 
 _run_claude_code_script() {
@@ -444,7 +444,7 @@ MOCK
         '"$1"'
 
         cd "'"${PROJECT_ROOT}"'"
-        ./scripts/bootstrap/macos/claude-code.sh
+        ./scripts/bootstrap/claude-code.sh
         cat "${TEST_LOG}"
     '
 }
@@ -562,7 +562,7 @@ MOCK
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/docker.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/tailscale.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/setup.sh" \
-            "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/claude-code.sh" \
+            "'"${PROJECT_ROOT}"'/scripts/bootstrap/claude-code.sh" \
             "'"${PROJECT_ROOT}"'/homebrew/brew.sh"; do
             first_line="$(head -1 "${f}")"
             if [[ "${first_line}" != "#!/usr/bin/env bash" ]]; then
@@ -586,7 +586,7 @@ MOCK
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/docker.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/tailscale.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/setup.sh" \
-            "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/claude-code.sh" \
+            "'"${PROJECT_ROOT}"'/scripts/bootstrap/claude-code.sh" \
             "'"${PROJECT_ROOT}"'/homebrew/brew.sh"; do
             if ! grep -q "set -euo pipefail" "${f}"; then
                 echo "MISSING strict mode: ${f}"
@@ -612,7 +612,7 @@ MOCK
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/docker.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/tailscale.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/setup.sh" \
-            "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/claude-code.sh" \
+            "'"${PROJECT_ROOT}"'/scripts/bootstrap/claude-code.sh" \
             "'"${PROJECT_ROOT}"'/homebrew/brew.sh"; do
             if ! grep -q "source.*common\.sh" "${f}"; then
                 echo "MISSING source common.sh: ${f}"
@@ -638,7 +638,7 @@ MOCK
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/docker.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/tailscale.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/setup.sh" \
-            "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/claude-code.sh" \
+            "'"${PROJECT_ROOT}"'/scripts/bootstrap/claude-code.sh" \
             "'"${PROJECT_ROOT}"'/homebrew/brew.sh"; do
             if ! grep -q "BASEDIR=" "${f}"; then
                 echo "MISSING BASEDIR: ${f}"
@@ -649,4 +649,67 @@ MOCK
     '
     assert_success
     assert_output "ALL_OK"
+}
+
+# ---------------------------------------------------------------------------
+# linux/setup.sh — optional installs follow the persona
+# ---------------------------------------------------------------------------
+
+# Runs linux/setup.sh with mocked apt, Docker and Tailscale installers, the
+# given DOTFILES_LINUX_OPTIONAL (unset when the first argument is "unset"), and
+# the given answers on stdin. Claude Code is not mocked in the bootstrap dir,
+# so it runs the shared installer, with curl mocked.
+_run_linux_optionals() {
+    local offered="$1" answers="$2"
+    run bash -c '
+        set -euo pipefail
+        export TEST_ROOT="'"${TEST_TMPDIR}"'/linux-optional"
+        export HOME="${TEST_ROOT}/home"
+        export TEST_BIN="${TEST_ROOT}/bin"
+        export TEST_LOG="${TEST_ROOT}/optional.log"
+        export BOOTSTRAP_DIR="${TEST_ROOT}/bootstrap"
+        export PATH="${TEST_BIN}:/usr/bin:/bin"
+        mkdir -p "${BOOTSTRAP_DIR}" "${TEST_BIN}" "${HOME}"
+        : > "${TEST_LOG}"
+        printf "curl\n" > "${BOOTSTRAP_DIR}/apt-packages.txt"
+        for name in docker tailscale; do
+            printf "#!/usr/bin/env bash\necho \"OPTIONAL %s\" >> \"\${TEST_LOG}\"\n" "${name}" > "${BOOTSTRAP_DIR}/${name}.sh"
+            chmod +x "${BOOTSTRAP_DIR}/${name}.sh"
+        done
+        printf "#!/usr/bin/env bash\nprintf \"curl\\\\tinstall ok installed\\\\n\"\n" > "${TEST_BIN}/dpkg-query"
+        printf "#!/usr/bin/env bash\necho \"apt-get \$*\" >> \"\${TEST_LOG}\"\n" > "${TEST_BIN}/apt-get"
+        printf "#!/usr/bin/env bash\nprintf \"echo OPTIONAL claude-code >> \\\\\"\\\\\${TEST_LOG}\\\\\"\\\\n\"\n" > "${TEST_BIN}/curl"
+        chmod +x "${TEST_BIN}/dpkg-query" "${TEST_BIN}/apt-get" "${TEST_BIN}/curl"
+        if [[ "'"${offered}"'" != unset ]]; then
+            export DOTFILES_LINUX_OPTIONAL="'"${offered}"'"
+        fi
+        cd "'"${PROJECT_ROOT}"'"
+        printf "'"${answers}"'" | ./scripts/bootstrap/linux/setup.sh
+        echo "--- log"
+        cat "${TEST_LOG}"
+    '
+}
+
+@test "linux setup.sh offers only the persona's optional installs" {
+    _run_linux_optionals "docker claude-code" 'y\ny\n'
+    assert_success
+    assert_output --partial "Running optional Linux installs: Docker Claude Code"
+    refute_output --partial "Tailscale"
+    assert_line "OPTIONAL docker"
+    assert_line "OPTIONAL claude-code"
+}
+
+@test "linux setup.sh offers no optional installs to a persona that lists none" {
+    _run_linux_optionals "" 'y\ny\ny\n'
+    assert_success
+    assert_output --partial "No optional Linux installs for this persona"
+    refute_line --partial "OPTIONAL"
+}
+
+@test "linux setup.sh run on its own still offers Docker and Tailscale only" {
+    _run_linux_optionals unset 'y\ny\ny\n'
+    assert_success
+    assert_output --partial "Running optional Linux installs: Docker Tailscale"
+    refute_output --partial "Claude Code"
+    assert_line "OPTIONAL tailscale"
 }

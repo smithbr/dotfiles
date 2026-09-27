@@ -3,3 +3,6 @@ os=darwin
 layers=common tools desktop work
 agents=no
 editors=yes
+brew=core work
+brew_optional=macos
+linux_optional=

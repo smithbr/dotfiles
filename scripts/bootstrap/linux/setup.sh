@@ -68,6 +68,9 @@ optional_linux_entry_is_installed() {
         tailscale)
             command -v tailscale >/dev/null 2>&1
             ;;
+        claude-code)
+            [[ -x "${HOME}/.local/bin/claude" ]]
+            ;;
         *)
             return 1
             ;;
@@ -79,9 +82,13 @@ run_optional_bootstrap_script() {
     local display_name="$2"
     local script_name="$3"
 
+    local script="${BOOTSTRAP_DIR}/${script_name}"
+
+    # Installers shared with macOS live one level up.
+    [[ -f "${script}" ]] || script="${BASEDIR}/scripts/bootstrap/${script_name}"
     run_bootstrap_step "${step_label}" "Running ${display_name} bootstrap"
-    chmod +x "${BOOTSTRAP_DIR}/${script_name}"
-    "${BOOTSTRAP_DIR}/${script_name}"
+    chmod +x "${script}"
+    "${script}"
 }
 
 prompt_optional_linux_bootstraps() {
@@ -100,18 +107,28 @@ prompt_optional_linux_bootstraps() {
     local -a optional_entries=(
         "docker|Docker|docker.sh"
         "tailscale|Tailscale|tailscale.sh"
+        "claude-code|Claude Code|claude-code.sh"
     )
+    # install.sh sets DOTFILES_LINUX_OPTIONAL from the persona; run on its own,
+    # this offers Docker and Tailscale.
+    local offered=" ${DOTFILES_LINUX_OPTIONAL-docker tailscale} "
     local -a pending_names=()
     local -a pending_scripts=()
 
     SELECTED_OPTIONAL_NAMES=()
     SELECTED_OPTIONAL_SCRIPTS=()
 
+    if [[ -z "${offered// /}" ]]; then
+        log_info "No ${prompt_label}s for this persona"
+        return
+    fi
+
     tmp_optional_entries="$(mktemp "${TMPDIR:-/tmp}/linux-bootstrap-optional.XXXXXX")"
 
     for raw_entry in "${optional_entries[@]}"; do
         IFS='|' read -r entry_id display_name script_name <<< "${raw_entry}"
 
+        [[ "${offered}" == *" ${entry_id} "* ]] || continue
         if optional_linux_entry_is_installed "${entry_id}"; then
             continue
         fi

@@ -1004,3 +1004,47 @@ MOCK
     refute_output --regexp $'\nclaude-code\t'
     assert_output --partial $'--- bundle\ncask "claude"'
 }
+
+# ---------------------------------------------------------------------------
+# Brewfile selection follows the persona
+# ---------------------------------------------------------------------------
+
+# Runs brew.sh's Brewfile selection and required-install loop with
+# install_filtered_brewfile stubbed, against a scratch homebrew/ directory.
+_run_brewfile_selection() {
+    local brew_sh="${PROJECT_ROOT}/homebrew/brew.sh"
+    mkdir -p "${TEST_TMPDIR}/repo/homebrew"
+    touch "${TEST_TMPDIR}/repo/homebrew/Brewfile.core" "${TEST_TMPDIR}/repo/homebrew/Brewfile.work"
+    run bash -c "
+        set -euo pipefail
+        BASEDIR='${TEST_TMPDIR}/repo'
+        log_error() { printf 'ERROR %s\\n' \"\$*\"; }
+        install_filtered_brewfile() { printf 'INSTALL %s (%s)\\n' \"\${1##*/}\" \"\$2\"; }
+        $(sed -n '/^read -r -a BREWFILES/,/^read -r -a OPTIONAL_BREWFILES/p' "${brew_sh}")
+        $(sed -n '/^for brewfile_name in \${BREWFILES/,/^done$/p' "${brew_sh}")
+        printf 'OPTIONAL %s\\n' \"\${OPTIONAL_BREWFILES[*]:-none}\"
+    "
+}
+
+@test "brew.sh installs core and offers macos when run on its own" {
+    unset DOTFILES_BREWFILES DOTFILES_BREW_OPTIONAL
+    _run_brewfile_selection
+    assert_success
+    assert_output "INSTALL Brewfile.core (core Homebrew package)
+OPTIONAL macos"
+}
+
+@test "brew.sh installs every Brewfile the persona lists" {
+    DOTFILES_BREWFILES="core work" DOTFILES_BREW_OPTIONAL="" _run_brewfile_selection
+    assert_success
+    assert_line "INSTALL Brewfile.core (core Homebrew package)"
+    assert_line "INSTALL Brewfile.work (work Homebrew package)"
+    assert_line "OPTIONAL none"
+}
+
+@test "brew.sh fails on a Brewfile the persona names but the repo lacks" {
+    DOTFILES_BREWFILES="core missing" _run_brewfile_selection
+    assert_failure
+    assert_line "INSTALL Brewfile.core (core Homebrew package)"
+    assert_output --partial "No homebrew/Brewfile.missing"
+}
