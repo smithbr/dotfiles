@@ -3,3 +3,6 @@ os=darwin,linux
 layers=common
 agents=no
 editors=no
+brew=
+brew_optional=
+linux_optional=

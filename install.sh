@@ -479,9 +479,25 @@ resolve_persona() {
         export DOTFILES_PERSONA="${name}"
     fi
     PERSONA_NAME="${name}"
+
+    # What the persona installs, for homebrew/brew.sh and the Linux bootstrap.
+    local installs key value
+    installs="$(bash "${LINK_SCRIPT}" installs)" || exit 2
+    while IFS='=' read -r key value; do
+        case "${key}" in
+            brew) export DOTFILES_BREWFILES="${value}" ;;
+            brew_optional) export DOTFILES_BREW_OPTIONAL="${value}" ;;
+            linux_optional) export DOTFILES_LINUX_OPTIONAL="${value}" ;;
+        esac
+    done <<< "${installs}"
+    if [[ -z "${DOTFILES_BREWFILES// /}" && -z "${DOTFILES_BREW_OPTIONAL// /}" && "${run_brew}" -eq 1 ]]; then
+        run_brew=0
+        brew_skip_reason="Homebrew (the ${PERSONA_NAME} persona installs none)"
+    fi
 }
 
 PERSONA_NAME=""
+brew_skip_reason="Homebrew"
 resolve_persona
 
 cd "${BASEDIR}"
@@ -498,7 +514,7 @@ fi
 if [[ "${run_brew}" -eq 1 ]]; then
     STEP_TOTAL=$((STEP_TOTAL + 1))
 else
-    skipped_steps+=("Homebrew")
+    skipped_steps+=("${brew_skip_reason}")
 fi
 if [[ "${run_shell_setup}" -eq 1 ]]; then
     STEP_TOTAL=$((STEP_TOTAL + 1))
@@ -548,7 +564,7 @@ begin_step "SSH key" "Make sure this machine has ${LOCAL_INSTALL_SSH_KEY_PATH} f
 run_boxed ensure_local_install_ssh_key
 
 if [[ "${run_brew}" -eq 1 ]]; then
-    begin_step "Homebrew" "Install Homebrew if needed, then the packages in homebrew/Brewfile.*"
+    begin_step "Homebrew" "Install Homebrew if needed, then the ${DOTFILES_BREWFILES:-core} Brewfile packages"
     if [[ "${dry_run}" -eq 1 ]]; then
         _skip "Dry run: skipping Homebrew install/update/bundle."
     else

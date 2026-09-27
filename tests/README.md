@@ -73,6 +73,7 @@ This is process-level isolation, not a real container or VM.
 - Validates `scripts/bootstrap/linux/apt-packages.txt`
 - Verifies Linux bootstrap guard clauses for missing `apt-get`
 - Verifies idempotency guards for `docker` and `tailscale`
+- Verifies that the Linux optional installs follow the persona (`DOTFILES_LINUX_OPTIONAL`), including Claude Code through the shared `scripts/bootstrap/claude-code.sh`, and keep Docker and Tailscale when run on their own
 - Checks shell script shebangs, strict mode, `common.sh` sourcing, and `BASEDIR` conventions
 
 [`bin_scripts.bats`](/Users/bran/.dotfiles/tests/bin_scripts.bats)
@@ -91,6 +92,7 @@ This is process-level isolation, not a real container or VM.
 - Tests `entry_is_brew_managed` behavior for formulas, casks, and taps
 - Verifies Linux cask filtering and OS detection logic
 - Checks `homebrew/Brewfile.core` for valid entry types and duplicates
+- Verifies Brewfile selection from the persona (`DOTFILES_BREWFILES`, `DOTFILES_BREW_OPTIONAL`), the standalone defaults, and failure on a missing Brewfile
 - Runs an isolated integration test for [`homebrew/brew.sh`](/Users/bran/.dotfiles/homebrew/brew.sh) against a fake Homebrew environment
 
 [`common.bats`](/Users/bran/.dotfiles/tests/common.bats)

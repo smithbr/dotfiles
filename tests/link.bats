@@ -680,3 +680,16 @@ plant_single_layer_links() {
     assert_success
     assert_output ""
 }
+
+@test "installs prints what each persona installs" {
+    run_link --persona work installs
+    assert_success
+    assert_output "brew=core work
+brew_optional=macos
+linux_optional="
+    DOTFILES_OS=linux run_link --persona server installs
+    assert_line "linux_optional=docker tailscale claude-code"
+    DOTFILES_OS=linux run_link --persona sandbox installs
+    assert_line "brew="
+    assert_line "brew_optional="
+}

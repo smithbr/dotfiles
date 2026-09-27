@@ -88,8 +88,10 @@ fi
 brew_prefix="$(brew --prefix)"
 export PATH="${brew_prefix}/bin:${brew_prefix}/sbin:${PATH}"
 
-BREWFILE="${BASEDIR}/homebrew/Brewfile.core"
-OPTIONAL_BREWFILE="${BASEDIR}/homebrew/Brewfile.macos"
+# Which Brewfiles to install in full and which to offer in the picker. install.sh
+# sets these from the persona; run on its own, this installs core and offers macos.
+read -r -a BREWFILES <<< "${DOTFILES_BREWFILES-core}"
+read -r -a OPTIONAL_BREWFILES <<< "${DOTFILES_BREW_OPTIONAL-macos}"
 
 refresh_brew_state() {
     _installed_formulae=" $(brew list --formula 2>/dev/null | tr '\n' ' ') "
@@ -202,7 +204,7 @@ optional_entry_is_installed() {
 
 # Optional apps installed with the vendor's own installer instead of Homebrew,
 # offered in the same picker as Brewfile.macos. Each maps to a script under
-# scripts/bootstrap/macos/.
+# scripts/bootstrap/.
 declare -a NATIVE_OPTIONAL_ENTRIES=(
     "claude-code"
 )
@@ -222,7 +224,7 @@ native_entry_is_installed() {
 
 run_native_install() {
     local pkg_name="$1"
-    local script="${BASEDIR}/scripts/bootstrap/macos/${pkg_name}.sh"
+    local script="${BASEDIR}/scripts/bootstrap/${pkg_name}.sh"
 
     chmod +x "${script}"
     "${script}"
@@ -553,7 +555,13 @@ ensure_1password_agent_symlink() {
     log_info "Linked 1Password SSH agent socket at ${link_path}"
 }
 
-install_filtered_brewfile "${BREWFILE}" "core Homebrew package"
+for brewfile_name in ${BREWFILES[@]+"${BREWFILES[@]}"}; do
+    if [[ ! -f "${BASEDIR}/homebrew/Brewfile.${brewfile_name}" ]]; then
+        log_error "No homebrew/Brewfile.${brewfile_name}; check the persona's brew setting"
+        exit 1
+    fi
+    install_filtered_brewfile "${BASEDIR}/homebrew/Brewfile.${brewfile_name}" "${brewfile_name} Homebrew package"
+done
 
 prompt_optional_brewfile() {
     local optional_brewfile="$1"
@@ -763,8 +771,11 @@ prompt_optional_brewfile() {
     rm -f "${tmp_optional_brewfile}"
 }
 
-if [[ "${os_name}" == "Darwin" && -f "${OPTIONAL_BREWFILE}" ]]; then
-    prompt_optional_brewfile "${OPTIONAL_BREWFILE}" "optional Homebrew package"
+if [[ "${os_name}" == "Darwin" ]]; then
+    for brewfile_name in ${OPTIONAL_BREWFILES[@]+"${OPTIONAL_BREWFILES[@]}"}; do
+        [[ -f "${BASEDIR}/homebrew/Brewfile.${brewfile_name}" ]] || continue
+        prompt_optional_brewfile "${BASEDIR}/homebrew/Brewfile.${brewfile_name}" "optional Homebrew package"
+    done
 fi
 
 ensure_1password_agent_symlink

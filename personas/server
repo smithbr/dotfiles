@@ -3,3 +3,6 @@ os=darwin,linux
 layers=common tools server
 agents=yes
 editors=no
+brew=core
+brew_optional=macos
+linux_optional=docker tailscale claude-code

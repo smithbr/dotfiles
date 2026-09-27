@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Link the dotfiles into place with GNU Stow, and report what the repo owns.
 #
-#   personas/<name>         which layers, editors and agents a machine gets:
-#                           key=value lines for os, layers, agents, editors.
+#   personas/<name>         which layers, editors, agents and installs a machine
+#                           gets: key=value lines for os, layers, agents,
+#                           editors, brew, brew_optional, linux_optional.
 #   stow/<layer>, stow/<layer>.<os>
 #                           mirror $HOME; every file becomes a symlink into the
 #                           repo, so editing the live file edits the repo.
@@ -82,6 +83,7 @@ Commands:
   persona   Print the persona in effect and where it came from
             (flag, env, saved or default)
   personas  List the personas this OS can use, with their descriptions
+  installs  Print the persona's brew, brew_optional and linux_optional lists
 
 Options:
   -n, --dry-run           Report what would change without touching anything
@@ -113,7 +115,7 @@ parse_args() {
                 esac
                 shift
                 ;;
-            apply|managed|status|persona|personas) COMMAND="$1" ;;
+            apply|managed|status|persona|personas|installs) COMMAND="$1" ;;
             -h|--help) usage; exit 0 ;;
             --)
                 shift
@@ -160,6 +162,11 @@ PERSONA_SOURCE=""
 PERSONA_LAYERS=""
 PERSONA_AGENTS=yes
 PERSONA_EDITORS=yes
+# Installs, for install.sh: Brewfiles installed in full, Brewfiles offered in
+# the macOS picker, and the Linux bootstrap's optional installs.
+PERSONA_BREW=core
+PERSONA_BREW_OPTIONAL=macos
+PERSONA_LINUX_OPTIONAL="docker tailscale"
 
 persona_state_file() {
     printf '%s/.local/state/dotfiles/persona\n' "${DEST}"
@@ -240,12 +247,18 @@ load_persona() {
     PERSONA_NAME="${name}"
     PERSONA_SOURCE="${source}"
     PERSONA_LAYERS=""
+    PERSONA_BREW=""
+    PERSONA_BREW_OPTIONAL=""
+    PERSONA_LINUX_OPTIONAL=""
     while IFS= read -r setting; do
         key="${setting%%=*}"
         value="${setting#*=}"
         case "${key}" in
             os) ;;
             layers) PERSONA_LAYERS="${value}" ;;
+            brew) PERSONA_BREW="${value}" ;;
+            brew_optional) PERSONA_BREW_OPTIONAL="${value}" ;;
+            linux_optional) PERSONA_LINUX_OPTIONAL="${value}" ;;
             agents|editors)
                 if [[ "${value}" != yes && "${value}" != no ]]; then
                     log_error "${file}: ${key} must be yes or no, not '${value}'"
@@ -748,6 +761,10 @@ main() {
 
     case "${COMMAND}" in
         persona) printf '%s %s\n' "${PERSONA_NAME:-none}" "${PERSONA_SOURCE:-legacy}" ;;
+        installs)
+            printf 'brew=%s\nbrew_optional=%s\nlinux_optional=%s\n' \
+                "${PERSONA_BREW}" "${PERSONA_BREW_OPTIONAL}" "${PERSONA_LINUX_OPTIONAL}"
+            ;;
         managed) print_managed ;;
         status) print_status ;;
         apply)
