@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Run the agents repo's check-drift before every commit: it scans this repo for
+# retired terms and checks link.sh's AGENT_LINKS against ~/.config/agents.
+# Bypass once: git commit --no-verify
+
+set -euo pipefail
+
+CHECK_DRIFT="${HOME}/.config/agents/scripts/check-drift"
+
+if [[ ! -x "${CHECK_DRIFT}" ]]; then
+    # Agents checkout not cloned yet (fresh machine, CI): nothing to check against.
+    printf 'pre-commit: %s not found; skipping check-drift\n' "${CHECK_DRIFT}"
+    exit 0
+fi
+
+printf 'pre-commit: running check-drift\n'
+if ! "${CHECK_DRIFT}"; then
+    printf 'pre-commit: check-drift failed; see ~/.config/agents/rules/09-maintenance.md\n' >&2
+    exit 1
+fi
