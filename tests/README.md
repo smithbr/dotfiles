@@ -106,6 +106,7 @@ This is process-level isolation, not a real container or VM.
 - Exercises file inventory against a fixture repo, replaced links, broken managed links, and migration backup reporting
 - Verifies bulk archival preserves contents and symlinks, excludes protected paths, and is safe to repeat
 - Checks closed stdin, invalid selections, a failed inventory query, alternate destinations, and installer report integration
+- Verifies home dotfiles are grouped by `home-audit` verdict and the picker lists them in that order with their reasons
 
 [`home_audit.bats`](/Users/bran/.dotfiles/tests/home_audit.bats)
 
