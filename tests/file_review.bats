@@ -289,7 +289,8 @@ MOCK
     assert_output --partial "Selected for archiving:"
     assert_output --partial "archived ~/.old-file"
     grep -Fqx -- "--no-limit" "${TEST_TMPDIR}/gum-choose-args"
-    grep -Fqx -- "~/.other-file"$'\t'"${HOME}/.other-file" "${TEST_TMPDIR}/gum-choose-args"
+    # Each option shows the path and why, and carries the real path as its value.
+    grep -Eq -- "^~/\.other-file  \(review: no installed owner found, but changed today\)"$'\t'"${HOME}/\.other-file\$" "${TEST_TMPDIR}/gum-choose-args"
     grep -Fqx -- "--default=false" "${TEST_TMPDIR}/gum-confirm-args"
     [[ ! -e "${HOME}/.old-file" && -f "${HOME}/.other-file" ]]
 }
@@ -335,4 +336,29 @@ MOCK
     [[ "${report}" != *"Bulk cleanup"* && "${report}" != *"Archive which paths?"* ]]
     [[ "${select}" != *"File review for"* && "${select}" == *"archived ~/.old-file"* ]]
     [[ ! -e "${HOME}/.old-file" ]]
+}
+
+@test "the review sorts home dotfiles by verdict and the picker follows that order" {
+    printf 'copy\n' > "${HOME}/.notes.bak"
+    # .true is owned by /usr/bin/true, so it is in use; kept entries carry no size.
+    mkdir -p "${HOME}/.stale-tool" "${HOME}/.fresh-tool" "${HOME}/.true"
+    touch "${HOME}/.stale-tool/data" "${HOME}/.fresh-tool/data" "${HOME}/.true/data"
+    find "${HOME}/.stale-tool" -exec touch -t 202001010000 {} +
+    run bash -c '"$1/scripts/file-review.sh" --source "$2" --cleanup </dev/null' _ "${PROJECT_ROOT}" "${TEST_SOURCE_DIR}"
+    assert_success
+    assert_output --partial "most likely abandoned first"
+    assert_output --regexp "Junk: [^"$'\n'"]*"$'\n'" +~/\.notes\.bak +[0-9.]+[KMG] +backup copy or OS litter"
+    assert_output --regexp "~/\.stale-tool +[0-9.]+[KMG] +no installed owner, untouched [0-9]+ days"
+    assert_output --regexp "~/\.fresh-tool +[0-9.]+[KMG] +no installed owner found, but changed today"
+    assert_output --regexp "In use: [^"$'\n'"]*"$'\n'" +~/\.true {20,}in use by true; changed today"
+
+    # The numbered picker lists junk, then leftovers, then entries to review.
+    run bash -c 'printf "\n" | FILE_REVIEW_PROMPT=read "$1/scripts/file-review.sh" --source "$2" --select' _ "${PROJECT_ROOT}" "${TEST_SOURCE_DIR}"
+    assert_success
+    assert_line --regexp "^  1\) ~/\.notes\.bak  \(junk: "
+    assert_line --regexp "^  2\) ~/\.stale-tool  \(leftover: no installed owner, untouched [0-9]+ days\)$"
+    assert_line --regexp "^  [0-9]+\) ~/\.fresh-tool  \(review: "
+    assert_line --regexp "^  [0-9]+\) ~/\.local/bin/ph-extra  \(beside managed files\)$"
+    assert_output --partial "Cleanup skipped; no files moved."
+    [[ -f "${HOME}/.notes.bak" && -d "${HOME}/.stale-tool" ]]
 }

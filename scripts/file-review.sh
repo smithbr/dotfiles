@@ -16,7 +16,10 @@ CLEANUP=0
 SELECT_ONLY=0
 CLEANUP_HINT=1
 declare -a candidates=()
+declare -a candidate_labels=()
 declare -a extra_roots=()
+# home-audit's verdicts for the top-level home entries: bucket<TAB>path<TAB>size<TAB>note.
+HOME_VERDICTS=""
 
 usage() {
     cat <<EOF
@@ -31,6 +34,8 @@ Unmanaged files are review candidates, not proof that a file is abandoned.
 
 By default this script:
 - translates managed drift into a short action list
+- sorts home dotfiles by home-audit's verdict (junk, leftover, could move,
+  review, in use), with the reason and last change for each
 - highlights likely leftovers
 - lists saved migration backups and broken managed symlinks
 - hides obvious local/runtime state unless --all is passed
@@ -354,7 +359,7 @@ print_candidate_section() {
                 fi
                 continue
             fi
-            add_candidate "${path}"
+            add_candidate "${path}" "beside managed files"
             visible_for_root="${visible_for_root}  $(display_path "${path}")"$'\n'
             visible_for_root="${visible_for_root}    action: $(leftover_action "${path}")"$'\n'
         done <<< "${unmanaged_output}"
@@ -425,6 +430,7 @@ contains_managed_path() {
 
 add_candidate() {
     local path="$1"
+    local label="${2:-}"
     local existing=""
     local parent="${path%/*}"
 
@@ -443,21 +449,81 @@ add_candidate() {
         done
     fi
     candidates+=("${path}")
+    candidate_labels+=("${label}")
 }
 
-print_home_candidates() {
-    local path=""
-    local found=0
+# The picker's line for a candidate: its path and, when known, why.
+candidate_label() {
+    local index="$1" label="${candidate_labels[$1]:-}"
+    if [[ -n "${label}" ]]; then
+        printf '%s  (%s)\n' "$(display_path "${candidates[index]}")" "${label}"
+    else
+        display_path "${candidates[index]}"
+    fi
+}
 
-    printf '\nUnmanaged home dotfiles (review before archiving):\n'
+# Ask home-audit (read-only) for a verdict on each top-level home entry. It is
+# repo tooling here, so it runs from the repo whatever layers this persona
+# links. Without it, entries are listed unsorted.
+load_home_verdicts() {
+    local audit="${BASEDIR}/stow/tools/.local/bin/home-audit"
+    HOME_VERDICTS=""
+    [[ -f "${audit}" ]] || return 0
+    if ! HOME_VERDICTS="$(DOTFILES_DIR="${SOURCE_DIR}" bash "${audit}" --home "${DEST_DIR}" --tsv 2>/dev/null)"; then
+        HOME_VERDICTS=""
+        log_warn "home-audit failed; home dotfiles are listed without verdicts"
+    fi
+}
+
+# bucket, size and note for one path, or review with no detail. Fields are
+# split on the unit separator: read merges runs of tabs, which would lose an
+# empty size.
+home_verdict() {
+    local row
+    row="$(awk -F '\t' -v p="$1" '$2 == p { print $1 "\037" $3 "\037" $4; exit }' <<< "${HOME_VERDICTS}")"
+    printf '%s\n' "${row:-review$'\037'$'\037'no verdict available}"
+}
+
+# Unmanaged top-level dotfiles, grouped by verdict, most likely abandoned
+# first. The picker offers them in the same order.
+print_home_candidates() {
+    local path="" bucket="" size="" note="" group="" heading="" found=0 i=0
+    local -a entries=() buckets=() sizes=() notes=()
+
     for path in "${DEST_DIR}"/.[!.]* "${DEST_DIR}"/..?*; do
         [[ -e "${path}" || -L "${path}" ]] || continue
         is_protected "${path}" && continue
         contains_managed_path "${path}" && continue
         is_hidden_local_state "${path}" && continue
-        printf '  %s\n' "$(display_path "${path}")"
-        add_candidate "${path}"
-        found=1
+        IFS=$'\037' read -r bucket size note <<< "$(home_verdict "${path}")"
+        entries+=("${path}")
+        buckets+=("${bucket}")
+        sizes+=("${size}")
+        notes+=("${note}")
+    done
+
+    printf '\nHome dotfiles the repo does not manage, most likely abandoned first:\n'
+    for group in junk leftover move review keep; do
+        heading=""
+        for ((i = 0; i < ${#entries[@]}; i++)); do
+            [[ "${buckets[i]}" == "${group}" ]] || continue
+            path="${entries[i]}" size="${sizes[i]}" note="${notes[i]}"
+            if [[ -z "${heading}" ]]; then
+                case "${group}" in
+                    junk) heading="Junk: OS litter and backup copies" ;;
+                    leftover) heading="Leftover: nothing installed uses it, or its tool now looks elsewhere" ;;
+                    move) heading="Could move: the tool supports XDG paths (home-audit shows how)" ;;
+                    review) heading="Review: owner not found; judge by the last change" ;;
+                    keep) heading="In use: an installed tool still writes here" ;;
+                esac
+                printf '  %s\n' "${heading}"
+            fi
+            # A move hint is a list of exports; name the tool and leave the detail to home-audit.
+            [[ "${group}" != move ]] || note="${note%%:*} supports XDG"
+            printf '    %-26s %6s  %s\n' "$(display_path "${path}")" "${size}" "${note}"
+            add_candidate "${path}" "${group}: ${note}"
+            found=1
+        done
     done
     [[ "${found}" -ne 0 ]] || printf '  none\n'
 }
@@ -482,8 +548,10 @@ choose_with_gum() {
 
     [[ "${height}" -le 15 ]] || height=15
     [[ "${height}" -ge 3 ]] || height=3
+    local index=0
     for path in "${candidates[@]}"; do
-        options+=("$(display_path "${path}")"$'\t'"${path}")
+        options+=("$(candidate_label "${index}")"$'\t'"${path}")
+        index=$((index + 1))
     done
 
     log_info "Archive candidates: unmanaged does not necessarily mean unused. Use space to select, ctrl+a for all, enter to continue, or esc to skip."
@@ -535,10 +603,10 @@ choose_with_read() {
     local answer="" token="" index=0 path=""
     local -a choices=()
 
-    printf '\nArchive candidates — unmanaged does not necessarily mean unused:\n'
+    printf '\nArchive candidates, most likely abandoned first. Unmanaged does not necessarily mean unused:\n'
     for path in "${candidates[@]}"; do
+        printf '  %d) %s\n' "$((index + 1))" "$(candidate_label "${index}")"
         index=$((index + 1))
-        printf '  %d) %s\n' "${index}" "$(display_path "${path}")"
     done
     printf 'Archive which paths? Enter numbers separated by spaces, all, or Enter to skip: '
     if ! IFS= read -r answer || [[ -z "${answer//[[:space:]]/}" ]]; then
@@ -660,6 +728,7 @@ main() {
     DEST_DIR="$(cd "${DEST_DIR}" && pwd -L)" || return 1
     SOURCE_DIR="$(cd "${SOURCE_DIR}" && pwd -L)" || return 1
     prime_managed_paths_cache || return 1
+    load_home_verdicts
     if [[ "${SELECT_ONLY}" -eq 1 ]]; then
         # Candidates are gathered while printing; the caller already showed them.
         print_report > /dev/null 2>&1
