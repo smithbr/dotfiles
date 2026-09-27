@@ -2284,3 +2284,135 @@ MOCK
     refute_output --partial "Bad private key permissions"
     refute_output --partial "Bad public key permissions"
 }
+
+# ph-agent-setup: mock the identity and platform so each step runs in the sandbox.
+agent_setup_sandbox() {
+    local user="${1}"
+    mkdir -p "${TEST_TMPDIR}/home/.ssh"
+    cat > "${BIN_SANDBOX}/uname" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "${MOCK_UNAME:-Linux}"
+MOCK
+    cat > "${BIN_SANDBOX}/id" <<MOCK
+#!/usr/bin/env bash
+[[ "\${1:-}" == "-un" ]] && { printf '%s\n' "${user}"; exit 0; }
+exit 0
+MOCK
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+printf 'sudo %s\n' "$*" >> "${TEST_TMPDIR}/calls"
+MOCK
+    cat > "${BIN_SANDBOX}/git" <<'MOCK'
+#!/usr/bin/env bash
+printf 'git %s\n' "$*" >> "${TEST_TMPDIR}/calls"
+MOCK
+    chmod +x "${BIN_SANDBOX}/uname" "${BIN_SANDBOX}/id" "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/git"
+}
+
+run_agent_setup() {
+    run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        "${PROJECT_ROOT}/stow/common/.local/bin/ph-agent-setup" "$@"
+}
+
+@test "ph-agent-setup displays help" {
+    run "${PROJECT_ROOT}/stow/common/.local/bin/ph-agent-setup" --help
+    assert_success
+    assert_output --partial "Usage:"
+    assert_output --partial "user|install|authorize|link|schedule|import|status"
+}
+
+@test "ph-agent-setup rejects unknown and missing commands" {
+    agent_setup_sandbox pi
+    run_agent_setup bogus
+    assert_failure 2
+    assert_output --partial "unknown command: bogus"
+    run_agent_setup
+    assert_failure 2
+    assert [ ! -e "${TEST_TMPDIR}/calls" ]
+}
+
+@test "ph-agent-setup user refuses to run off Linux before sudo" {
+    agent_setup_sandbox pi
+    MOCK_UNAME=Darwin run_agent_setup user
+    assert_failure
+    assert_output --partial "runs only on the Linux Pi-hole box"
+    assert [ ! -e "${TEST_TMPDIR}/calls" ]
+}
+
+@test "ph-agent-setup steps refuse the wrong user" {
+    agent_setup_sandbox agent
+    run_agent_setup user
+    assert_failure
+    assert_output --partial "run 'user' as the admin user"
+    agent_setup_sandbox pi
+    run_agent_setup import
+    assert_failure
+    assert_output --partial "run 'import' as agent"
+}
+
+@test "ph-agent-setup authorize adds one fetch-only key from stdin" {
+    agent_setup_sandbox pi
+    local key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest agent@pihole vault read-only"
+    printf 'ssh-ed25519 AAAApersonal bran\n' > "${TEST_TMPDIR}/home/.ssh/authorized_keys"
+    run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        bash -c "printf '%s\n' '${key}' | '${PROJECT_ROOT}/stow/common/.local/bin/ph-agent-setup' authorize"
+    assert_success
+    run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        bash -c "printf '%s\n' '${key}' | '${PROJECT_ROOT}/stow/common/.local/bin/ph-agent-setup' authorize"
+    assert_success
+    assert_output --partial "already authorized"
+    run grep -c "restrict,command=\"git upload-pack 'git/vault.git'\" ${key}" "${TEST_TMPDIR}/home/.ssh/authorized_keys"
+    assert_output "1"
+    run grep -c "uploadpack.allowReachableSHA1InWant true" "${TEST_TMPDIR}/calls"
+    assert_output "2"
+}
+
+@test "ph-agent-setup authorize rejects input that is not a public key" {
+    agent_setup_sandbox pi
+    touch "${TEST_TMPDIR}/home/.ssh/authorized_keys"
+    run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        bash -c "printf 'command=evil\n' | '${PROJECT_ROOT}/stow/common/.local/bin/ph-agent-setup' authorize"
+    assert_failure
+    assert_output --partial "not an ed25519 public key"
+    assert [ ! -s "${TEST_TMPDIR}/home/.ssh/authorized_keys" ]
+}
+
+@test "ph-agent-setup schedule keeps exactly one tagged cron entry" {
+    agent_setup_sandbox agent
+    cat > "${BIN_SANDBOX}/crontab" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-l" ]]; then cat "${TEST_TMPDIR}/crontab" 2>/dev/null; exit 0; fi
+cat > "${TEST_TMPDIR}/crontab"
+MOCK
+    chmod +x "${BIN_SANDBOX}/crontab"
+    printf '@reboot other-job\n' > "${TEST_TMPDIR}/crontab"
+    run_agent_setup schedule
+    assert_success
+    run_agent_setup schedule
+    assert_success
+    run grep -c "# ph-agent-setup import" "${TEST_TMPDIR}/crontab"
+    assert_output "1"
+    run grep -c "@reboot other-job" "${TEST_TMPDIR}/crontab"
+    assert_output "1"
+}
+
+@test "ph-agent-setup import syncs and skips Claude when the inbox is empty" {
+    agent_setup_sandbox agent
+    mkdir -p "${TEST_TMPDIR}/home/blife/_inbox"
+    touch "${TEST_TMPDIR}/home/blife/_inbox/.gitkeep"
+    local tool
+    for tool in ob claude flock; do
+        cat > "${BIN_SANDBOX}/${tool}" <<MOCK
+#!/usr/bin/env bash
+printf '${tool} %s\n' "\$*" >> "${TEST_TMPDIR}/calls"
+MOCK
+        chmod +x "${BIN_SANDBOX}/${tool}"
+    done
+    run_agent_setup import
+    assert_success
+    assert_output --partial "inbox empty"
+    run grep -c "^ob sync --path ${TEST_TMPDIR}/home/blife" "${TEST_TMPDIR}/calls"
+    assert_output "1"
+    run grep -c "^claude" "${TEST_TMPDIR}/calls"
+    assert_output "0"
+}

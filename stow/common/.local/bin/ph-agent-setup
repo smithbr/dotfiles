@@ -1,0 +1,369 @@
+#!/usr/bin/env bash
+# ============================================================
+#  ph-agent-setup — Locked-down agent user and vault importer
+# ============================================================
+
+set -euo pipefail
+
+AGENT_USER="${PH_AGENT_USER:-agent}"
+AGENT_HOME="${PH_AGENT_HOME:-/home/${AGENT_USER}}"
+ADMIN_USER="${PH_AGENT_ADMIN_USER:-pi}"
+VAULT_NAME="${PH_AGENT_VAULT_NAME:-blife}"
+VAULT_DIR="${PH_AGENT_VAULT_DIR:-${HOME}/blife}"
+VAULT_REPO="${PH_AGENT_VAULT_REPO:-git/vault.git}"
+TOOLS_DIR="${PH_AGENT_TOOLS_DIR:-${HOME}/.local/share/blife-tools}"
+STATE_DIR="${PH_AGENT_STATE_DIR:-${HOME}/.local/state/blife-import}"
+CONFIG_DIR="${PH_AGENT_CONFIG_DIR:-${HOME}/.config/blife-import}"
+DEVICE_NAME="${PH_AGENT_DEVICE_NAME:-zbox-agent}"
+CRON_SCHEDULE="${PH_AGENT_CRON:-0 7 * * *}"
+NODE_MAJOR="${PH_AGENT_NODE_MAJOR:-22}"
+RO_KEY="${HOME}/.ssh/vault_ro"
+CRON_TAG="# ph-agent-setup import"
+
+usage() {
+    local help_text
+
+    help_text="$(cat <<'EOF'
+# ph-agent-setup
+
+Set up the locked-down `agent` user on the Pi-hole box and run the daily blife `_inbox/` import.
+
+## Steps, in order
+
+| Command | Run as | Does |
+|---------|--------|------|
+| `user` | pi (sudo) | Create `agent` with a mode-700 home and pi's personal SSH keys; install this script for it |
+| `install` | agent | Node (checksum-verified), `obsidian-headless`, Claude Code, a read-only vault key |
+| `authorize` | pi (sudo, or the key on stdin) | Let agent's key fetch `~/git/vault.git` and nothing else |
+| `link` | agent | Sync the vault to `~/blife` (runs `ob login` if needed), check out `.scripts/` read-only |
+| `schedule` | agent | Install the daily cron job |
+| `import` | agent | One import run: sync, import `_inbox/` as the importer role, sync |
+| `status` | agent | Show versions, sync state, cron entry, and inbox count |
+
+## Options
+
+| Option | Description |
+|--------|-------------|
+| `-h`, `--help` | Show this help |
+
+Every step is safe to re-run.
+EOF
+)"
+
+    if command -v gum >/dev/null 2>&1 && [[ -t 1 ]]; then
+        printf '%s\n' "${help_text}" | gum format
+        return
+    fi
+
+    cat <<'EOF'
+Usage:
+  ph-agent-setup user|install|authorize|link|schedule|import|status
+  ph-agent-setup --help
+
+Set up the locked-down agent user on the Pi-hole box and run the daily blife
+_inbox/ import. Run the steps in order: user (as pi, uses sudo), install
+(as agent), authorize (as pi), link, schedule (as agent). Every step is safe
+to re-run.
+EOF
+}
+
+log() { printf '==> %s\n' "$*"; }
+die() { printf 'ph-agent-setup: %s\n' "$*" >&2; exit 1; }
+
+require_linux() {
+    [[ "$(uname -s)" == "Linux" ]] || die "runs only on the Linux Pi-hole box"
+}
+
+require_user() {
+    [[ "$(id -un)" == "${1}" ]] || die "run '${2}' as ${1} (you are $(id -un))"
+}
+
+require_not_user() {
+    [[ "$(id -un)" != "${1}" ]] || die "run '${2}' as the admin user, not ${1}"
+}
+
+use_local_bin() {
+    PATH="${HOME}/.local/bin:${PATH}"
+    export PATH
+}
+
+# ---- user: as pi, with sudo -------------------------------------------------
+
+step_user() {
+    require_not_user "${AGENT_USER}" user
+    if id "${AGENT_USER}" >/dev/null 2>&1; then
+        log "user ${AGENT_USER} exists"
+    else
+        log "creating ${AGENT_USER} (no password, SSH keys only)"
+        sudo adduser --disabled-password --gecos "" "${AGENT_USER}"
+    fi
+    sudo chmod 700 "${AGENT_HOME}"
+    sudo install -d -m 700 -o "${AGENT_USER}" -g "${AGENT_USER}" \
+        "${AGENT_HOME}/.ssh" "${AGENT_HOME}/.local" "${AGENT_HOME}/.local/bin"
+    # Personal keys only: restricted (command=) keys such as the vault push key stay with pi.
+    grep -v '^restrict' "${HOME}/.ssh/authorized_keys" \
+        | sudo install -m 600 -o "${AGENT_USER}" -g "${AGENT_USER}" /dev/stdin \
+            "${AGENT_HOME}/.ssh/authorized_keys"
+    sudo install -m 755 -o "${AGENT_USER}" -g "${AGENT_USER}" "${BASH_SOURCE[0]}" \
+        "${AGENT_HOME}/.local/bin/ph-agent-setup"
+    log "done. Next, as ${AGENT_USER}: ph-agent-setup install"
+}
+
+# ---- install: as agent -------------------------------------------------------
+
+install_node() {
+    local version file arch url
+    arch="$(uname -m)"
+    case "${arch}" in
+        x86_64) arch="x64" ;;
+        aarch64) arch="arm64" ;;
+        *) die "no Node build for ${arch}" ;;
+    esac
+    version="$(curl -fsSL https://nodejs.org/dist/index.json | python3 -c \
+        "import json,sys; print(next(r['version'] for r in json.load(sys.stdin) if r['version'].startswith('v${NODE_MAJOR}.')))")"
+    if [[ "$(node -v 2>/dev/null || true)" == "${version}" ]]; then
+        log "node ${version} already installed"
+        return
+    fi
+    file="node-${version}-linux-${arch}.tar.xz"
+    url="https://nodejs.org/dist/${version}"
+    log "installing node ${version}"
+    local tmp
+    tmp="$(mktemp -d)"
+    curl -fsSL -o "${tmp}/${file}" "${url}/${file}"
+    curl -fsSL "${url}/SHASUMS256.txt" | grep " ${file}\$" | (cd "${tmp}" && sha256sum -c -)
+    mkdir -p "${HOME}/.local/opt" "${HOME}/.local/bin"
+    tar -xJf "${tmp}/${file}" -C "${HOME}/.local/opt"
+    rm -rf "${tmp}"
+    ln -sfn "${HOME}/.local/opt/node-${version}-linux-${arch}" "${HOME}/.local/opt/node"
+    local b
+    for b in node npm npx; do
+        ln -sf "${HOME}/.local/opt/node/bin/${b}" "${HOME}/.local/bin/${b}"
+    done
+}
+
+step_install() {
+    require_linux
+    require_user "${AGENT_USER}" install
+    use_local_bin
+    umask 077
+    install_node
+    npm config set prefix "${HOME}/.local"
+    log "installing obsidian-headless"
+    npm install -g obsidian-headless >/dev/null
+    if command -v claude >/dev/null 2>&1; then
+        log "Claude Code $(claude --version) installed (it updates itself)"
+    else
+        log "installing Claude Code"
+        curl -fsSL https://claude.ai/install.sh | bash
+    fi
+    if [[ ! -f "${RO_KEY}" ]]; then
+        log "creating read-only vault key"
+        ssh-keygen -q -t ed25519 -N "" -C "${AGENT_USER}@$(hostname) vault read-only" -f "${RO_KEY}"
+    fi
+    log "done. Next, as pi: ph-agent-setup authorize"
+}
+
+# ---- authorize: as pi --------------------------------------------------------
+
+step_authorize() {
+    require_not_user "${AGENT_USER}" authorize
+    local pub line keys="${HOME}/.ssh/authorized_keys"
+    # The key comes on stdin (ssh agent@host cat .ssh/vault_ro.pub | ph-agent-setup authorize)
+    # or, without it, through sudo, since agent's home is closed to pi.
+    if [[ -t 0 ]]; then
+        pub="$(sudo cat "${AGENT_HOME}/.ssh/vault_ro.pub")" || die "no key yet; run 'install' as ${AGENT_USER} first"
+    else
+        pub="$(cat)"
+    fi
+    [[ "${pub}" == ssh-ed25519\ * ]] || die "not an ed25519 public key: ${pub:0:40}"
+    # Fetch only: upload-pack serves clones and fetches and never accepts a push.
+    line="restrict,command=\"git upload-pack '${VAULT_REPO}'\" ${pub}"
+    if grep -qF "${pub}" "${keys}"; then
+        log "agent key already authorized"
+    else
+        printf '%s\n' "${line}" >> "${keys}"
+        log "authorized agent key for fetch-only access to ${VAULT_REPO}"
+    fi
+    # Lets agent fetch just .scripts/ instead of every attachment. The forced command drops
+    # GIT_PROTOCOL, so git speaks protocol v0, where fetching the filtered-out files on demand
+    # needs allowReachableSHA1InWant.
+    git -C "${HOME}/${VAULT_REPO}" config uploadpack.allowFilter true
+    git -C "${HOME}/${VAULT_REPO}" config uploadpack.allowReachableSHA1InWant true
+    log "done. Next, as ${AGENT_USER}: ph-agent-setup link"
+}
+
+# ---- link: as agent (interactive) -------------------------------------------
+
+write_ssh_config() {
+    local cfg="${HOME}/.ssh/config"
+    if ! grep -q '^Host vault-ro$' "${cfg}" 2>/dev/null; then
+        cat >> "${cfg}" <<EOF
+Host vault-ro
+  HostName localhost
+  User ${ADMIN_USER}
+  IdentityFile ${RO_KEY}
+  IdentitiesOnly yes
+EOF
+        chmod 600 "${cfg}"
+    fi
+}
+
+step_link() {
+    require_linux
+    require_user "${AGENT_USER}" link
+    use_local_bin
+    umask 077
+
+    if ! ob sync-list-remote >/dev/null 2>&1; then
+        log "sign in to Obsidian (your account; typed by you)"
+        ob login
+    fi
+    if ! ob sync-status --path "${VAULT_DIR}" >/dev/null 2>&1; then
+        log "linking ${VAULT_DIR} to the remote vault '${VAULT_NAME}'"
+        mkdir -p "${VAULT_DIR}"
+        ob sync-setup --vault "${VAULT_NAME}" --path "${VAULT_DIR}" --device-name "${DEVICE_NAME}"
+    fi
+    # Notes and every attachment type; no .obsidian settings, so this box never changes the Mac's or phone's.
+    ob sync-config --path "${VAULT_DIR}" --configs "" --file-types image,audio,video,pdf,unsupported \
+        --excluded-folders "" --conflict-strategy merge --mode bidirectional --device-name "${DEVICE_NAME}"
+    log "first sync (large vaults take a while)"
+    ob sync --path "${VAULT_DIR}"
+
+    write_ssh_config
+    if [[ ! -d "${TOOLS_DIR}/.git" ]]; then
+        log "checking out .scripts/ read-only from the vault repo"
+        ssh-keyscan -H localhost >> "${HOME}/.ssh/known_hosts" 2>/dev/null
+        git clone --quiet --depth 1 --filter=blob:none --sparse "vault-ro:${VAULT_REPO}" "${TOOLS_DIR}"
+        git -C "${TOOLS_DIR}" sparse-checkout set .scripts
+    fi
+    cat > "${HOME}/.local/bin/vault-lint" <<EOF
+#!/usr/bin/env bash
+exec python3 "${TOOLS_DIR}/.scripts/vault-lint" --root "${VAULT_DIR}" "\$@"
+EOF
+    chmod 700 "${HOME}/.local/bin/vault-lint"
+
+    if ! claude auth status >/dev/null 2>&1; then
+        log "Claude Code is not signed in: run 'claude' once and log in, then re-run 'link'"
+        return 1
+    fi
+    log "done. Next: ph-agent-setup schedule"
+}
+
+# ---- schedule: as agent ------------------------------------------------------
+
+step_schedule() {
+    require_user "${AGENT_USER}" schedule
+    mkdir -p "${STATE_DIR}"
+    local entry current
+    entry="${CRON_SCHEDULE} ${HOME}/.local/bin/ph-agent-setup import >> ${STATE_DIR}/cron.log 2>&1 ${CRON_TAG}"
+    current="$(crontab -l 2>/dev/null || true)"
+    { printf '%s\n' "${current}" | grep -vF "${CRON_TAG}" || true; printf '%s\n' "${entry}"; } \
+        | sed '/^$/d' | crontab -
+    log "cron: ${entry}"
+}
+
+# ---- import: as agent (cron) -------------------------------------------------
+
+write_claude_settings() {
+    mkdir -p "${CONFIG_DIR}"
+    # Allowlist for unattended runs: file tools plus the few shell commands an import needs.
+    # dontAsk refuses everything else, and nothing here reaches the network.
+    cat > "${CONFIG_DIR}/claude-settings.json" <<'EOF'
+{
+  "permissions": {
+    "allow": [
+      "Read", "Write", "Edit", "Glob", "Grep",
+      "Bash(vault-lint *)", "Bash(vault-lint)",
+      "Bash(ls *)", "Bash(find *)", "Bash(stat *)", "Bash(file *)", "Bash(wc *)",
+      "Bash(grep *)", "Bash(head *)", "Bash(tail *)", "Bash(date *)", "Bash(date)",
+      "Bash(mkdir *)", "Bash(cp *)", "Bash(mv *)", "Bash(cmp *)", "Bash(sha256sum *)"
+    ],
+    "deny": [
+      "WebFetch", "WebSearch",
+      "Bash(curl *)", "Bash(wget *)", "Bash(ssh *)", "Bash(scp *)", "Bash(git *)",
+      "Bash(rm *)", "Bash(sudo *)", "Bash(ob *)"
+    ]
+  }
+}
+EOF
+}
+
+import_prompt() {
+    cat <<EOF
+You are the importer for Bran's Obsidian vault at ${VAULT_DIR} (on the Pi-hole box, as the locked-down '${AGENT_USER}' user). This is an unattended daily run; Bran is not watching.
+
+On this machine, run the linter as \`vault-lint\` (it is \`python3 .scripts/vault-lint --root ${VAULT_DIR}\`; .scripts/ is not synced here). Wherever the manual says \`python3 .scripts/vault-lint ...\`, run \`vault-lint ...\` instead. There is no git here and you must not use the network.
+
+1. Read AGENTS.md, then Agents/strict-rules.md, then Agents/roles/role-importer.md, and follow them exactly. Run \`vault-lint\` first for a baseline. The source is all of \`_inbox/\` (dot-files excepted): follow the role's steps, including moving each original to \`_attachments/raw/_inbox/YYYY-MM-DD/\` only after its note is written, writing the import log, and running \`vault-lint --fix\` on every changed file and then the full \`vault-lint\` (no new errors).
+2. Never commit or push. Do nothing that leaves the vault: no email, messages, Notion, Monarch, web forms, or web requests. Never delete anything. When something needs Bran's decision (ambiguous destination or meaning), make the safest choice the manual allows, usually leaving the file in \`_inbox/\` or creating an \`inbox\` task, and list it under "Decisions for Bran".
+3. Finish by appending the report to Agents/logs/log-importer-YYYY-MM-DD.md as Agents/agent-protocol.md ("Run log") describes, and reply with a short summary: files in, notes created or updated, tasks created, files left in _inbox/ and why, and the decisions for Bran.
+EOF
+}
+
+inbox_count() {
+    find "${VAULT_DIR}/_inbox" -type f ! -name '.*' 2>/dev/null | wc -l | tr -d ' '
+}
+
+step_import() {
+    require_linux
+    require_user "${AGENT_USER}" import
+    use_local_bin
+    umask 077
+    mkdir -p "${STATE_DIR}"
+    exec 9>"${STATE_DIR}/lock"
+    flock -n 9 || die "another import is running"
+
+    log "$(date '+%F %T') sync down"
+    ob sync --path "${VAULT_DIR}"
+    git -C "${TOOLS_DIR}" pull --quiet --depth 1 || log "could not update vault-lint; using the current copy"
+
+    local count
+    count="$(inbox_count)"
+    if [[ "${count}" -eq 0 ]]; then
+        log "inbox empty"
+        return 0
+    fi
+    log "importing ${count} file(s)"
+    write_claude_settings
+    local status=0
+    (cd "${VAULT_DIR}" && claude -p "$(import_prompt)" \
+        --permission-mode dontAsk --settings "${CONFIG_DIR}/claude-settings.json") \
+        > "${STATE_DIR}/last-run.txt" 2>&1 || status=$?
+    cat "${STATE_DIR}/last-run.txt"
+    log "sync up"
+    ob sync --path "${VAULT_DIR}"
+    log "$(date '+%F %T') done (claude exit ${status}); ${count} in, $(inbox_count) left in _inbox/"
+    return "${status}"
+}
+
+# ---- status ------------------------------------------------------------------
+
+step_status() {
+    use_local_bin
+    printf 'user      %s\n' "$(id -un)"
+    printf 'node      %s\n' "$(node -v 2>/dev/null || echo missing)"
+    printf 'ob        %s\n' "$(ob --version 2>/dev/null || echo missing)"
+    printf 'claude    %s\n' "$(claude --version 2>/dev/null || echo missing)"
+    printf 'vault     %s\n' "$([[ -d "${VAULT_DIR}" ]] && echo "${VAULT_DIR}" || echo 'not linked')"
+    printf 'lint      %s\n' "$([[ -f "${TOOLS_DIR}/.scripts/vault-lint" ]] && echo ok || echo missing)"
+    printf 'inbox     %s file(s)\n' "$(inbox_count)"
+    printf 'cron      %s\n' "$(crontab -l 2>/dev/null | grep -F "${CRON_TAG}" || echo none)"
+}
+
+main() {
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    case "${1}" in
+        -h|--help) usage ;;
+        user) require_linux; step_user ;;
+        install) step_install ;;
+        authorize) require_linux; step_authorize ;;
+        link) step_link ;;
+        schedule) step_schedule ;;
+        import) step_import ;;
+        status) step_status ;;
+        *) printf 'ph-agent-setup: unknown command: %s\n' "${1}" >&2; usage >&2; exit 2 ;;
+    esac
+}
+
+main "$@"
