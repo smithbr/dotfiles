@@ -131,12 +131,19 @@ size_of() {
     du -sk "$1" 2>/dev/null | awk '{ kb = $1; if (kb >= 1048576) printf "%.1fG", kb/1048576; else if (kb >= 1024) printf "%.0fM", kb/1024; else printf "%dK", kb }' || true
 }
 
+# File names and environment values reach the terminal; replace control
+# characters (escape sequences, tabs, newlines) so they cannot drive it or
+# break the tab-separated rows.
+printable() {
+    printf '%s' "$1" | LC_ALL=C tr '\000-\037\177' '?'
+}
+
 declare -a junk=() leftover=() move=() review=() keep=()
 
 add() {
     local bucket="$1" path="$2" note="$3" line
     # shellcheck disable=SC2088 # literal ~ for display
-    line="$(printf '%s\t%s\t%s' "~/${path#"${home_dir}"/}" "$([[ "${bucket}" == keep ]] || size_of "${path}")" "${note}")"
+    line="$(printf '%s\t%s\t%s' "$(printable "~/${path#"${home_dir}"/}")" "$([[ "${bucket}" == keep ]] || size_of "${path}")" "$(printable "${note}")")"
     case "${bucket}" in
         junk) junk+=("${line}") ;;
         leftover) leftover+=("${line}") ;;
@@ -220,7 +227,7 @@ print_bucket() {
     printf '%s\n' "$@" | awk -F'\t' '{ printf "  %-28s %6s  %s\n", $1, $2, $3 }'
 }
 
-printf '%sHome audit%s %s(%s, inactive = %s+ days)%s\n' "${bold}" "${reset}" "${dim}" "${home_dir}" "${days}" "${reset}"
+printf '%sHome audit%s %s(%s, inactive = %s+ days)%s\n' "${bold}" "${reset}" "${dim}" "$(printable "${home_dir}")" "${days}" "${reset}"
 [[ -n "${xdg_db}" ]] || printf '%snote: xdg-ninja data or jq not found; XDG checks skipped%s\n' "${dim}" "${reset}"
 [[ -n "${managed}" ]] || printf '%snote: dotfiles repo not found; managed files not recognised%s\n' "${dim}" "${reset}"
 
