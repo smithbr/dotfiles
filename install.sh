@@ -207,6 +207,12 @@ ssh_key_comment() {
     printf '%s@%s\n' "${USER:-$(id -un)}" "$(hostname -s 2>/dev/null || hostname)"
 }
 
+require_ssh_keygen() {
+    command -v ssh-keygen >/dev/null 2>&1 && return 0
+    log_error "ssh-keygen is not installed; install openssh-client (the Linux system bootstrap does this) and re-run"
+    return 1
+}
+
 ensure_local_install_ssh_key() {
     local key_comment=""
 
@@ -226,6 +232,7 @@ ensure_local_install_ssh_key() {
 
     if [[ -f "${LOCAL_INSTALL_SSH_KEY_PATH}" ]]; then
         if [[ ! -f "${LOCAL_INSTALL_SSH_KEY_PATH}.pub" ]]; then
+            require_ssh_keygen || return 1
             log_info "Restoring missing public key for ${LOCAL_INSTALL_SSH_KEY_PATH}"
             ssh-keygen -y -f "${LOCAL_INSTALL_SSH_KEY_PATH}" > "${LOCAL_INSTALL_SSH_KEY_PATH}.pub"
             chmod 644 "${LOCAL_INSTALL_SSH_KEY_PATH}.pub"
@@ -242,6 +249,7 @@ ensure_local_install_ssh_key() {
         return 0
     fi
 
+    require_ssh_keygen || return 1
     key_comment="$(ssh_key_comment)"
     log_info "Creating local SSH key at ${LOCAL_INSTALL_SSH_KEY_PATH}"
     ssh-keygen -q -t ed25519 -N "" -C "${key_comment}" -f "${LOCAL_INSTALL_SSH_KEY_PATH}"
@@ -412,9 +420,6 @@ fi
 begin_step "Repository link" "Point ~/.dotfiles at this checkout"
 run_boxed ensure_dotfiles_repo_link
 
-begin_step "SSH key" "Make sure this machine has ${LOCAL_INSTALL_SSH_KEY_PATH} for GitHub and signing"
-run_boxed ensure_local_install_ssh_key
-
 if [[ "${run_system_bootstrap}" -eq 1 ]]; then
     case "${OSTYPE}" in
         darwin*) os_label="macOS" ;;
@@ -438,6 +443,10 @@ if [[ "${run_system_bootstrap}" -eq 1 ]]; then
         _check "System bootstrap complete"
     fi
 fi
+
+# After the system bootstrap, which installs ssh-keygen on a bare Linux host.
+begin_step "SSH key" "Make sure this machine has ${LOCAL_INSTALL_SSH_KEY_PATH} for GitHub and signing"
+run_boxed ensure_local_install_ssh_key
 
 if [[ "${run_brew}" -eq 1 ]]; then
     begin_step "Homebrew" "Install Homebrew if needed, then the packages in homebrew/Brewfile.*"
