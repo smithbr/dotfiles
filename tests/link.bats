@@ -687,6 +687,8 @@ plant_single_layer_links() {
     assert_output "brew=core work
 brew_optional=macos
 linux_optional="
+    run_link --persona home installs
+    assert_line "brew=core home"
     DOTFILES_OS=linux run_link --persona server installs
     assert_line "linux_optional=docker tailscale claude-code"
     DOTFILES_OS=linux run_link --persona sandbox installs
