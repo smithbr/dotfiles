@@ -1,0 +1,4 @@
+# Install all dependencies with: brew bundle
+# Usage: brew bundle [--file=Brewfile.home]
+
+brew "vhs"
