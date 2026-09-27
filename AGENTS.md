@@ -20,7 +20,7 @@ Unrecognized arguments and everything after `--` are passed to `stow` through `s
 ~/.dotfiles/install.sh --skip-brew -- --verbose=2
 ```
 
-`scripts/link.sh` is the linking step on its own: `link.sh` links, `link.sh status` lists missing, replaced, foreign, and broken links, `link.sh managed` prints every path the repo owns, and `--dry-run`, `--refresh` (pull `~/.config/agents` now), and `--destination PATH` adjust a run. Stow's `--target` and `--dir` are rejected; use `--destination`.
+`scripts/link.sh` is the linking step on its own: `link.sh` links, `link.sh status` lists missing, replaced, foreign, broken, and stale links, `link.sh managed` prints every path the repo owns, and `--dry-run`, `--refresh` (pull `~/.config/agents` now), and `--destination PATH` adjust a run. Stow's `--target` and `--dir` are rejected; use `--destination`.
 
 ## Source and deployment boundaries
 
@@ -29,6 +29,8 @@ Unrecognized arguments and everything after `--` are passed to `stow` through `s
 - Shared editor settings live once in `editors/`, and nowhere under `stow/`. `editor_dirs` in `scripts/link.sh` lists each editor's user directory per platform, and every file in the matching `editors/` directory is linked there with the same backup rules as stow packages. Add an editor or platform there, not as symlinks in `stow/`.
 - Links into the private agents checkout (`~/.config/agents`) and the directories kept at mode 700 are listed in `AGENT_LINKS` and `PRIVATE_DIRS` in `scripts/link.sh`. Git keeps only the executable bit, so any other permission must be applied there.
 - Changes to managed paths must preserve existing user data. `scripts/link.sh` replaces a real file only when it matches the repo and otherwise moves it to `~/.local/state/dotfiles/clobbered/<timestamp>/` first; keep that behavior and cover transitions in `tests/link.bats`.
+- A link into the repo's `stow/` or `editors/` that no longer belongs on this host (its file moved or was deleted, or its package no longer applies) is stale: `link.sh` removes it and `status` reports it. Candidates come from every package, the repo's `stow/` history, and each platform's editor directories. Only links are removed, never real files, so moving or deleting a managed file needs no manual cleanup.
+- A link into the repo's `stow/` or `editors/` that no longer belongs on this host (its file moved or was deleted, or its package no longer applies) is stale: `link.sh` removes it and `status` reports it. Candidates come from every package, the repo's `stow/` history, and each platform's editor directories. Only links are removed, never real files, so moving or deleting a managed file needs no manual cleanup.
 - An application that saves by replacing its config file turns the link into a real file and silently detaches it from the repo. `link.sh status` and the file review report these as `replaced`.
 
 ## Installation behavior

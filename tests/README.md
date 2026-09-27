@@ -112,7 +112,7 @@ This is process-level isolation, not a real container or VM.
 [`link.bats`](/Users/bran/.dotfiles/tests/link.bats)
 
 - Runs the real [`scripts/link.sh`](/Users/bran/.dotfiles/scripts/link.sh) and GNU Stow against a scratch home and a local agents repo fixture
-- Verifies linking per platform, shared editor settings, backups of changed copies and foreign links, idempotency, and dry runs
+- Verifies linking per platform, shared editor settings, backups of changed copies and foreign links, removal of stale repo links (files that moved, were deleted, or belong to an unused package) while real files and foreign links stay, idempotency, and dry runs
 - Covers agent links (clone, backup of real agent config, unreachable repo), seed files, and the `managed` and `status` reports
 
 [`install.bats`](/Users/bran/.dotfiles/tests/install.bats)

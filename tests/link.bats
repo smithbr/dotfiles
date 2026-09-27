@@ -387,3 +387,106 @@ stat_mode() {
     assert_line "broken ${DEST}/.claude/skills"
     refute_line --partial ".config/git/config"
 }
+
+# ---------------------------------------------------------------------------
+# Stale links
+# ---------------------------------------------------------------------------
+
+# Sets FIXTURE to a small dotfiles repo whose history held stow/common/.config/gone/rc
+# and stow/linux/.config/tool/rc, and which now holds stow/common/.keep, a
+# stow/extra package this platform does not use, and editors/code/settings.json.
+make_fixture_repo() {
+    FIXTURE="${TEST_TMPDIR}/fixture"
+    mkdir -p "${FIXTURE}/stow/common/.config/gone" "${FIXTURE}/stow/linux/.config/tool" \
+        "${FIXTURE}/stow/extra/.config/extra" "${FIXTURE}/editors/code"
+    printf 'keep\n' > "${FIXTURE}/stow/common/.keep"
+    printf 'gone\n' > "${FIXTURE}/stow/common/.config/gone/rc"
+    printf 'tool\n' > "${FIXTURE}/stow/linux/.config/tool/rc"
+    printf 'extra\n' > "${FIXTURE}/stow/extra/.config/extra/rc"
+    printf '{}\n' > "${FIXTURE}/editors/code/settings.json"
+    git -C "${FIXTURE}" init -q
+    git -C "${FIXTURE}" add -A
+    git -C "${FIXTURE}" -c user.name=test -c user.email=test@example.com commit -q -m one
+    git -C "${FIXTURE}" rm -q -r stow/common/.config/gone stow/linux
+    git -C "${FIXTURE}" -c user.name=test -c user.email=test@example.com commit -q -m two
+}
+
+run_fixture_link() {
+    run bash "${PROJECT_ROOT}/${LINK}" --repo "${FIXTURE}" --destination "${DEST}" "$@"
+}
+
+# Leaves the links a run from the fixture's first commit would have made, on
+# both platforms: two now dangle, one points into an unused package, and one is
+# an editor link in the Linux editor directory.
+plant_old_links() {
+    mkdir -p "${DEST}/.config/gone" "${DEST}/.config/tool" "${DEST}/.config/extra" "${DEST}/.config/Code/User"
+    ln -s ../../../fixture/stow/common/.config/gone/rc "${DEST}/.config/gone/rc"
+    ln -s ../../../fixture/stow/linux/.config/tool/rc "${DEST}/.config/tool/rc"
+    ln -s ../../../fixture/stow/extra/.config/extra/rc "${DEST}/.config/extra/rc"
+    ln -s "${FIXTURE}/editors/code/settings.json" "${DEST}/.config/Code/User/settings.json"
+}
+
+@test "removes links to files that left the repo or no longer apply here" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_fixture_repo
+    plant_old_links
+
+    run_fixture_link
+    assert_success
+    assert_output --partial "Removed stale link ${DEST}/.config/gone/rc"
+    [ ! -L "${DEST}/.config/gone/rc" ]
+    [ ! -L "${DEST}/.config/tool/rc" ]
+    [ ! -L "${DEST}/.config/extra/rc" ]
+    [ ! -L "${DEST}/.config/Code/User/settings.json" ]
+    [ -L "${DEST}/Library/Application Support/Code/User/settings.json" ]
+    [ -L "${DEST}/.keep" ]
+    [ ! -e "${DEST}/.local/state/dotfiles/clobbered" ]
+}
+
+@test "stale link removal leaves real files and foreign links alone" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_fixture_repo
+    mkdir -p "${DEST}/.config/gone" "${DEST}/.config/tool" "${DEST}/.config/Code/User"
+    printf 'mine\n' > "${DEST}/.config/gone/rc"
+    ln -s /somewhere/else "${DEST}/.config/tool/rc"
+    ln -s "${TEST_TMPDIR}/elsewhere.json" "${DEST}/.config/Code/User/settings.json"
+
+    run_fixture_link
+    assert_success
+    refute_output --partial "stale"
+    [ "$(cat "${DEST}/.config/gone/rc")" = "mine" ]
+    [ "$(readlink "${DEST}/.config/tool/rc")" = "/somewhere/else" ]
+    [ -L "${DEST}/.config/Code/User/settings.json" ]
+}
+
+@test "dry run and status report stale links without removing them" {
+    make_fixture_repo
+    plant_old_links
+
+    run_fixture_link --dry-run
+    assert_success
+    assert_output --partial "Would remove stale link ${DEST}/.config/gone/rc"
+    assert_output --partial "Would remove stale link ${DEST}/.config/Code/User/settings.json"
+
+    run_fixture_link status
+    assert_success
+    assert_line "stale ${DEST}/.config/gone/rc"
+    assert_line "stale ${DEST}/.config/tool/rc"
+    assert_line "stale ${DEST}/.config/extra/rc"
+    assert_line "stale ${DEST}/.config/Code/User/settings.json"
+    [ -L "${DEST}/.config/gone/rc" ]
+    [ -L "${DEST}/.config/Code/User/settings.json" ]
+}
+
+@test "relinks a file that moved to another package without a backup" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_fixture_repo
+    # .keep once lived in the linux package; its old link now dangles.
+    ln -s ../fixture/stow/linux/.keep "${DEST}/.keep"
+
+    run_fixture_link
+    assert_success
+    refute_output --partial "Backed up"
+    [ "$(readlink "${DEST}/.keep")" = "../fixture/stow/common/.keep" ]
+    [ ! -e "${DEST}/.local/state/dotfiles/clobbered" ]
+}
