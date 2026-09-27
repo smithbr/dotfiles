@@ -77,7 +77,7 @@ This is process-level isolation, not a real container or VM.
 
 [`bin_scripts.bats`](/Users/bran/.dotfiles/tests/bin_scripts.bats)
 
-- Covers scripts in [`stow/common/.local/bin`](/Users/bran/.dotfiles/stow/common/.local/bin)
+- Covers scripts in [`stow/tools/.local/bin`](/Users/bran/.dotfiles/stow/tools/.local/bin) and [`stow/server.linux/.local/bin`](/Users/bran/.dotfiles/stow/server.linux/.local/bin)
 - Verifies help output and startup probing for `ph-padd`
 - Verifies non-root self-elevation behavior for `ph-update`, `ph-test`, and `ph-backup`
 - Runs `ph-backup` against mocked Pi-hole, Unbound, and Tailscale and inspects the resulting zip

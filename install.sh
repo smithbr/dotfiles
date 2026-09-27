@@ -270,15 +270,20 @@ ensure_local_install_ssh_key() {
 }
 
 copy_and_list_local_example_files() {
-    local example_path
+    local managed
     local target_path
     local local_path
     local review_message=""
 
-    # Stow packages mirror $HOME, so a package-relative path is the target path.
-    while IFS= read -r -d '' example_path; do
-        example_path="${example_path#"${BASEDIR}"/stow/}"
-        target_path="${HOME}/${example_path#*/}"
+    # Only the examples this persona links; another layer's example has no
+    # linked copy here to start from. Read once: piping it into grep -q
+    # would stop link.sh with SIGPIPE, which pipefail reports as no match.
+    managed="$(bash "${LINK_SCRIPT}" managed)" || {
+        log_error "Could not list managed paths"
+        return 1
+    }
+    while IFS= read -r target_path; do
+        [[ "${target_path}" == *.local.example ]] || continue
         local_path="${target_path%.example}"
 
         if [[ ! -e "${local_path}" && ! -L "${local_path}" ]]; then
@@ -289,11 +294,13 @@ copy_and_list_local_example_files() {
                 log_info "Created ${local_path} from ${target_path}"
             fi
         fi
-    done < <(find "${BASEDIR}/stow" -type f -name '*.local.example' -print0)
+    done <<< "${managed}"
 
     review_message='Review machine-specific settings in ~/.config/git/config.local,'
-    review_message+=' ~/.config/zsh/.zshrc.local, ~/.ssh/config.local,'
-    review_message+=' and ~/.config/1Password/ssh/agent.toml'
+    review_message+=' ~/.config/zsh/.zshrc.local, ~/.ssh/config.local'
+    if grep -qxF "${HOME}/.config/1Password/ssh/agent.toml.example" <<< "${managed}"; then
+        review_message+=', and ~/.config/1Password/ssh/agent.toml'
+    fi
     _next_step "${review_message}"
 }
 

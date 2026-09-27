@@ -1,5 +1,5 @@
 # Headless server (the Pi-hole box, later a Mac mini): no editor settings.
 os=darwin,linux
-layers=common
+layers=common tools server
 agents=yes
 editors=no

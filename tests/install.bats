@@ -804,3 +804,40 @@ MOCK
     refute_output --partial "Creating local SSH key"
     [ ! -e "${TEST_TMPDIR}/home/.ssh/id_ed25519" ]
 }
+
+# Runs install.sh's example-copy step against a stand-in link.sh that prints
+# the given managed paths slowly, the way the real one streams them.
+run_example_step() {
+    local fake="${TEST_TMPDIR}/fake-link.sh"
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf 'printf "%%s\\n" "%s"\n' "$@"
+        printf 'sleep 0.2\n'
+        printf 'printf "%%s\\n" "%s/later/path"\n' "${HOME}"
+    } > "${fake}"
+    run bash -c "
+        set -euo pipefail
+        log_info() { printf 'INFO %s\\n' \"\$*\"; }
+        log_error() { printf 'ERROR %s\\n' \"\$*\"; }
+        _next_step() { printf 'NEXT %s\\n' \"\$*\"; }
+        dry_run=0
+        LINK_SCRIPT='${fake}'
+        $(sed -n '/^copy_and_list_local_example_files() {$/,/^}$/p' "${PROJECT_ROOT}/install.sh")
+        copy_and_list_local_example_files
+    "
+}
+
+@test "install.sh local config step copies managed examples and names 1Password when managed" {
+    mkdir -p "${HOME}/.config/git" "${HOME}/.config/1Password/ssh"
+    printf 'example\n' > "${HOME}/.config/git/config.local.example"
+    run_example_step "${HOME}/.config/1Password/ssh/agent.toml.example" "${HOME}/.config/git/config.local.example"
+    assert_success
+    assert_output --partial "Created ${HOME}/.config/git/config.local"
+    assert_output --partial "~/.config/1Password/ssh/agent.toml"
+    [ "$(cat "${HOME}/.config/git/config.local")" = "example" ]
+
+    run_example_step "${HOME}/.config/git/config.local.example"
+    assert_success
+    refute_output --partial "1Password"
+    refute_output --partial "Created"
+}
