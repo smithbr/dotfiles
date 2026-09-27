@@ -150,3 +150,11 @@ bucket_of() {
     assert_output --partial '~/.evil?[31mred.bak'
     assert_output --partial '~/.tab?name.bak'
 }
+
+@test "home-audit still runs where xdg-ninja is not installed at all" {
+    run env -u HOME_AUDIT_PROGRAMS HOME_AUDIT_PREFIXES="${TEST_TMPDIR}/no-prefix" HOME="${SANDBOX_HOME}" \
+        PATH="${BIN_SANDBOX}:/usr/bin:/bin" NO_COLOR=1 "${BIN_SANDBOX}/bash" "${SCRIPT}" --all
+    assert_success
+    assert_output --partial "XDG checks skipped"
+    [ "$(bucket_of .DS_Store)" = JUNK ]
+}

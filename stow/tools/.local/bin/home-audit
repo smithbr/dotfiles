@@ -24,6 +24,9 @@
 #
 # Environment:
 #   HOME_AUDIT_PROGRAMS  xdg-ninja programs directory (auto-detected)
+#   HOME_AUDIT_PREFIXES  prefixes searched for share/xdg-ninja/programs
+#                        (default: $HOMEBREW_PREFIX and the usual Homebrew
+#                        and system prefixes)
 #   DOTFILES_DIR         dotfiles repo (default ~/.dotfiles)
 
 set -euo pipefail
@@ -57,16 +60,21 @@ done
 # Present on every macOS/Linux home or owned by this dotfiles setup.
 required_names=" .Trash .ssh .gnupg .config .local .cache .dotfiles .zshenv .CFUserTextEncoding .localized "
 
+# Looks in Homebrew's usual prefixes rather than running brew, which is slow
+# and must not run during an install dry run.
 find_programs_dir() {
-    local dir prefix=""
+    local dir
     if [[ -n "${HOME_AUDIT_PROGRAMS:-}" ]]; then
         printf '%s\n' "${HOME_AUDIT_PROGRAMS}"
         return
     fi
-    command -v brew >/dev/null 2>&1 && prefix="$(brew --prefix 2>/dev/null || true)"
-    for dir in "${prefix:+${prefix}/share/xdg-ninja/programs}" /usr/local/share/xdg-ninja/programs /usr/share/xdg-ninja/programs; do
+    local -a prefixes=()
+    read -r -a prefixes <<< "${HOME_AUDIT_PREFIXES-${HOMEBREW_PREFIX:-} /opt/homebrew /home/linuxbrew/.linuxbrew /usr/local /usr}"
+    for dir in ${prefixes[@]+"${prefixes[@]/%//share/xdg-ninja/programs}"}; do
         [[ -n "${dir}" && -d "${dir}" ]] && { printf '%s\n' "${dir}"; return; }
     done
+    # Not found is fine: the XDG checks are skipped and noted.
+    return 0
 }
 
 # name<TAB>program<TAB>movable<TAB>VAR,VAR<TAB>hint for every $HOME/.name entry.
