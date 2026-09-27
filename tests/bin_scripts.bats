@@ -3119,7 +3119,7 @@ MOCK
 @test "ph-agent-setup import syncs and skips Claude when the inbox is empty" {
     agent_setup_sandbox agent
     mkdir -p "${TEST_TMPDIR}/home/blife/_inbox"
-    touch "${TEST_TMPDIR}/home/blife/_inbox/.gitkeep"
+    touch "${TEST_TMPDIR}/home/blife/_inbox/.gitkeep" "${TEST_TMPDIR}/home/blife/_inbox/.DS_Store"
     local tool
     for tool in ob claude flock; do
         cat > "${BIN_SANDBOX}/${tool}" <<MOCK
@@ -3135,6 +3135,19 @@ MOCK
     assert_output "1"
     run grep -c "^claude" "${TEST_TMPDIR}/calls"
     assert_output "0"
+}
+
+@test "ph-agent-setup status counts hidden inbox files but not .gitkeep or .DS_Store" {
+    agent_setup_sandbox agent
+    mkdir -p "${TEST_TMPDIR}/home/blife/_inbox/sub"
+    touch "${TEST_TMPDIR}/home/blife/_inbox/.gitkeep" \
+        "${TEST_TMPDIR}/home/blife/_inbox/.DS_Store" \
+        "${TEST_TMPDIR}/home/blife/_inbox/sub/.DS_Store" \
+        "${TEST_TMPDIR}/home/blife/_inbox/.hidden-note" \
+        "${TEST_TMPDIR}/home/blife/_inbox/sub/.gitkeep"
+    run_agent_setup status
+    assert_success
+    assert_output --partial "inbox     2 file(s)"
 }
 
 @test "ph-agent-setup import gives Claude a vault-scoped allowlist without find, cp, or mv" {

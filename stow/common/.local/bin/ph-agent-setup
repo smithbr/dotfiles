@@ -449,14 +449,14 @@ You are the importer for Bran's Obsidian vault at ${VAULT_DIR} (on the Pi-hole b
 
 On this machine, run the linter as \`vault-lint\` (it is \`python3 .scripts/vault-lint --root ${VAULT_DIR}\`; .scripts/ is not synced here). Wherever the manual says \`python3 .scripts/vault-lint ...\`, run \`vault-lint ...\` instead. Move a file with \`vault-mv SRC DEST\`: both must be inside the vault, DEST's folder must already exist (create it with \`mkdir -p\`), and it never overwrites. There is no cp, mv, rm, or git here, you can write only inside the vault, and you must not use the network.
 
-1. Read AGENTS.md, then Agents/strict-rules.md, then Agents/roles/role-importer.md, and follow them exactly. Run \`vault-lint\` first for a baseline. The source is all of \`_inbox/\` (dot-files excepted): follow the role's steps, including moving each original to \`_attachments/_raw/_inbox/YYYY-MM-DD/\` with \`vault-mv\` only after its note is written, writing the import log, and running \`vault-lint --fix\` on every changed file and then the full \`vault-lint\` (no new errors).
+1. Read AGENTS.md, then Agents/strict-rules.md, then Agents/roles/role-importer.md, and follow them exactly. Run \`vault-lint\` first for a baseline. The source is all of \`_inbox/\`, hidden files included; leave only \`_inbox/.gitkeep\` and any \`.DS_Store\` in place: follow the role's steps, including moving each original to \`_attachments/_raw/_inbox/YYYY-MM-DD/\` with \`vault-mv\` only after its note is written, writing the import log, and running \`vault-lint --fix\` on every changed file and then the full \`vault-lint\` (no new errors).
 2. Never commit or push. Do nothing that leaves the vault: no email, messages, Notion, Monarch, web forms, or web requests. Never delete anything. When something needs Bran's decision (ambiguous destination or meaning), make the safest choice the manual allows, usually leaving the file in \`_inbox/\` or creating an \`inbox\` task, and list it under "Decisions for Bran".
 3. Finish by appending the report to Agents/logs/log-importer-YYYY-MM-DD.md as Agents/agent-protocol.md ("Run log") describes, and reply with a short summary: files in, notes created or updated, tasks created, files left in _inbox/ and why, and the decisions for Bran.
 EOF
 }
 
 inbox_count() {
-    find "${VAULT_DIR}/_inbox" -type f ! -name '.*' 2>/dev/null | wc -l | tr -d ' '
+    find "${VAULT_DIR}/_inbox" -type f ! -path "${VAULT_DIR}/_inbox/.gitkeep" ! -name .DS_Store 2>/dev/null | wc -l | tr -d ' '
 }
 
 step_import() {
