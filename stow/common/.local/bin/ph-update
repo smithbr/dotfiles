@@ -4,6 +4,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OS_UPDATE_SCRIPT="${SCRIPT_DIR}/os-update"
+PADD_BIN=""
+
+# Root searches only system directories, never the caller's user-writable ones
+# such as ~/.local/bin. User-installed helpers run as SUDO_USER instead.
+ROOT_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+if (( EUID == 0 )); then
+    export PATH="${ROOT_PATH}"
+fi
 
 HAS_GUM=false
 command -v gum >/dev/null 2>&1 && [[ -t 1 ]] && HAS_GUM=true
@@ -146,6 +154,34 @@ run_os_update() {
     "${OS_UPDATE_SCRIPT}"
 }
 
+# ph-padd lives in ~/.local/bin, which root no longer searches. Prefer the
+# absolute path resolved before elevation, then PATH, then this script's dir.
+resolve_padd_bin() {
+    local candidate=""
+
+    for candidate in \
+        "${PH_UPDATE_PADD_BIN:-}" \
+        "$(command -v ph-padd 2>/dev/null || true)" \
+        "${SCRIPT_DIR}/ph-padd"; do
+        if [[ "${candidate}" == /* && -f "${candidate}" && -x "${candidate}" ]]; then
+            PADD_BIN="${candidate}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# PADD updates itself in place, and that file belongs to the invoking user.
+run_padd_update() {
+    if [[ "${EUID}" -eq 0 && -n "${SUDO_USER:-}" ]]; then
+        sudo -u "${SUDO_USER}" "${PADD_BIN}" -u
+        return
+    fi
+
+    "${PADD_BIN}" -u
+}
+
 preflight_check() {
     local section=""
 
@@ -181,7 +217,7 @@ check_deps() {
         return 1
     fi
 
-    if ! command -v ph-padd >/dev/null 2>&1; then
+    if ! resolve_padd_bin; then
         missing=1
         add_result "FAIL" "ph-padd command is unavailable"
         add_next_step "Install ph-padd or ensure the ph-padd command is on PATH"
@@ -340,10 +376,12 @@ main() {
         return 1
     }
 
-    # Preserve user's PATH through sudo for ~/.local/bin commands
+    # Root gets a fixed PATH, so hand over the resolved ph-padd location; it
+    # only ever runs as the invoking user.
     if [[ "${EUID}" -ne 0 ]]; then
         run_os_update
-        exec sudo PATH="${PATH}" PH_UPDATE_SKIP_OS_UPDATE=1 "${0}" "${@+"${@}"}"
+        resolve_padd_bin || true
+        exec sudo PH_UPDATE_SKIP_OS_UPDATE=1 PH_UPDATE_PADD_BIN="${PADD_BIN}" "${0}" "${@+"${@}"}"
     fi
 
     print_intro
@@ -382,7 +420,7 @@ main() {
         "PADD update failed" \
         "Run ph-padd -u manually to inspect the failure" \
         "Running ph-padd -u" \
-        ph-padd -u || true
+        run_padd_update || true
 
     print_summary || return 1
 
