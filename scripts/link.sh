@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Link the dotfiles into place with GNU Stow, and report what the repo owns.
 #
-#   stow/common, stow/<os>  mirror $HOME; every file becomes a symlink into the
+#   personas/<name>         which layers, editors and agents a machine gets:
+#                           key=value lines for os, layers, agents, editors.
+#   stow/<layer>, stow/<layer>.<os>
+#                           mirror $HOME; every file becomes a symlink into the
 #                           repo, so editing the live file edits the repo.
-#   seed/common, seed/<os>  copied once when missing, then owned by the app
+#   seed/<layer>, seed/<layer>.<os>
+#                           copied once when missing, then owned by the app
 #                           (docker and gh rewrite these themselves).
 #   editors/<name>          one copy of shared editor settings, linked into each
 #                           editor's user directory listed in editor_dirs.
@@ -29,6 +33,7 @@ DEST="${HOME}"
 DRY_RUN=0
 REFRESH=0
 COMMAND=apply
+PERSONA=""
 declare -a stow_args=()
 
 AGENTS_REPO_URL="${AGENTS_REPO_URL:-git@github.com:smithbr/agents-private.git}"
@@ -74,9 +79,14 @@ Commands:
   apply     Link packages, editor settings, agent links and seed files (default)
   managed   Print every destination path the repo owns
   status    Report missing, replaced, foreign, broken and stale links
+  persona   Print the persona in effect and where it came from
+            (flag, env, saved or default)
+  personas  List the personas this OS can use, with their descriptions
 
 Options:
   -n, --dry-run           Report what would change without touching anything
+      --persona NAME      Link as this persona (see personas/); a real apply
+                          saves it for later runs
       --refresh           Pull the agents checkout even if it is fresh
       --repo PATH         Dotfiles repo to read (default: this script's repo)
       --destination PATH  Home directory to link into (default: $HOME)
@@ -91,15 +101,19 @@ parse_args() {
         case "$1" in
             -n|--dry-run) DRY_RUN=1 ;;
             --refresh) REFRESH=1 ;;
-            --repo|--destination)
+            --repo|--destination|--persona)
                 if [[ $# -lt 2 ]]; then
-                    log_error "$1 requires a path"
+                    log_error "$1 requires a value"
                     exit 2
                 fi
-                if [[ "$1" == --repo ]]; then REPO="$2"; else DEST="$2"; fi
+                case "$1" in
+                    --repo) REPO="$2" ;;
+                    --destination) DEST="$2" ;;
+                    *) PERSONA="$2" ;;
+                esac
                 shift
                 ;;
-            apply|managed|status) COMMAND="$1" ;;
+            apply|managed|status|persona|personas) COMMAND="$1" ;;
             -h|--help) usage; exit 0 ;;
             --)
                 shift
@@ -139,11 +153,142 @@ platform() {
     esac
 }
 
-# Package directories under $1 (stow or seed) that apply to this platform.
+# The persona in effect, set by load_persona. A repo without personas/ links
+# every package for the platform, as before personas existed.
+PERSONA_NAME=""
+PERSONA_SOURCE=""
+PERSONA_LAYERS=""
+PERSONA_AGENTS=yes
+PERSONA_EDITORS=yes
+
+persona_state_file() {
+    printf '%s/.local/state/dotfiles/persona\n' "${DEST}"
+}
+
+default_persona() {
+    case "$(platform)" in
+        darwin) printf 'home\n' ;;
+        linux) printf 'server\n' ;;
+        *) printf 'sandbox\n' ;;
+    esac
+}
+
+# key=value lines from one persona file; comments and blank lines skipped.
+persona_settings() {
+    local line key value
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        line="${line%%#*}"
+        [[ "${line}" == *=* ]] || continue
+        key="${line%%=*}"
+        value="${line#*=}"
+        key="${key//[[:space:]]/}"
+        value="$(printf '%s' "${value}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        printf '%s=%s\n' "${key}" "${value}"
+    done < "$1"
+}
+
+# True when a persona file allows this platform.
+persona_allows_platform() {
+    local os
+    os="$(persona_settings "$1" | sed -n 's/^os=//p')"
+    [[ ",${os// /}," == *",$(platform),"* ]]
+}
+
+list_personas() {
+    local file description
+    [[ -d "${REPO}/personas" ]] || return 0
+    for file in "${REPO}/personas"/*; do
+        [[ -f "${file}" ]] || continue
+        persona_allows_platform "${file}" || continue
+        description="$(sed -n 's/^# *//p' "${file}" | head -1)"
+        printf '%s\t%s\n' "$(basename "${file}")" "${description}"
+    done
+}
+
+load_persona() {
+    local name="" source file setting key value saved
+    if [[ ! -d "${REPO}/personas" ]]; then
+        PERSONA_LAYERS="common $(platform)"
+        return 0
+    fi
+
+    if [[ -n "${PERSONA}" ]]; then
+        name="${PERSONA}" source=flag
+    elif [[ -n "${DOTFILES_PERSONA:-}" ]]; then
+        name="${DOTFILES_PERSONA}" source=env
+    else
+        saved="$(persona_state_file)"
+        if [[ -f "${saved}" && ! -L "${saved}" ]]; then
+            IFS= read -r name < "${saved}" || true
+            source=saved
+        fi
+        if [[ -z "${name}" ]]; then
+            name="$(default_persona)" source=default
+        fi
+    fi
+
+    file="${REPO}/personas/${name}"
+    if [[ ! "${name}" =~ ^[a-z][a-z0-9-]*$ || ! -f "${file}" ]]; then
+        log_error "Unknown persona '${name}'. Choose one of: $(list_personas | cut -f1 | tr '\n' ' ')"
+        exit 2
+    fi
+    if ! persona_allows_platform "${file}"; then
+        log_error "Persona '${name}' is not for $(platform). Choose one of: $(list_personas | cut -f1 | tr '\n' ' ')"
+        exit 2
+    fi
+
+    PERSONA_NAME="${name}"
+    PERSONA_SOURCE="${source}"
+    PERSONA_LAYERS=""
+    while IFS= read -r setting; do
+        key="${setting%%=*}"
+        value="${setting#*=}"
+        case "${key}" in
+            os) ;;
+            layers) PERSONA_LAYERS="${value}" ;;
+            agents|editors)
+                if [[ "${value}" != yes && "${value}" != no ]]; then
+                    log_error "${file}: ${key} must be yes or no, not '${value}'"
+                    exit 2
+                fi
+                if [[ "${key}" == agents ]]; then PERSONA_AGENTS="${value}"; else PERSONA_EDITORS="${value}"; fi
+                ;;
+            *)
+                log_error "${file}: unknown setting '${key}'"
+                exit 2
+                ;;
+        esac
+    done < <(persona_settings "${file}")
+}
+
+# Remember an explicitly chosen persona for later runs. The state directory is
+# never reached through a symlinked parent, as with the backups.
+save_persona() {
+    local file parent
+    [[ "${PERSONA_SOURCE}" == flag || "${PERSONA_SOURCE}" == env ]] || return 0
+    [[ "${DRY_RUN}" -eq 0 ]] || return 0
+    file="$(persona_state_file)"
+    if [[ -f "${file}" && ! -L "${file}" && "$(cat "${file}")" == "${PERSONA_NAME}" ]]; then
+        return 0
+    fi
+    for parent in "${DEST}/.local" "${DEST}/.local/state" "${DEST}/.local/state/dotfiles" "${file}"; do
+        if [[ -L "${parent}" ]]; then
+            log_error "Persona state path is a symlink: ${parent}; not saving the persona"
+            return 1
+        fi
+    done
+    (umask 077 && mkdir -p "$(dirname "${file}")" && printf '%s\n' "${PERSONA_NAME}" > "${file}")
+    printf 'Saved persona %s\n' "${PERSONA_NAME}"
+}
+
+# Package directories under $1 (stow or seed) for the persona's layers: each
+# layer, then its OS-specific part (<layer>.<os>).
 packages_in() {
-    local kind="$1" name
-    for name in common "$(platform)"; do
-        [[ -d "${REPO}/${kind}/${name}" ]] && printf '%s\n' "${name}"
+    local kind="$1" layer name
+    for layer in ${PERSONA_LAYERS}; do
+        for name in "${layer}" "${layer}.$(platform)"; do
+            [[ -d "${REPO}/${kind}/${name}" ]] && printf '%s\n' "${name}"
+        done
     done
     return 0
 }
@@ -442,6 +587,7 @@ link_agents() {
 # destination|source for every shared editor file on this platform.
 editor_links() {
     local entry dir name relative
+    [[ "${PERSONA_EDITORS}" == yes ]] || return 0
     while IFS= read -r entry; do
         dir="${entry%%|*}"
         name="${entry#*|}"
@@ -524,6 +670,7 @@ print_managed() {
     while IFS= read -r entry; do
         printf '%s/%s\n' "${DEST}" "${entry%%|*}"
     done < <(editor_links)
+    [[ "${PERSONA_AGENTS}" == yes ]] || return 0
     for entry in "${AGENT_LINKS[@]}"; do
         printf '%s/%s\n' "${DEST}" "${entry%%|*}"
     done
@@ -557,6 +704,7 @@ print_status() {
     done < <(editor_links)
 
     for entry in "${AGENT_LINKS[@]}"; do
+        [[ "${PERSONA_AGENTS}" == yes ]] || break
         target="${DEST}/${entry%%|*}"
         link_target="${DEST}/.config/agents/${entry#*|}"
         if [[ -L "${target}" && "$(readlink "${target}")" == "${link_target}" ]]; then
@@ -592,15 +740,28 @@ main() {
     fi
     DEST="$(cd "${DEST}" && pwd)"
 
+    if [[ "${COMMAND}" == personas ]]; then
+        list_personas
+        return 0
+    fi
+    load_persona
+
     case "${COMMAND}" in
+        persona) printf '%s %s\n' "${PERSONA_NAME:-none}" "${PERSONA_SOURCE:-legacy}" ;;
         managed) print_managed ;;
         status) print_status ;;
         apply)
+            if [[ "${PERSONA_SOURCE}" == default ]]; then
+                log_warn "No persona chosen; linking as '${PERSONA_NAME}', the default for $(platform). Pick one with: install.sh --persona NAME"
+            fi
+            save_persona
             prune_stale_links
             run_stow
             link_editors
-            sync_agents_repo
-            link_agents
+            if [[ "${PERSONA_AGENTS}" == yes ]]; then
+                sync_agents_repo
+                link_agents
+            fi
             copy_seeds
             secure_private_dirs
             ;;

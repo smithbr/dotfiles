@@ -17,6 +17,8 @@ It also ensures `shellcheck` and `stow` are installed, then lints the repo's she
 
 This repo can use the versioned hooks in [`.githooks`](/Users/bran/.dotfiles/.githooks):
 
+- `pre-commit` runs `~/.config/agents/scripts/check-drift` (retired terms, and `AGENT_LINKS` against the
+  agents repo); it skips with a note when the agents checkout is missing
 - `pre-push` runs the full test suite via [`run_tests.sh`](/Users/bran/.dotfiles/tests/run_tests.sh), then a
   container install via [`sandbox-install.sh`](/Users/bran/.dotfiles/tests/sandbox-install.sh)
 
@@ -24,7 +26,7 @@ To enable them locally:
 
 ```bash
 git config core.hooksPath .githooks
-chmod +x .githooks/pre-push
+chmod +x .githooks/pre-commit .githooks/pre-push
 ```
 
 ## Sandbox Install
@@ -112,12 +114,12 @@ This is process-level isolation, not a real container or VM.
 [`link.bats`](/Users/bran/.dotfiles/tests/link.bats)
 
 - Runs the real [`scripts/link.sh`](/Users/bran/.dotfiles/scripts/link.sh) and GNU Stow against a scratch home and a local agents repo fixture
-- Verifies linking per platform, shared editor settings, backups of changed copies and foreign links, removal of stale repo links (files that moved, were deleted, or belong to an unused package) while real files and foreign links stay, idempotency, and dry runs
+- Verifies linking per platform, shared editor settings, backups of changed copies and foreign links, removal of stale repo links (files that moved, were deleted, or belong to an unused package) while real files and foreign links stay, persona choice (flag, environment, saved state, OS default, unknown or wrong-OS names), personas without agents or editors, idempotency, and dry runs
 - Covers agent links (clone, backup of real agent config, unreachable repo), seed files, and the `managed` and `status` reports
 
 [`install.bats`](/Users/bran/.dotfiles/tests/install.bats)
 
-- Tests `install.sh` argument parsing
+- Tests `install.sh` argument parsing, including `--persona`, the persona picker (number, name, empty answer, EOF), and rejecting an unknown persona before any change
 - Verifies SSH key helper behavior
 - Tests error handling when `HOME` is unset
 - Runs an isolated integration test for [`install.sh`](/Users/bran/.dotfiles/install.sh) with sandboxed home and mocked external commands

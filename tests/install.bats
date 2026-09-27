@@ -107,6 +107,64 @@ run_parser() {
     assert_output "dry=0 system=1 brew=0 shell=1 verbose=0 args=--skip-system --adopt"
 }
 
+@test "install.sh takes --persona NAME without passing it to stow" {
+    run bash -c "
+        usage() { :; }
+        log_error() { printf 'ERROR %s\n' \"\$*\"; }
+        $(parser_snippet)
+        printf 'persona=%s args=%s\n' \"\${persona_arg}\" \"\${link_args[*]:-}\"
+    " bash --persona work --adopt
+    assert_success
+    assert_output "persona=work args=--adopt"
+
+    run bash -c "
+        log_error() { printf 'ERROR %s\n' \"\$*\"; }
+        $(parser_snippet)
+    " bash --persona
+    assert_failure 2
+    assert_output --partial "--persona requires a name"
+}
+
+# Runs install.sh's persona picker without gum, answering with stdin.
+run_persona_prompt() {
+    local answer="$1"
+    run bash -c "
+        log_warn() { printf 'WARN %s\n' \"\$*\" >&2; }
+        LINK_SCRIPT='${PROJECT_ROOT}/scripts/link.sh'
+        HAS_GUM=false
+        $(sed -n '/^prompt_persona() {$/,/^}$/p' "${PROJECT_ROOT}/install.sh")
+        prompt_persona home 2>/dev/null
+    " <<< "${answer}"
+}
+
+@test "install.sh persona picker takes a number or a name and falls back to the default" {
+    export DOTFILES_OS=darwin
+    run_persona_prompt "4"
+    assert_output "work"
+    run_persona_prompt "server"
+    assert_output "server"
+    run_persona_prompt ""
+    assert_output "home"
+    run_persona_prompt "bogus"
+    assert_output "home"
+    run bash -c "
+        log_warn() { :; }
+        LINK_SCRIPT='${PROJECT_ROOT}/scripts/link.sh'
+        HAS_GUM=false
+        $(sed -n '/^prompt_persona() {$/,/^}$/p' "${PROJECT_ROOT}/install.sh")
+        prompt_persona home 2>/dev/null
+    " < /dev/null
+    assert_output "home"
+}
+
+@test "install.sh rejects an unknown persona before changing anything" {
+    run bash "${PROJECT_ROOT}/install.sh" --dry-run --persona nope < /dev/null
+    assert_failure 2
+    assert_output --partial "Unknown persona 'nope'"
+    refute_output --partial "Dotfiles setup"
+    [ -z "$(ls -A "${HOME}")" ]
+}
+
 @test "install.sh supports both --skip-system and --skip-brew together" {
     run_parser --skip-system --skip-brew
     assert_success

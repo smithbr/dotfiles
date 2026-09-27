@@ -1,0 +1,5 @@
+# Work Mac: like home, without the private agents repo.
+os=darwin
+layers=common
+agents=no
+editors=yes

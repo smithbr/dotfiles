@@ -5,10 +5,13 @@ Every managed file in `~` is a symlink into this repo, so edit it in place and c
 
 ```bash
 git clone https://github.com/smithbr/dotfiles.git ~/.dotfiles
-~/.dotfiles/install.sh
+~/.dotfiles/install.sh --persona home
 ```
 
-Run `~/.dotfiles/install.sh --help` for installation options. After adding a
+Pick the persona that fits the machine: `home` (your Mac), `work` (a work Mac,
+no private agents config), `server` (a headless box, macOS or Linux), or
+`sandbox` (throwaway VMs and CI). The choice is saved; without `--persona`,
+the installer asks. Run `~/.dotfiles/install.sh --help` for installation options. After adding a
 file under `stow/`, run `~/.dotfiles/scripts/link.sh` to link it.
 
 See [AGENTS.md](AGENTS.md) for maintenance and quality rules.

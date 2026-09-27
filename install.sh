@@ -18,6 +18,9 @@ Options:
   -v, --verbose      Stream command output instead of collecting it into boxes
   -d, --debug        Verbose output plus shell command tracing (set -x)
   -h, --help         Show this help message and exit
+      --persona NAME Set this machine up as NAME (home, work, server, sandbox;
+                     see personas/). Saved for later runs; without it, a saved
+                     choice is used, a terminal asks, or the OS default applies
       --skip-system  Skip the OS bootstrap (scripts/bootstrap/<os>/setup.sh)
       --skip-brew    Skip the Homebrew install/update/bundle step
       --skip-shell   Skip adding zsh to /etc/shells and chsh
@@ -32,9 +35,18 @@ dry_run=0
 run_system_bootstrap=1
 run_brew=1
 run_shell_setup=1
+persona_arg=""
 declare -a link_args=()
 while [[ $# -gt 0 ]]; do
     case "${1}" in
+        --persona)
+            if [[ $# -lt 2 || -z "${2}" ]]; then
+                log_error "--persona requires a name"
+                exit 2
+            fi
+            persona_arg="${2}"
+            shift
+            ;;
         -n|--dry-run)
             dry_run=1
             ;;
@@ -399,6 +411,72 @@ select_files_to_archive() {
     fi
 }
 
+# Ask which persona this machine is, when a terminal is available and nothing
+# chose one yet. Unboxed, before the steps, so the picker can draw. A closed
+# stdin, EOF or an empty answer keeps the OS default.
+prompt_persona() {
+    local default="$1" name description reply="" choice=""
+    local -a names=() items=()
+
+    while IFS=$'\t' read -r name description; do
+        names+=("${name}")
+        items+=("${name}: ${description}")
+    done < <(bash "${LINK_SCRIPT}" personas)
+    [[ "${#names[@]}" -gt 0 ]] || { printf '%s\n' "${default}"; return 0; }
+
+    if [[ "${HAS_GUM}" == true ]]; then
+        local selected=""
+        for description in "${items[@]}"; do
+            [[ "${description}" == "${default}:"* ]] && selected="${description}"
+        done
+        reply="$(gum choose --header "Which persona is this machine?" --selected "${selected}" "${items[@]}" </dev/tty)" || reply=""
+        choice="${reply%%:*}"
+    else
+        local i=1
+        printf 'Which persona is this machine?\n' >&2
+        for description in "${items[@]}"; do
+            printf '  %d) %s\n' "${i}" "${description}" >&2
+            i=$((i + 1))
+        done
+        if ! read -r -p "Persona [${default}]: " reply; then
+            reply=""
+        fi
+        if [[ "${reply}" =~ ^[0-9]+$ && "${reply}" -ge 1 && "${reply}" -le "${#names[@]}" ]]; then
+            choice="${names[$((reply - 1))]}"
+        else
+            choice="${reply}"
+        fi
+    fi
+
+    for name in "${names[@]}"; do
+        if [[ "${name}" == "${choice}" ]]; then
+            printf '%s\n' "${choice}"
+            return 0
+        fi
+    done
+    [[ -z "${choice}" ]] || log_warn "Unknown persona '${choice}'; using ${default}" >&2
+    printf '%s\n' "${default}"
+}
+
+# Settle the persona before anything changes, and pass it on to link.sh and
+# file-review.sh through the environment.
+resolve_persona() {
+    local resolved name source
+    if [[ -n "${persona_arg}" ]]; then
+        export DOTFILES_PERSONA="${persona_arg}"
+    fi
+    resolved="$(bash "${LINK_SCRIPT}" persona)" || exit 2
+    read -r name source <<< "${resolved}"
+    if [[ "${source}" == default && -t 0 && -t 1 ]]; then
+        name="$(prompt_persona "${name}")"
+        export DOTFILES_PERSONA="${name}"
+    fi
+    PERSONA_NAME="${name}"
+}
+
+PERSONA_NAME=""
+resolve_persona
+
 cd "${BASEDIR}"
 
 run_mode="Installing"
@@ -423,6 +501,7 @@ fi
 
 _header "Dotfiles setup"
 _item "${run_mode} from ${BASEDIR}"
+[[ "${PERSONA_NAME}" == none ]] || _item "Persona: ${PERSONA_NAME}"
 if [[ "${#skipped_steps[@]}" -gt 0 ]]; then
     _item "Skipping: $(printf '%s, ' "${skipped_steps[@]}" | sed 's/, $//')"
 fi

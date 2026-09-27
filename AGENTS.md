@@ -10,6 +10,7 @@ These rules apply throughout this repository.
 - `-v`, `--verbose`: stream command output instead of collecting it into boxes.
 - `-d`, `--debug`: enable verbose output and shell command tracing.
 - `-h`, `--help`: show usage and exit.
+- `--persona NAME`: set the machine up as a persona from `personas/` (`home`, `work`, `server`, `sandbox`) and save the choice.
 - `--skip-system`: skip OS bootstrap.
 - `--skip-brew`: skip Homebrew installation, updates, and bundles.
 - `--skip-shell`: skip adding zsh to `/etc/shells` and running `chsh`.
@@ -20,16 +21,16 @@ Unrecognized arguments and everything after `--` are passed to `stow` through `s
 ~/.dotfiles/install.sh --skip-brew -- --verbose=2
 ```
 
-`scripts/link.sh` is the linking step on its own: `link.sh` links, `link.sh status` lists missing, replaced, foreign, broken, and stale links, `link.sh managed` prints every path the repo owns, and `--dry-run`, `--refresh` (pull `~/.config/agents` now), and `--destination PATH` adjust a run. Stow's `--target` and `--dir` are rejected; use `--destination`.
+`scripts/link.sh` is the linking step on its own: `link.sh` links, `link.sh persona` prints the persona in effect and its source, `link.sh personas` lists the ones this OS allows, `link.sh status` lists missing, replaced, foreign, broken, and stale links, `link.sh managed` prints every path the repo owns, and `--persona NAME`, `--dry-run`, `--refresh` (pull `~/.config/agents` now), and `--destination PATH` adjust a run. Stow's `--target` and `--dir` are rejected; use `--destination`.
 
 ## Source and deployment boundaries
 
-- `stow/<package>/` mirrors the home directory under real file names; `common` always links, and `darwin` or `linux` links on that platform. Linking uses `--no-folding`, so directories in `~` stay real and only files are symlinks. Repository tooling belongs outside `stow/`.
-- `seed/<package>/` holds files an application rewrites itself (Docker's and gh's config). They are copied once with mode 600 when missing and never overwritten; do not move them into `stow/`.
+- A persona (`personas/<name>`, plain `key=value` lines that are parsed, never sourced) says what a machine gets: `os` (allowed platforms), `layers`, `agents` (the private agents checkout and its links), and `editors` (shared editor settings). The persona comes from `--persona`, then `DOTFILES_PERSONA`, then `~/.local/state/dotfiles/persona`, then the OS default (`home` on macOS, `server` on Linux), which warns until one is chosen. `install.sh` asks on a terminal when none is saved; closed stdin and dry runs keep the default and never save. A real apply with `--persona` or `DOTFILES_PERSONA` saves it.
+- `stow/<layer>/` mirrors the home directory under real file names, and `stow/<layer>.<os>/` holds that layer's platform-only files; a machine links the layers its persona lists. Linking uses `--no-folding`, so directories in `~` stay real and only files are symlinks. Switching persona removes the old layers' links as stale. Repository tooling belongs outside `stow/`.
+- `seed/<layer>/` and `seed/<layer>.<os>/` hold files an application rewrites itself (Docker's and gh's config). They are copied once with mode 600 when missing and never overwritten; do not move them into `stow/`.
 - Shared editor settings live once in `editors/`, and nowhere under `stow/`. `editor_dirs` in `scripts/link.sh` lists each editor's user directory per platform, and every file in the matching `editors/` directory is linked there with the same backup rules as stow packages. Add an editor or platform there, not as symlinks in `stow/`.
 - Links into the private agents checkout (`~/.config/agents`) and the directories kept at mode 700 are listed in `AGENT_LINKS` and `PRIVATE_DIRS` in `scripts/link.sh`. Git keeps only the executable bit, so any other permission must be applied there.
 - Changes to managed paths must preserve existing user data. `scripts/link.sh` replaces a real file only when it matches the repo and otherwise moves it to `~/.local/state/dotfiles/clobbered/<timestamp>/` first; keep that behavior and cover transitions in `tests/link.bats`.
-- A link into the repo's `stow/` or `editors/` that no longer belongs on this host (its file moved or was deleted, or its package no longer applies) is stale: `link.sh` removes it and `status` reports it. Candidates come from every package, the repo's `stow/` history, and each platform's editor directories. Only links are removed, never real files, so moving or deleting a managed file needs no manual cleanup.
 - A link into the repo's `stow/` or `editors/` that no longer belongs on this host (its file moved or was deleted, or its package no longer applies) is stale: `link.sh` removes it and `status` reports it. Candidates come from every package, the repo's `stow/` history, and each platform's editor directories. Only links are removed, never real files, so moving or deleting a managed file needs no manual cleanup.
 - An application that saves by replacing its config file turns the link into a real file and silently detaches it from the repo. `link.sh status` and the file review report these as `replaced`.
 
