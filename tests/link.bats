@@ -41,6 +41,22 @@ backup_of() {
     find "${DEST}/.local/state/dotfiles/clobbered" -path "*/$1" 2>/dev/null | head -1
 }
 
+# Sets NO_STOW_PATH to a directory of links to every command on PATH except stow.
+hide_stow() {
+    local dir entry name
+    local -a dirs=()
+    NO_STOW_PATH="${TEST_TMPDIR}/no-stow-bin"
+    mkdir -p "${NO_STOW_PATH}"
+    IFS=: read -r -a dirs <<< "${PATH}"
+    for dir in "${dirs[@]}"; do
+        for entry in "${dir}"/*; do
+            name="${entry##*/}"
+            [[ "${name}" == stow || -e "${NO_STOW_PATH}/${name}" || ! -x "${entry}" ]] && continue
+            ln -s "${entry}" "${NO_STOW_PATH}/${name}"
+        done
+    done
+}
+
 stat_mode() {
     stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"
 }
@@ -174,6 +190,29 @@ stat_mode() {
     assert_output --partial "Would clone"
     assert_output --partial "Would create ${DEST}/.config/gh/hosts.yml"
     [ "$(find "${DEST}" -mindepth 1 -print | LC_ALL=C sort)" = "$(printf '%s\n' "${DEST}/.config" "${DEST}/.config/git" "${DEST}/.config/git/ignore")" ]
+}
+
+@test "dry run without stow still reports conflicts" {
+    hide_stow
+    mkdir -p "${DEST}/.config/git"
+    printf 'my local edit\n' > "${DEST}/.config/git/ignore"
+
+    run env PATH="${NO_STOW_PATH}" bash "${PROJECT_ROOT}/${LINK}" --destination "${DEST}" --dry-run
+    assert_success
+    assert_output --partial "Would back up ${DEST}/.config/git/ignore"
+    [ "$(cat "${DEST}/.config/git/ignore")" = 'my local edit' ]
+}
+
+@test "a real run without stow fails before moving anything" {
+    hide_stow
+    mkdir -p "${DEST}/.config/git"
+    printf 'my local edit\n' > "${DEST}/.config/git/ignore"
+
+    run env PATH="${NO_STOW_PATH}" bash "${PROJECT_ROOT}/${LINK}" --destination "${DEST}"
+    assert_failure
+    assert_output --partial "GNU Stow is not installed"
+    [ "$(cat "${DEST}/.config/git/ignore")" = 'my local edit' ]
+    [ ! -e "${DEST}/.local/state/dotfiles/clobbered" ]
 }
 
 @test "stow's own simulate flag also makes the run a dry run" {
