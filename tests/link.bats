@@ -84,21 +84,69 @@ stat_mode() {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     run_link
     assert_success
-    local mac="${DEST}/Library/Application Support/Code/User/settings.json"
-    [ -L "${mac}" ]
-    [ "$(cat "${mac}")" = "$(cat "${PROJECT_ROOT}/editors/code/settings.json")" ]
-    local f
-    for f in settings.json keybindings.json; do
-        [ "$(cat "${DEST}/Library/Application Support/Cursor/User/${f}")" = "$(cat "${PROJECT_ROOT}/editors/code/${f}")" ]
+    local app f
+    for app in Code Cursor; do
+        for f in settings.json keybindings.json; do
+            [ "$(readlink "${DEST}/Library/Application Support/${app}/User/${f}")" = "${PROJECT_ROOT}/editors/code/${f}" ]
+        done
     done
+    [ -d "${DEST}/Library/Application Support/Code/User" ] && [ ! -L "${DEST}/Library/Application Support/Code/User" ]
     [ ! -e "${DEST}/.config/Code" ]
 
     DEST="${TEST_TMPDIR}/linux-home"
     DOTFILES_OS=linux run_link
     assert_success
-    [ "$(cat "${DEST}/.config/Code/User/settings.json")" = "$(cat "${PROJECT_ROOT}/editors/code/settings.json")" ]
+    for app in Code Cursor; do
+        [ "$(readlink "${DEST}/.config/${app}/User/keybindings.json")" = "${PROJECT_ROOT}/editors/code/keybindings.json" ]
+    done
     [ ! -e "${DEST}/Library" ]
     [ ! -e "${DEST}/.config/docker" ]
+}
+
+@test "keeps each editor setting file in the repo only once" {
+    [ -z "$(find "${PROJECT_ROOT}/stow" -path '*/User/*' -print)" ]
+}
+
+@test "relinks an editor link left by the old stow layout without a backup" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    local dir="${DEST}/Library/Application Support/Code/User"
+    mkdir -p "${dir}"
+    ln -s "../../../../.dotfiles/stow/darwin/Library/Application Support/Code/User/keybindings.json" "${dir}/keybindings.json"
+
+    run_link
+    assert_success
+    refute_output --partial "Backed up"
+    [ "$(readlink "${dir}/keybindings.json")" = "${PROJECT_ROOT}/editors/code/keybindings.json" ]
+    [ ! -e "${DEST}/.local/state/dotfiles/clobbered" ]
+}
+
+@test "replaces identical editor settings and backs up changed ones" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    local dir="${DEST}/Library/Application Support/Cursor/User"
+    mkdir -p "${dir}"
+    cp "${PROJECT_ROOT}/editors/code/settings.json" "${dir}/settings.json"
+    printf '[]\n' > "${dir}/keybindings.json"
+
+    run_link
+    assert_success
+    assert_output --partial "Backed up ${dir}/keybindings.json"
+    refute_output --partial "Backed up ${dir}/settings.json"
+    [ -L "${dir}/settings.json" ] && [ -L "${dir}/keybindings.json" ]
+    run cat "$(backup_of "Library/Application Support/Cursor/User/keybindings.json")"
+    assert_output '[]'
+}
+
+@test "dry run reports editor links without creating them" {
+    local dir="${DEST}/Library/Application Support/Code/User"
+    mkdir -p "${dir}"
+    printf '[]\n' > "${dir}/keybindings.json"
+
+    run_link --dry-run
+    assert_success
+    assert_output --partial "Would back up ${dir}/keybindings.json"
+    assert_output --partial "Would link ${dir}/settings.json -> ${PROJECT_ROOT}/editors/code/settings.json"
+    [ ! -L "${dir}/keybindings.json" ] && [ ! -e "${dir}/settings.json" ]
+    [ ! -e "${DEST}/Library/Application Support/Cursor" ]
 }
 
 @test "replaces an identical copy without keeping a backup" {
@@ -324,9 +372,15 @@ stat_mode() {
     rm "${DEST}/.zshenv" && printf 'saved by an editor\n' > "${DEST}/.zshenv"
     rm "${DEST}/.config/git/ignore" && ln -s /somewhere/else "${DEST}/.config/git/ignore"
     rm -rf "${DEST}/.config/agents/skills"
+    local editor="${DEST}/Library/Application Support/Code/User"
+    rm "${editor}/settings.json" && printf '{}\n' > "${editor}/settings.json"
+    rm "${editor}/keybindings.json"
 
     run_link status
     assert_success
+    assert_line "replaced ${editor}/settings.json"
+    assert_line "missing ${editor}/keybindings.json"
+    refute_line --partial "Cursor"
     assert_line "missing ${DEST}/.bashrc"
     assert_line "replaced ${DEST}/.zshenv"
     assert_line "foreign ${DEST}/.config/git/ignore"

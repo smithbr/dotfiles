@@ -26,7 +26,7 @@ Unrecognized arguments and everything after `--` are passed to `stow` through `s
 
 - `stow/<package>/` mirrors the home directory under real file names; `common` always links, and `darwin` or `linux` links on that platform. Linking uses `--no-folding`, so directories in `~` stay real and only files are symlinks. Repository tooling belongs outside `stow/`.
 - `seed/<package>/` holds files an application rewrites itself (Docker's and gh's config). They are copied once with mode 600 when missing and never overwritten; do not move them into `stow/`.
-- Shared editor settings live once in `editors/`; the platform packages hold relative symlinks to them. Edit `editors/`, not the links.
+- Shared editor settings live once in `editors/`, and nowhere under `stow/`. `editor_dirs` in `scripts/link.sh` lists each editor's user directory per platform, and every file in the matching `editors/` directory is linked there with the same backup rules as stow packages. Add an editor or platform there, not as symlinks in `stow/`.
 - Links into the private agents checkout (`~/.config/agents`) and the directories kept at mode 700 are listed in `AGENT_LINKS` and `PRIVATE_DIRS` in `scripts/link.sh`. Git keeps only the executable bit, so any other permission must be applied there.
 - Changes to managed paths must preserve existing user data. `scripts/link.sh` replaces a real file only when it matches the repo and otherwise moves it to `~/.local/state/dotfiles/clobbered/<timestamp>/` first; keep that behavior and cover transitions in `tests/link.bats`.
 - An application that saves by replacing its config file turns the link into a real file and silently detaches it from the repo. `link.sh status` and the file review report these as `replaced`.
