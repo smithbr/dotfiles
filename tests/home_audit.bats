@@ -151,6 +151,38 @@ bucket_of() {
     assert_output --partial '~/.tab?name.bak'
 }
 
+@test "home-audit notes when each entry last changed" {
+    run_audit
+    assert_success
+    assert_output --regexp "~/\.zzactive +[0-9.]+[KMG] +no installed owner found, but changed today"
+    assert_output --regexp "~/\.zzorphan +[0-9.]+[KMG] +no installed owner, untouched [0-9]{4,} days"
+    assert_output --regexp "~/\.ownedstale +[0-9.]+[KMG] +ownedstale installed, but untouched [0-9]{4,} days"
+}
+
+@test "home-audit keeps the 1Password agent link and knows commands named unlike their folder" {
+    mkdir -p "${SANDBOX_HOME}/.1password" "${SANDBOX_HOME}/.vscode-shared"
+    touch "${SANDBOX_HOME}/.vscode-shared/state"
+    make_stale "${SANDBOX_HOME}/.1password"
+    ln -s /usr/bin/true "${BIN_SANDBOX}/code"
+    run_audit --all
+    assert_success
+    [ "$(bucket_of .1password)" = KEEP ]
+    [ "$(bucket_of .vscode-shared)" = KEEP ]
+    assert_output --partial "1Password SSH agent socket link"
+    assert_output --partial "in use by code; changed today"
+}
+
+@test "home-audit --tsv prints every entry for scripts" {
+    run_audit --tsv
+    assert_success
+    assert_line --regexp "^junk"$'\t'"${SANDBOX_HOME}/\.DS_Store"$'\t'"[0-9.]+[KMG]"$'\t'"backup copy or OS litter$"
+    assert_line --regexp "^leftover"$'\t'"${SANDBOX_HOME}/\.zzorphan"$'\t'
+    assert_line --regexp "^review"$'\t'"${SANDBOX_HOME}/\.zzactive"$'\t'
+    assert_line --regexp "^keep"$'\t'"${SANDBOX_HOME}/\.managed"$'\t'$'\t'"managed by dotfiles$"
+    refute_output --partial "Home audit"
+    refute_output --partial "Nothing was changed"
+}
+
 @test "home-audit still runs where xdg-ninja is not installed at all" {
     run env -u HOME_AUDIT_PROGRAMS HOME_AUDIT_PREFIXES="${TEST_TMPDIR}/no-prefix" HOME="${SANDBOX_HOME}" \
         PATH="${BIN_SANDBOX}:/usr/bin:/bin" NO_COLOR=1 "${BIN_SANDBOX}/bash" "${SCRIPT}" --all
