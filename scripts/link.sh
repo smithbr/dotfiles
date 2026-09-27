@@ -13,6 +13,10 @@
 # A real file where a link belongs is replaced only when its content matches
 # the repo. Anything else is moved to ~/.local/state/dotfiles/clobbered/ first,
 # so linking never loses data.
+#
+# A link into the repo's stow/ or editors/ that no longer belongs here (its file
+# moved or was deleted, or its package no longer applies) is stale and removed.
+# Only links are removed; real files are never touched this way.
 
 set -euo pipefail
 
@@ -43,8 +47,9 @@ AGENT_LINKS=(
 
 # destination directory|directory under editors/, one line per editor. Every
 # file in the editors/ directory is linked into the destination directory.
+# Takes a platform; defaults to this one.
 editor_dirs() {
-    case "$(platform)" in
+    case "${1:-$(platform)}" in
         darwin)
             printf '%s\n' \
                 "Library/Application Support/Code/User|code" \
@@ -68,7 +73,7 @@ Usage: link.sh [OPTIONS] [COMMAND] [-- STOW_ARGS...]
 Commands:
   apply     Link packages, editor settings, agent links and seed files (default)
   managed   Print every destination path the repo owns
-  status    Report missing, replaced, foreign and broken links
+  status    Report missing, replaced, foreign, broken and stale links
 
 Options:
   -n, --dry-run           Report what would change without touching anything
@@ -173,6 +178,113 @@ is_linked() {
     [[ "${resolved}" == "$(physical_path "${source}")" ]]
 }
 
+# Where a link points, as an absolute path, even when the target is gone. The
+# link's own directory and the longest existing prefix of the target are
+# resolved physically, so a repo reached through a symlink still compares equal.
+link_destination() {
+    local target="$1" link path part prefix rest=""
+    local -a parts=() kept=()
+    link="$(readlink "${target}")" || return 1
+    if [[ "${link}" == /* ]]; then
+        path="${link}"
+    else
+        path="$(cd -P "$(dirname "${target}")" 2>/dev/null && pwd)/${link}" || return 1
+    fi
+    IFS=/ read -r -a parts <<< "${path}"
+    for part in ${parts[@]+"${parts[@]}"}; do
+        case "${part}" in
+            ''|.) ;;
+            ..)
+                if [[ "${#kept[@]}" -gt 0 ]]; then
+                    kept=(${kept[@]+"${kept[@]:0:$((${#kept[@]} - 1))}"})
+                fi
+                ;;
+            *) kept+=("${part}") ;;
+        esac
+    done
+    prefix=""
+    for part in ${kept[@]+"${kept[@]}"}; do
+        prefix="${prefix}/${part}"
+    done
+    while [[ -n "${prefix}" && ! -d "${prefix}" ]]; do
+        rest="/${prefix##*/}${rest}"
+        prefix="${prefix%/*}"
+    done
+    if [[ -n "${prefix}" ]]; then
+        prefix="$(cd -P "${prefix}" && pwd)" || return 1
+    fi
+    printf '%s%s\n' "${prefix}" "${rest}"
+}
+
+# True when a link points into the repo's stow/ or editors/, existing or not.
+is_repo_link() {
+    local destination
+    [[ -L "$1" ]] || return 1
+    destination="$(link_destination "$1")" || return 1
+    [[ "${destination}" == "${REPO}/stow/"* || "${destination}" == "${REPO}/editors/"* ]]
+}
+
+# Relative paths of the links that belong here: this platform's stow files and
+# editor links.
+managed_links() {
+    local package relative entry
+    while IFS= read -r package; do
+        package_files stow "${package}"
+    done < <(packages_in stow)
+    while IFS= read -r entry; do
+        printf '%s\n' "${entry%%|*}"
+    done < <(editor_links)
+}
+
+# Relative paths where a repo link may have been left behind: every file any
+# stow package has held, now or in the repo's history, and whatever sits in
+# any platform's editor directories.
+stale_candidates() {
+    local dir line entry os
+    for dir in "${REPO}/stow"/*/; do
+        [[ -d "${dir}" ]] && package_files stow "$(basename "${dir}")"
+    done
+    if command -v git >/dev/null 2>&1 && git -C "${REPO}" rev-parse --git-dir >/dev/null 2>&1; then
+        while IFS= read -r line; do
+            [[ "${line}" == stow/*/* ]] && printf '%s\n' "${line#stow/*/}"
+        done < <(git -C "${REPO}" -c core.quotePath=false log --format= --name-only -- stow 2>/dev/null || true)
+    fi
+    for os in darwin linux; do
+        while IFS= read -r entry; do
+            dir="${DEST}/${entry%%|*}"
+            [[ -d "${dir}" && ! -L "${dir}" ]] || continue
+            for line in "${dir}"/*; do
+                [[ -L "${line}" ]] && printf '%s\n' "${line#"${DEST}"/}"
+            done
+        done < <(editor_dirs "${os}")
+    done
+}
+
+# Absolute paths of stale links: repo links that are not managed here.
+stale_links() {
+    local managed relative target
+    managed="$(managed_links)"
+    while IFS= read -r relative; do
+        [[ -n "${relative}" ]] || continue
+        target="${DEST}/${relative}"
+        is_repo_link "${target}" || continue
+        grep -Fxq -- "${relative}" <<< "${managed}" && continue
+        printf '%s\n' "${target}"
+    done < <(stale_candidates | LC_ALL=C sort -u)
+}
+
+prune_stale_links() {
+    local target
+    while IFS= read -r target; do
+        if [[ "${DRY_RUN}" -eq 1 ]]; then
+            printf 'Would remove stale link %s\n' "${target}"
+        else
+            rm -f "${target}"
+            printf 'Removed stale link %s\n' "${target}"
+        fi
+    done < <(stale_links)
+}
+
 BACKUP_DIR=""
 # Backups can hold credentials, so the directories are private and never
 # reached through a symlinked parent (as in file-review.sh's archive).
@@ -205,7 +317,16 @@ clear_conflicts() {
             [[ -e "${target}" || -L "${target}" ]] || continue
             is_linked "${target}" "${source}" && continue
 
-            if [[ -f "${target}" && ! -L "${target}" ]] && cmp -s "${target}" "${source}"; then
+            # Our own link into another package (the file moved between
+            # packages) is replaced quietly, like an identical copy.
+            if is_repo_link "${target}"; then
+                if [[ "${DRY_RUN}" -eq 1 ]]; then
+                    printf 'Would relink %s\n' "${target}"
+                    BLOCKED=$((BLOCKED + 1))
+                else
+                    rm -f "${target}"
+                fi
+            elif [[ -f "${target}" && ! -L "${target}" ]] && cmp -s "${target}" "${source}"; then
                 if [[ "${DRY_RUN}" -eq 1 ]]; then
                     printf 'Would replace identical copy %s with a link\n' "${target}"
                     BLOCKED=$((BLOCKED + 1))
@@ -342,7 +463,8 @@ link_editors() {
         target="${DEST}/${relative}"
         is_linked "${target}" "${source}" && continue
 
-        if [[ -L "${target}" && "$(readlink "${target}")" == */stow/"$(platform)/${relative}" ]]; then
+        if is_repo_link "${target}" \
+            || [[ -L "${target}" && "$(readlink "${target}")" == */stow/"$(platform)/${relative}" ]]; then
             [[ "${DRY_RUN}" -eq 0 ]] && rm -f "${target}"
         elif [[ -f "${target}" && ! -L "${target}" ]] && cmp -s "${target}" "${source}"; then
             [[ "${DRY_RUN}" -eq 0 ]] && rm -f "${target}"
@@ -447,6 +569,10 @@ print_status() {
             printf 'missing %s\n' "${target}"
         fi
     done
+
+    while IFS= read -r target; do
+        printf 'stale %s\n' "${target}"
+    done < <(stale_links)
 }
 
 main() {
@@ -470,6 +596,7 @@ main() {
         managed) print_managed ;;
         status) print_status ;;
         apply)
+            prune_stale_links
             run_stow
             link_editors
             sync_agents_repo

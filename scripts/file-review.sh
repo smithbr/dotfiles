@@ -253,6 +253,11 @@ print_status_section() {
                 printf '    status: symlink points somewhere other than the repo\n'
                 printf '    action: check what it points to, then run link.sh to relink it\n'
                 ;;
+            stale)
+                printf '  %s\n' "$(display_path "${path}")"
+                printf '    status: link into the repo for a file that moved, was removed, or no longer applies here\n'
+                printf '    action: run ~/.dotfiles/scripts/link.sh to remove it\n'
+                ;;
             *)
                 printf '  %s\n' "${line}"
                 ;;
