@@ -38,7 +38,7 @@ Set up the locked-down `agent` user on the Pi-hole box and run the daily blife `
 
 | Command | Run as | Does |
 |---------|--------|------|
-| `user` | pi (sudo) | Create `agent` with a mode-700 home; let pi's personal SSH keys log in as agent through a root-owned key file; install this script, `vault-lint`, and `vault-mv` root-owned in `/usr/local/bin` |
+| `user` | pi (sudo) | Create `agent` with a mode-700 home; let pi's personal SSH keys log in as agent through a root-owned key file; install this script, `vault-lint`, `vault-mv`, and `vault-cp` root-owned in `/usr/local/bin` |
 | `install` | agent | Node (checksum-verified), `obsidian-headless`, Claude Code, a read-only vault key |
 | `authorize` | pi (sudo, or the key on stdin) | Let agent's key fetch `~/git/vault.git` and nothing else |
 | `link` | agent | Sync the vault to `~/blife` (runs `ob login` if needed), check out `.scripts/` read-only |
@@ -46,8 +46,9 @@ Set up the locked-down `agent` user on the Pi-hole box and run the daily blife `
 | `import` | agent | One import run: sync, import `_inbox/` as the importer role, sync |
 | `status` | agent | Show versions, sync state, cron entry, and inbox count |
 
-The import calls `vault-lint ARGS` (`ph-agent-setup lint ARGS`) and `vault-mv SRC DEST`
-(`ph-agent-setup mv SRC DEST`, a move that stays inside the vault).
+The import calls `vault-lint ARGS` (`ph-agent-setup lint ARGS`), `vault-mv SRC DEST`
+(`ph-agent-setup mv SRC DEST`, a move that stays inside the vault), and `vault-cp SRC DEST`
+(`ph-agent-setup cp SRC DEST`, a copy that stays inside the vault).
 
 ## Options
 
@@ -67,13 +68,14 @@ EOF
     cat <<'EOF'
 Usage:
   ph-agent-setup user|install|authorize|link|schedule|import|status
-  ph-agent-setup lint [ARGS...] | mv SRC DEST
+  ph-agent-setup lint [ARGS...] | mv SRC DEST | cp SRC DEST
   ph-agent-setup --help
 
 Set up the locked-down agent user on the Pi-hole box and run the daily blife
 _inbox/ import. Run the steps in order: user (as pi, uses sudo), install
 (as agent), authorize (as pi), link, schedule (as agent). Every step is safe
-to re-run. lint and mv back the vault-lint and vault-mv commands the import uses.
+to re-run. lint, mv, and cp back the vault-lint, vault-mv, and vault-cp commands the
+import uses.
 EOF
 }
 
@@ -136,7 +138,7 @@ install_commands() {
     local cmd
     sudo install -d -m 755 -o root -g root "${BIN_DIR}"
     sudo install -m 755 -o root -g root "${BASH_SOURCE[0]}" "${BIN_DIR}/ph-agent-setup"
-    for cmd in lint mv; do
+    for cmd in lint mv cp; do
         printf '#!/usr/bin/env bash\nexec %q %s "$@"\n' "${BIN_DIR}/ph-agent-setup" "${cmd}" \
             | sudo install -m 755 -o root -g root /dev/stdin "${BIN_DIR}/vault-${cmd}"
     done
@@ -363,12 +365,14 @@ vault_path_ok() {
     esac
 }
 
-# The import's only way to move a file: both ends resolve inside the vault, the source is a
-# regular file (not a link), the destination folder already exists, and nothing is overwritten.
-step_move() {
-    local src dest root src_path dest_dir dest_name dest_path
-    require_user "${AGENT_USER}" mv
-    [[ $# -eq 2 ]] || die "usage: vault-mv SRC DEST"
+# The import's only way to move or copy a file: both ends resolve inside the vault, the source
+# is a regular file (not a link), the destination folder already exists, and nothing is
+# overwritten. VERB is mv or cp.
+vault_transfer() {
+    local verb="${1}" src dest root src_path dest_dir dest_name dest_path
+    shift
+    require_user "${AGENT_USER}" "${verb}"
+    [[ $# -eq 2 ]] || die "usage: vault-${verb} SRC DEST"
     src="${1}"
     dest="${2}"
     root="$(CDPATH='' cd -P -- "${VAULT_DIR}" && pwd -P)" || die "no vault at ${VAULT_DIR}"
@@ -387,9 +391,17 @@ step_move() {
     vault_path_ok "${src_path}" "${root}" || die "source is outside the vault: ${src}"
     vault_path_ok "${dest_path}" "${root}" || die "destination is outside the vault: ${dest}"
     [[ ! -e "${dest_path}" && ! -L "${dest_path}" ]] || die "destination exists: ${dest}"
-    mv -n -- "${src_path}" "${dest_path}"
-    [[ ! -e "${src_path}" && -f "${dest_path}" ]] || die "could not move ${src} to ${dest}"
+    if [[ "${verb}" == mv ]]; then
+        mv -n -- "${src_path}" "${dest_path}"
+        [[ ! -e "${src_path}" && -f "${dest_path}" ]] || die "could not move ${src} to ${dest}"
+    else
+        cp -n -- "${src_path}" "${dest_path}"
+        cmp -s -- "${src_path}" "${dest_path}" || die "could not copy ${src} to ${dest}"
+    fi
 }
+
+step_move() { vault_transfer mv "$@"; }
+step_copy() { vault_transfer cp "$@"; }
 
 # ---- import: as agent (cron) -------------------------------------------------
 
@@ -412,7 +424,7 @@ write_claude_settings() {
     # ~/.local (node, claude, TOOLS_DIR), ~/.ssh, Claude's settings, and cron's state.
     # Claude talks to Anthropic, and vault-lint is python3 from TOOLS_DIR, which can reach the
     # network, so TOOLS_DIR must stay unwritable here. No cp or mv: they write anywhere agent can;
-    # vault-mv moves within the vault. No find: -exec/-fprintf run anything past the deny rules
+    # vault-mv and vault-cp move and copy within the vault. No find: -exec/-fprintf run anything past the deny rules
     # below; Glob covers discovery.
     cat > "${CONFIG_DIR}/claude-settings.json" <<EOF
 {
@@ -420,7 +432,7 @@ write_claude_settings() {
     "allow": [
       "Read", "Glob", "Grep",
       "Write(/${vault}/**)", "Edit(/${vault}/**)",
-      "Bash(vault-lint *)", "Bash(vault-lint)", "Bash(vault-mv *)",
+      "Bash(vault-lint *)", "Bash(vault-lint)", "Bash(vault-mv *)", "Bash(vault-cp *)",
       "Bash(ls *)", "Bash(stat *)", "Bash(file *)", "Bash(wc *)",
       "Bash(grep *)", "Bash(head *)", "Bash(tail *)", "Bash(date *)", "Bash(date)",
       "Bash(mkdir *)", "Bash(cmp *)", "Bash(sha256sum *)"
@@ -445,13 +457,17 @@ EOF
 
 import_prompt() {
     cat <<EOF
-You are the importer for Bran's Obsidian vault at ${VAULT_DIR} (on the Pi-hole box, as the locked-down '${AGENT_USER}' user). This is an unattended daily run; Bran is not watching.
+You are the importer for Bran's Obsidian vault at ${VAULT_DIR}, on the Pi-hole box as the locked-down '${AGENT_USER}' user, in an unattended daily run. Keep this prompt in step with the Mac's "Process inbox>vault" routine (~/.claude/scheduled-tasks/blife-inbox-import/SKILL.md).
 
-On this machine, run the linter as \`vault-lint\` (it is \`python3 .scripts/vault-lint --root ${VAULT_DIR}\`; .scripts/ is not synced here). Wherever the manual says \`python3 .scripts/vault-lint ...\`, run \`vault-lint ...\` instead. Move a file with \`vault-mv SRC DEST\`: both must be inside the vault, DEST's folder must already exist (create it with \`mkdir -p\`), and it never overwrites. There is no cp, mv, rm, or git here, you can write only inside the vault, and you must not use the network.
+Read AGENTS.md and work as the importer (Agents/roles/role-importer.md) on all of _inbox/, following the manual exactly, from the lint baseline to the run log.
 
-1. Read AGENTS.md, then Agents/strict-rules.md, then Agents/roles/role-importer.md, and follow them exactly. Run \`vault-lint\` first for a baseline. The source is all of \`_inbox/\`, hidden files included; leave only \`_inbox/.gitkeep\` and any \`.DS_Store\` in place: follow the role's steps, including moving each original to \`_attachments/_raw/_inbox/YYYY-MM-DD/\` with \`vault-mv\` only after its note is written, writing the import log, and running \`vault-lint --fix\` on every changed file and then the full \`vault-lint\` (no new errors).
-2. Never commit or push. Do nothing that leaves the vault: no email, messages, Notion, Monarch, web forms, or web requests. Never delete anything. When something needs Bran's decision (ambiguous destination or meaning), make the safest choice the manual allows, usually leaving the file in \`_inbox/\` or creating an \`inbox\` task, and list it under "Decisions for Bran".
-3. Finish by appending the report to Agents/logs/log-importer-YYYY-MM-DD.md as Agents/agent-protocol.md ("Run log") describes, and reply with a short summary: files in, notes created or updated, tasks created, files left in _inbox/ and why, and the decisions for Bran.
+On this machine: wherever the manual says \`python3 .scripts/vault-lint ...\`, run \`vault-lint ...\` (.scripts/ isn't synced here). Move with \`vault-mv SRC DEST\` and copy with \`vault-cp SRC DEST\`: both paths inside the vault, DEST's folder created first with \`mkdir -p\`, never overwriting. There is no cp, mv, rm, or git, and no network.
+
+Nobody is watching, so:
+- Don't ask. When something needs Bran (an ambiguous destination or meaning), make the safest choice the manual allows, usually leaving the file in _inbox/ or creating an inbox task, and list it under "Decisions for Bran".
+- Nothing leaves the vault, nothing is deleted, nothing is committed.
+
+Reply with: files in, Resources and People created or updated, tasks created, files left in _inbox/ and why, and the decisions for Bran.
 EOF
 }
 
@@ -478,8 +494,8 @@ step_import() {
         log "inbox empty"
         return 0
     fi
-    [[ -x "${BIN_DIR}/vault-lint" && -x "${BIN_DIR}/vault-mv" ]] \
-        || die "no ${BIN_DIR}/vault-lint or vault-mv; run 'ph-agent-setup user' as ${ADMIN_USER}"
+    [[ -x "${BIN_DIR}/vault-lint" && -x "${BIN_DIR}/vault-mv" && -x "${BIN_DIR}/vault-cp" ]] \
+        || die "no ${BIN_DIR}/vault-lint, vault-mv, or vault-cp; run 'ph-agent-setup user' as ${ADMIN_USER}"
     log "importing ${count} file(s)"
     write_claude_settings
     local status=0
@@ -512,6 +528,7 @@ main() {
     case "${1}" in
         lint) shift; step_lint "$@"; return ;;
         mv) shift; step_move "$@"; return ;;
+        cp) shift; step_copy "$@"; return ;;
     esac
     [[ $# -eq 1 ]] || { usage >&2; exit 2; }
     case "${1}" in
