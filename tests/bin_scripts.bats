@@ -1676,7 +1676,7 @@ MOCK
     assert_success
     assert_output --partial "Usage:"
     assert_output --partial "ph-backup [-o|--output DIR]"
-    assert_output --partial "/var/backups/ph-backup"
+    assert_output --partial "~/backups/ph-backup"
 }
 
 @test "ph-backup rejects unknown arguments before elevating" {
@@ -1712,8 +1712,8 @@ MOCK
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
         "${PROJECT_ROOT}/stow/common/.local/bin/ph-backup" -o /mnt/nas/pihole
     assert_success
-    assert_output --partial "sudo PATH=${BIN_SANDBOX}:/usr/bin:/bin"
-    assert_output --partial "ph-backup -o /mnt/nas/pihole"
+    refute_output --partial "PATH="
+    assert_output --partial "sudo ${PROJECT_ROOT}/stow/common/.local/bin/ph-backup -o /mnt/nas/pihole"
 }
 
 # ph-backup must run as root, so tests exercise a copy with the self-elevation
@@ -2041,6 +2041,170 @@ MOCK
 
     run find "${TEST_TMPDIR}/out" -name '*.tar.gz'
     assert_output ""
+}
+
+@test "ph-backup as root searches only system directories, not the caller's PATH" {
+    local probe_script="${TEST_TMPDIR}/ph-backup-root"
+    local dir
+
+    for dir in /usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin; do
+        [[ ! -e "${dir}/pihole-FTL" && ! -e "${dir}/pihole" ]] || skip "Pi-hole is installed on this host"
+    done
+
+    # Take the root branch without being root.
+    sed 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
+        "${PROJECT_ROOT}/stow/common/.local/bin/ph-backup" > "${probe_script}"
+    chmod +x "${probe_script}"
+
+    local cmd
+    for cmd in pihole-FTL pihole hostname tar gum sudo; do
+        printf '#!/usr/bin/env bash\ntouch "%s/user-path-used"\n' "${TEST_TMPDIR}" > "${BIN_SANDBOX}/${cmd}"
+        chmod +x "${BIN_SANDBOX}/${cmd}"
+    done
+    mkdir -p "${TEST_TMPDIR}/out"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        "${probe_script}" -o "${TEST_TMPDIR}/out"
+    assert_failure
+    assert_output --partial "neither pihole-FTL nor pihole is on PATH"
+    [[ ! -e "${TEST_TMPDIR}/user-path-used" ]]
+}
+
+# Pin the snapshot timestamp so tests can plant files at the archive name.
+mock_ph_backup_date() {
+    cat > "${BIN_SANDBOX}/date" <<'MOCK'
+#!/usr/bin/env bash
+[[ "${1:-}" == "+%Y%m%d-%H%M%S" ]] && { printf '20260101-000000\n'; exit 0; }
+exec /bin/date "$@"
+MOCK
+    chmod +x "${BIN_SANDBOX}/date"
+}
+
+@test "ph-backup creates a missing output directory owner-only with a 0600 archive" {
+    setup_ph_backup_sandbox
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        PH_BACKUP_SBIN_PATHS="" \
+        PH_BACKUP_UNBOUND_DIR="${TEST_TMPDIR}/etc/unbound" \
+        PH_BACKUP_PIHOLE_DIR="${TEST_TMPDIR}/etc/pihole" \
+        "${TEST_TMPDIR}/ph-backup" -o "${TEST_TMPDIR}/fresh/backups"
+    assert_success
+
+    run find "${TEST_TMPDIR}/fresh/backups" -maxdepth 0 -perm 0700
+    assert_output "${TEST_TMPDIR}/fresh/backups"
+
+    run find "${TEST_TMPDIR}/fresh/backups" -name 'ph-backup-pi-*.tar.gz' -perm 0600
+    assert_output --partial "ph-backup-pi-"
+
+    # The temporary file was renamed into place, not left behind.
+    run find "${TEST_TMPDIR}/fresh/backups" -name '.tmp.*'
+    assert_output ""
+}
+
+@test "ph-backup refuses a symlinked or shared-writable output directory" {
+    setup_ph_backup_sandbox
+    mkdir -p "${TEST_TMPDIR}/real-out"
+    ln -s "${TEST_TMPDIR}/real-out" "${TEST_TMPDIR}/link-out"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        PH_BACKUP_SBIN_PATHS="" \
+        PH_BACKUP_UNBOUND_DIR="${TEST_TMPDIR}/etc/unbound" \
+        PH_BACKUP_PIHOLE_DIR="${TEST_TMPDIR}/etc/pihole" \
+        "${TEST_TMPDIR}/ph-backup" -o "${TEST_TMPDIR}/link-out"
+    assert_failure
+    assert_output --partial "Refusing ${TEST_TMPDIR}/link-out: it is a symlink"
+    assert_output --partial "Could not write the backup archive"
+
+    run find "${TEST_TMPDIR}/real-out" -type f
+    assert_output ""
+
+    chmod 777 "${TEST_TMPDIR}/out"
+    run_ph_backup_probe
+    assert_failure
+    assert_output --partial "it is writable by group or others"
+
+    run find "${TEST_TMPDIR}/out" -type f
+    assert_output ""
+}
+
+@test "ph-backup never writes through a symlink planted at the archive name" {
+    setup_ph_backup_sandbox
+    mock_ph_backup_date
+    printf 'victim\n' > "${TEST_TMPDIR}/victim"
+    ln -s "${TEST_TMPDIR}/victim" "${TEST_TMPDIR}/out/ph-backup-pi-20260101-000000.tar.gz"
+
+    run_ph_backup_probe
+    assert_failure
+    assert_output --partial "Refusing to replace existing"
+
+    run cat "${TEST_TMPDIR}/victim"
+    assert_output "victim"
+    [[ -L "${TEST_TMPDIR}/out/ph-backup-pi-20260101-000000.tar.gz" ]]
+
+    run find "${TEST_TMPDIR}/out" -name '.tmp.*'
+    assert_output ""
+}
+
+@test "ph-backup off-box copy never writes through a planted symlink" {
+    setup_ph_backup_sandbox
+    mock_ph_backup_date
+    mkdir -p "${TEST_TMPDIR}/offbox"
+    printf 'victim\n' > "${TEST_TMPDIR}/victim"
+    ln -s "${TEST_TMPDIR}/victim" "${TEST_TMPDIR}/offbox/ph-backup-pi-20260101-000000.tar.gz"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        PH_BACKUP_SBIN_PATHS="" \
+        PH_BACKUP_UNBOUND_DIR="${TEST_TMPDIR}/etc/unbound" \
+        PH_BACKUP_PIHOLE_DIR="${TEST_TMPDIR}/etc/pihole" \
+        "${TEST_TMPDIR}/ph-backup" -o "${TEST_TMPDIR}/out" --copy-to "${TEST_TMPDIR}/offbox"
+    assert_success
+    assert_output --partial "Could not copy the archive"
+
+    run cat "${TEST_TMPDIR}/victim"
+    assert_output "victim"
+
+    run find "${TEST_TMPDIR}/offbox" -name '.tmp.*'
+    assert_output ""
+}
+
+@test "ph-backup writes the archive and scp copy as the invoking user" {
+    setup_ph_backup_sandbox
+    mkdir -p "${TEST_TMPDIR}/remote"
+
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+printf 'sudo %s\n' "$*"
+[[ "${1:-}" == "-u" ]] && shift 2
+exec "$@"
+MOCK
+
+    # Stand in for the remote end, and report what scp was allowed to read.
+    cat > "${BIN_SANDBOX}/scp" <<'MOCK'
+#!/usr/bin/env bash
+src="${2}"
+[[ -O "${src}" ]] && printf 'scp source owned by caller\n'
+[[ -n "$(find "${src}" -maxdepth 0 -perm 0600)" ]] && printf 'scp source mode 0600\n'
+cp "${src}" "${TEST_TMPDIR}/remote/"
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/scp"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" TEST_TMPDIR="${TEST_TMPDIR}" \
+        SUDO_USER="$(id -un)" \
+        PH_BACKUP_SBIN_PATHS="" \
+        PH_BACKUP_UNBOUND_DIR="${TEST_TMPDIR}/etc/unbound" \
+        PH_BACKUP_PIHOLE_DIR="${TEST_TMPDIR}/etc/pihole" \
+        "${TEST_TMPDIR}/ph-backup" -o "${TEST_TMPDIR}/out" --copy-to nas:/backups
+    assert_success
+    assert_output --partial "Archive copied to nas:/backups"
+    # The archive lands through a shell run as the invoking user, never root.
+    assert_output --partial "sudo -u $(id -un) sh -c"
+    assert_output --regexp "sudo -u $(id -un) scp -q ${TEST_TMPDIR}/out/ph-backup-pi-[^ ]*\.tar\.gz nas:/backups"
+    assert_output --partial "scp source owned by caller"
+    assert_output --partial "scp source mode 0600"
+
+    run find "${TEST_TMPDIR}/remote" -name 'ph-backup-pi-*.tar.gz'
+    assert_output --partial "ph-backup-pi-"
 }
 
 @test "ts-test displays help" {

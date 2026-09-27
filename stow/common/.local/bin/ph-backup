@@ -40,7 +40,7 @@ Snapshot Pi-hole, Unbound, and Tailscale into a single dated tar.gz archive.
 
 | Option | Description |
 |--------|-------------|
-| `-o DIR`, `--output DIR` | Write the archive to `DIR` (default `/var/backups/ph-backup`) |
+| `-o DIR`, `--output DIR` | Write the archive to `DIR` (default `~/backups/ph-backup` of the user who ran sudo) |
 | `-c DEST`, `--copy-to DEST` | Also copy the archive to a path or `host:path` over scp |
 | `-h`, `--help` | Show this help |
 
@@ -48,7 +48,7 @@ Snapshot Pi-hole, Unbound, and Tailscale into a single dated tar.gz archive.
 
 | Command | Description |
 |---------|-------------|
-| `ph-backup` | Back up to `/var/backups/ph-backup` |
+| `ph-backup` | Back up to `~/backups/ph-backup` |
 | `ph-backup -o /mnt/nas/pihole` | Back up to a mounted share |
 | `ph-backup -c nas:/backups` | Back up locally, then copy off-box over scp |
 EOF
@@ -66,11 +66,12 @@ Usage:
 
 Snapshot Pi-hole (Teleporter), Unbound (/etc/unbound), and Tailscale state,
 write a summary of all three, and roll them into a dated tar.gz archive.
-Defaults to /var/backups/ph-backup when no output directory is given.
+Defaults to ~/backups/ph-backup of the user who ran sudo. The archive and
+any --copy-to copy are written as that user, owner-only (0600).
 EOF
 }
 
-BACKUP_DIR="${PH_BACKUP_DIR:-/var/backups/ph-backup}"
+BACKUP_DIR="${PH_BACKUP_DIR:-}"
 UNBOUND_DIR="${PH_BACKUP_UNBOUND_DIR:-/etc/unbound}"
 PIHOLE_DIR="${PH_BACKUP_PIHOLE_DIR:-/etc/pihole}"
 COPY_TO="${PH_BACKUP_COPY_TO:-}"
@@ -125,13 +126,32 @@ if ! is_linux; then
     die "error: ph-backup only runs on the Linux host where Pi-hole and Unbound live."
 fi
 
-# Self-elevate if not root (preserve PATH for ~/.local/bin commands)
+# Self-elevate if not root. Root searches only system directories, never the
+# caller's user-writable ones such as ~/.local/bin.
 if [[ "${EUID}" -ne 0 ]]; then
-    exec sudo PATH="${PATH}" "${0}" "${@+"${@}"}"
+    exec sudo "${0}" "${@+"${@}"}"
+else
+    export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 fi
 
 # Everything staged here holds Unbound control keys, so keep it owner-only.
 umask 077
+
+# Archives belong to whoever ran sudo and are written as that user (see
+# as_owner), so root never writes into a directory someone else controls.
+BACKUP_OWNER=""
+if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+    BACKUP_OWNER="${SUDO_USER}"
+fi
+if [[ -z "${BACKUP_DIR}" ]]; then
+    owner_home="${HOME}"
+    if [[ -n "${BACKUP_OWNER}" ]]; then
+        owner_home="$(getent passwd "${BACKUP_OWNER}" | cut -d: -f6)"
+        [[ -n "${owner_home}" ]] || die "error: no home directory for ${BACKUP_OWNER}"
+    fi
+    BACKUP_DIR="${owner_home}/backups/ph-backup"
+    unset owner_home
+fi
 
 HAS_GUM=false
 command -v gum >/dev/null 2>&1 && [[ -t 1 ]] && HAS_GUM=true
@@ -142,6 +162,8 @@ SNAPSHOT_NAME="ph-backup-${HOST_NAME}-${TIMESTAMP}"
 STAGE_DIR=""
 SNAPSHOT_DIR=""
 ARCHIVE_PATH=""
+STAGED_ARCHIVE=""
+PUBLISHED_PATH=""
 
 declare -a SUMMARY_RESULTS=()
 declare -a NEXT_STEPS=()
@@ -800,47 +822,106 @@ EOF
     [[ -s "${summary}" ]]
 }
 
-create_archive() {
-    mkdir -p "${BACKUP_DIR}"
-    chmod 700 "${BACKUP_DIR}" 2>/dev/null || true
+# True when a group or other bit can write to the path.
+is_shared_writable() {
+    [[ -n "$(find "${1}" -maxdepth 0 \( -perm -020 -o -perm -002 \) -print 2>/dev/null)" ]]
+}
 
-    ARCHIVE_PATH="${BACKUP_DIR}/${SNAPSHOT_NAME}.tar.gz"
+# Run a command as the backup owner. Every write outside STAGE_DIR goes through
+# here, so a symlink the owner plants can only reach files the owner could
+# already write, never root's.
+as_owner() {
+    if [[ -n "${BACKUP_OWNER}" ]]; then
+        sudo -u "${BACKUP_OWNER}" "$@"
+    else
+        "$@"
+    fi
+}
 
-    tar -czf "${ARCHIVE_PATH}" -C "${STAGE_DIR}" "${SNAPSHOT_NAME}" || return 1
+# Without an owner, root itself writes into the directory, so it must be one
+# nobody else can modify; otherwise a planted symlink would redirect root's writes.
+check_root_writable_dir() {
+    local dir="${1}"
 
-    chmod 600 "${ARCHIVE_PATH}"
+    if [[ -L "${dir}" ]]; then
+        _item "Refusing ${dir}: it is a symlink"
+        return 1
+    fi
+    [[ -e "${dir}" ]] || return 0
+    if [[ ! -d "${dir}" ]]; then
+        _item "Refusing ${dir}: it is not a directory"
+        return 1
+    fi
+    if [[ ! -O "${dir}" ]]; then
+        _item "Refusing ${dir}: it is not owned by $(id -un)"
+        return 1
+    fi
+    if is_shared_writable "${dir}"; then
+        _item "Refusing ${dir}: it is writable by group or others"
+        return 1
+    fi
+}
 
-    # Hand the archive to the human who invoked sudo so it can be copied off-box.
-    if [[ -n "${SUDO_USER:-}" ]]; then
-        chown "${SUDO_USER}" "${ARCHIVE_PATH}" 2>/dev/null || true
-        chown "${SUDO_USER}" "${BACKUP_DIR}" 2>/dev/null || true
+# Stream the staged archive into DIR as the owner: create DIR owner-only when
+# missing, write a fresh temporary file, and rename it onto a name that must
+# not exist yet.
+publish_archive() {
+    local dir="${1}"
+    local dest="${dir}/${STAGED_ARCHIVE##*/}"
+
+    if [[ -z "${BACKUP_OWNER}" ]]; then
+        check_root_writable_dir "${dir}" || return 1
     fi
 
-    [[ -s "${ARCHIVE_PATH}" ]]
+    # shellcheck disable=SC2016
+    as_owner sh -c '
+        umask 077
+        mkdir -p "$1" || exit 1
+        if [ -e "$2" ] || [ -L "$2" ]; then
+            echo "Refusing to replace existing $2" >&2
+            exit 1
+        fi
+        tmp=$(mktemp "$1/.tmp.XXXXXX") || exit 1
+        if cat > "${tmp}" && mv -f "${tmp}" "$2"; then
+            exit 0
+        fi
+        rm -f "${tmp}"
+        exit 1
+    ' ph-backup "${dir}" "${dest}" < "${STAGED_ARCHIVE}" 2>&1 | while IFS= read -r line; do
+        _item "${line}"
+    done
+    [[ "${PIPESTATUS[0]}" -eq 0 ]] || return 1
+    PUBLISHED_PATH="${dest}"
+}
+
+create_archive() {
+    STAGED_ARCHIVE="${STAGE_DIR}/${SNAPSHOT_NAME}.tar.gz"
+    tar -czf "${STAGED_ARCHIVE}" -C "${STAGE_DIR}" "${SNAPSHOT_NAME}" || return 1
+    [[ -s "${STAGED_ARCHIVE}" ]] || return 1
+
+    publish_archive "${BACKUP_DIR}" || return 1
+    ARCHIVE_PATH="${PUBLISHED_PATH}"
 }
 
 # A backup that only exists on the machine it came from is not a backup. The
-# destination is either a path (mount, USB, NAS) or an scp target. Remote
-# copies run as the invoking user so they use that user's SSH keys and agent
-# rather than root's, which usually has neither.
+# destination is either a path (mount, USB, NAS) or an scp target. Both run as
+# the owner, so remote copies use that user's SSH keys and agent rather than
+# root's, which usually has neither.
 copy_offbox() {
-    [[ -n "${ARCHIVE_PATH}" && -s "${ARCHIVE_PATH}" ]] || return 1
+    [[ -n "${STAGED_ARCHIVE}" && -s "${STAGED_ARCHIVE}" && -n "${ARCHIVE_PATH}" ]] || return 1
 
     if [[ "${COPY_TO}" == *:* ]]; then
         command -v scp >/dev/null 2>&1 || return 1
-
-        if [[ -n "${SUDO_USER:-}" ]]; then
-            sudo -u "${SUDO_USER}" scp -q "${ARCHIVE_PATH}" "${COPY_TO}" || return 1
-            return 0
+        if [[ -n "${BACKUP_OWNER}" ]]; then
+            # The owner's own copy, which it can read without root's help.
+            as_owner scp -q "${ARCHIVE_PATH}" "${COPY_TO}"
+        else
+            scp -q "${STAGED_ARCHIVE}" "${COPY_TO}"
         fi
-
-        scp -q "${ARCHIVE_PATH}" "${COPY_TO}" || return 1
-        return 0
+        return
     fi
 
-    mkdir -p "${COPY_TO}" || return 1
-    cp "${ARCHIVE_PATH}" "${COPY_TO}/" || return 1
-    return 0
+    publish_archive "${COPY_TO}"
 }
 
 run_step() {
@@ -890,8 +971,8 @@ print_summary() {
     _box "${summary_body}"
     printf '\n'
 
-    if [[ -n "${ARCHIVE_PATH}" && -s "${ARCHIVE_PATH}" ]]; then
-        _box "Archive: ${ARCHIVE_PATH}"$'\n'"Size: $(file_size "${ARCHIVE_PATH}")"
+    if [[ -n "${ARCHIVE_PATH}" && -s "${STAGED_ARCHIVE}" ]]; then
+        _box "Archive: ${ARCHIVE_PATH}"$'\n'"Size: $(file_size "${STAGED_ARCHIVE}")"
         printf '\n'
     fi
 
@@ -978,7 +1059,7 @@ main() {
         "Archive" \
         "Backup archive written to ${BACKUP_DIR}" \
         "Could not write the backup archive" \
-        "Confirm ${BACKUP_DIR} is writable" \
+        "Confirm ${BACKUP_OWNER:-root} can create and write ${BACKUP_DIR}" \
         "Rolling snapshot into ${BACKUP_DIR}" \
         "FAIL" \
         create_archive || true
@@ -988,7 +1069,7 @@ main() {
             "Off-box copy" \
             "Archive copied to ${COPY_TO}" \
             "Could not copy the archive to ${COPY_TO}" \
-            "Confirm ${COPY_TO} is writable, or reachable over ssh as ${SUDO_USER:-root}" \
+            "Confirm ${COPY_TO} is writable, or reachable over ssh, as ${BACKUP_OWNER:-root}" \
             "Copying archive to ${COPY_TO}" \
             "WARN" \
             copy_offbox || true
