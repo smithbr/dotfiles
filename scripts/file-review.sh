@@ -13,16 +13,20 @@ MANAGED_PATHS_CACHE=""
 REVIEW_INCOMPLETE=0
 DEST_DIR="${HOME}"
 CLEANUP=0
+SELECT_ONLY=0
+CLEANUP_HINT=1
 declare -a candidates=()
 declare -a extra_roots=()
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [--source PATH] [--destination PATH] [--all] [--cleanup] [audit-root...]
+Usage: $(basename "$0") [--source PATH] [--destination PATH] [--all] [--cleanup | --select] [--no-cleanup-hint] [audit-root...]
 
-Review existing files on this machine. Nothing changes unless --cleanup is used.
+Review existing files on this machine. Nothing changes unless --cleanup or --select is used.
 --cleanup offers one selection of paths to archive; it never permanently deletes.
-Press Enter or close stdin to leave everything in place.
+--select offers the same selection without printing the review first.
+--no-cleanup-hint leaves out the closing hint about --cleanup.
+Skip the selection (Esc, or Enter at the numbered prompt) or close stdin to leave everything in place.
 Unmanaged files are review candidates, not proof that a file is abandoned.
 
 By default this script:
@@ -71,6 +75,15 @@ parse_args() {
         case "$1" in
             --cleanup)
                 CLEANUP=1
+                shift
+                ;;
+            --select)
+                CLEANUP=1
+                SELECT_ONLY=1
+                shift
+                ;;
+            --no-cleanup-hint)
+                CLEANUP_HINT=0
                 shift
                 ;;
             --all)
@@ -444,15 +457,79 @@ print_home_candidates() {
     [[ "${found}" -ne 0 ]] || printf '  none\n'
 }
 
-archive_selection() {
-    local answer="" token="" index=0 path="" archive="" relative=""
-    local -a selected=()
-
-    if [[ "${REVIEW_INCOMPLETE}" -ne 0 ]]; then
-        log_warn "Cleanup unavailable because the review is incomplete"
-        return
+# gum draws on stderr and reads keys from stdin, so both must be a terminal.
+# FILE_REVIEW_PROMPT (gum or read) lets tests pick a mode without a terminal.
+cleanup_prompt_mode() {
+    if [[ -n "${FILE_REVIEW_PROMPT:-}" ]]; then
+        printf '%s\n' "${FILE_REVIEW_PROMPT}"
+    elif command -v gum >/dev/null 2>&1 && [[ -t 0 && -t 2 ]]; then
+        printf 'gum\n'
+    else
+        printf 'read\n'
     fi
-    [[ "${#candidates[@]}" -gt 0 ]] || return 0
+}
+
+# Both choosers fill the caller's selected array, or return 1 to move nothing.
+choose_with_gum() {
+    local choice="" path="" tmp_output="" known=0
+    local height="${#candidates[@]}"
+    local -a options=() picked=()
+
+    [[ "${height}" -le 15 ]] || height=15
+    [[ "${height}" -ge 3 ]] || height=3
+    for path in "${candidates[@]}"; do
+        options+=("$(display_path "${path}")"$'\t'"${path}")
+    done
+
+    log_info "Archive candidates: unmanaged does not necessarily mean unused. Use space to select, ctrl+a for all, enter to continue, or esc to skip."
+    tmp_output="$(mktemp "${TMPDIR:-/tmp}/file-review.XXXXXX")"
+    if ! gum_choose_multiselect "Select paths to archive" "${height}" \
+        --label-delimiter=$'\t' "${options[@]}" > "${tmp_output}"; then
+        rm -f "${tmp_output}"
+        printf 'Cleanup skipped; no files moved.\n'
+        return 1
+    fi
+    while IFS= read -r choice || [[ -n "${choice}" ]]; do
+        [[ -z "${choice}" ]] || picked+=("${choice}")
+    done < "${tmp_output}"
+    rm -f "${tmp_output}"
+
+    # Only paths that were offered may move.
+    if [[ "${#picked[@]}" -gt 0 ]]; then
+        for choice in "${picked[@]}"; do
+            known=0
+            for path in "${candidates[@]}"; do
+                if [[ "${path}" == "${choice}" ]]; then
+                    selected+=("${path}")
+                    known=1
+                    break
+                fi
+            done
+            if [[ "${known}" -eq 0 ]]; then
+                log_warn "Invalid selection; no files moved"
+                return 1
+            fi
+        done
+    fi
+
+    if [[ "${#selected[@]}" -eq 0 ]]; then
+        printf 'Cleanup skipped; no files moved.\n'
+        return 1
+    fi
+    printf 'Selected for archiving:\n'
+    for path in "${selected[@]}"; do
+        printf '  %s\n' "$(display_path "${path}")"
+    done
+    if ! gum confirm --default=false "Archive ${#selected[@]} path(s)?"; then
+        printf 'Cleanup skipped; no files moved.\n'
+        return 1
+    fi
+}
+
+choose_with_read() {
+    local answer="" token="" index=0 path=""
+    local -a choices=()
+
     printf '\nArchive candidates — unmanaged does not necessarily mean unused:\n'
     for path in "${candidates[@]}"; do
         index=$((index + 1))
@@ -461,21 +538,35 @@ archive_selection() {
     printf 'Archive which paths? Enter numbers separated by spaces, all, or Enter to skip: '
     if ! IFS= read -r answer || [[ -z "${answer//[[:space:]]/}" ]]; then
         printf '\nCleanup skipped; no files moved.\n'
-        return
+        return 1
     fi
     if [[ "${answer}" == all ]]; then
         selected=("${candidates[@]}")
-    else
-        local -a choices=()
-        read -r -a choices <<< "${answer}"
-        for token in "${choices[@]}"; do
-            if [[ ! "${token}" =~ ^[1-9][0-9]*$ || "${#token}" -gt 6 ]] || (( token > ${#candidates[@]} )); then
-                log_warn "Invalid selection; no files moved"
-                return
-            fi
-            selected+=("${candidates[token-1]}")
-        done
+        return 0
     fi
+    read -r -a choices <<< "${answer}"
+    for token in "${choices[@]}"; do
+        if [[ ! "${token}" =~ ^[1-9][0-9]*$ || "${#token}" -gt 6 ]] || (( token > ${#candidates[@]} )); then
+            log_warn "Invalid selection; no files moved"
+            return 1
+        fi
+        selected+=("${candidates[token-1]}")
+    done
+}
+
+archive_selection() {
+    local path="" archive="" relative=""
+    local -a selected=()
+
+    if [[ "${REVIEW_INCOMPLETE}" -ne 0 ]]; then
+        log_warn "Cleanup unavailable because the review is incomplete"
+        return
+    fi
+    [[ "${#candidates[@]}" -gt 0 ]] || return 0
+    case "$(cleanup_prompt_mode)" in
+        gum) choose_with_gum || return 0 ;;
+        *) choose_with_read || return 0 ;;
+    esac
     MANAGED_PATHS_CACHE=""
     prime_managed_paths_cache || return 1
     for path in "${selected[@]}"; do
@@ -540,6 +631,19 @@ print_installation_state() {
     fi
 }
 
+print_report() {
+    printf 'File review for %s\n' "${DEST_DIR}"
+    print_status_section
+    print_home_candidates
+    print_installation_state
+    print_candidate_section
+
+    printf '\nRecursive scans skipped by default: %s, %s, %s\n' \
+        "$(display_path "${DEST_DIR}")" \
+        "$(display_path "${DEST_DIR}/.config")" \
+        "$(display_path "${DEST_DIR}/.local")"
+}
+
 main() {
     parse_args "$@"
 
@@ -551,19 +655,15 @@ main() {
     DEST_DIR="$(cd "${DEST_DIR}" && pwd -L)" || return 1
     SOURCE_DIR="$(cd "${SOURCE_DIR}" && pwd -L)" || return 1
     prime_managed_paths_cache || return 1
-    printf 'File review for %s\n' "${DEST_DIR}"
-    print_status_section
-    print_home_candidates
-    print_installation_state
-    print_candidate_section
-
-    printf '\nRecursive scans skipped by default: %s, %s, %s\n' \
-        "$(display_path "${DEST_DIR}")" \
-        "$(display_path "${DEST_DIR}/.config")" \
-        "$(display_path "${DEST_DIR}/.local")"
+    if [[ "${SELECT_ONLY}" -eq 1 ]]; then
+        # Candidates are gathered while printing; the caller already showed them.
+        print_report > /dev/null 2>&1
+    else
+        print_report
+    fi
     if [[ "${CLEANUP}" -eq 1 ]]; then
         archive_selection
-    else
+    elif [[ "${CLEANUP_HINT}" -eq 1 ]]; then
         printf 'Bulk cleanup: run %s --cleanup to select paths to archive.\n' "${BASEDIR}/scripts/file-review.sh"
     fi
     return "${REVIEW_INCOMPLETE}"

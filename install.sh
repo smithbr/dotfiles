@@ -364,25 +364,38 @@ apply_dotfiles() {
     log_info "Linking complete"
 }
 
-review_existing_files() {
+# The archive picker needs a real terminal and a run that may change files;
+# stow's own simulate flags make the whole install a dry run.
+file_cleanup_is_interactive() {
     local index=0
-    local review_only="${dry_run}"
-    local -a review_args=(--source "${BASEDIR}")
 
-    # stow's own simulate flags make the whole install a dry run.
+    [[ "${dry_run}" -eq 0 && -t 0 && -t 1 ]] || return 1
     while [[ "${index}" -lt "${#link_args[@]}" ]]; do
         case "${link_args[index]}" in
             -n|--no|--simulate)
-                review_only=1
+                return 1
                 ;;
         esac
         index=$((index + 1))
     done
-    if [[ "${review_only}" -eq 0 && -t 0 && -t 1 ]]; then
-        review_args+=(--cleanup)
-    fi
+}
+
+# Report only: this runs boxed, which holds output until it exits, so it must
+# never prompt. A failed review clears offer_cleanup so no picker follows.
+review_existing_files() {
+    local -a review_args=(--source "${BASEDIR}")
+
+    [[ "${offer_cleanup:-0}" -eq 1 ]] && review_args+=(--no-cleanup-hint)
     if ! bash "${BASEDIR}/scripts/file-review.sh" "${review_args[@]}"; then
+        offer_cleanup=0
         log_warn "File review incomplete; inspect the errors above before cleaning up"
+    fi
+}
+
+# Unboxed so the picker can draw on the terminal.
+select_files_to_archive() {
+    if ! bash "${BASEDIR}/scripts/file-review.sh" --source "${BASEDIR}" --select; then
+        log_warn "File cleanup did not finish; inspect the errors above"
     fi
 }
 
@@ -500,7 +513,12 @@ begin_step "Local config" "Create machine-specific *.local files from their exam
 run_boxed copy_and_list_local_example_files
 
 begin_step "Existing files" "List leftover dotfiles that the repo no longer manages"
-review_existing_files
+offer_cleanup=0
+file_cleanup_is_interactive && offer_cleanup=1
+run_boxed review_existing_files
+if [[ "${offer_cleanup}" -eq 1 ]]; then
+    select_files_to_archive
+fi
 
 if [[ -n "${zsh_path:-}" && "${dry_run}" -eq 0 ]]; then
     _next_step "Reload your shell: exec -l \$SHELL (or open a new terminal)"

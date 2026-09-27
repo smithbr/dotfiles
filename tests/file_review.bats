@@ -180,8 +180,6 @@ teardown() {
         source "$PROJECT_ROOT/scripts/common.sh"
         eval "$(sed -n '\''/^review_existing_files() {$/,/^}$/p'\'' "$PROJECT_ROOT/install.sh")"
         BASEDIR="$PROJECT_ROOT"
-        dry_run=0
-        link_args=()
         review_existing_files </dev/null
     '
     assert_success
@@ -200,12 +198,13 @@ teardown() {
         source "$PROJECT_ROOT/scripts/common.sh"
         eval "$(sed -n '\''/^review_existing_files() {$/,/^}$/p'\'' "$PROJECT_ROOT/install.sh")"
         BASEDIR="$BROKEN_REPO"
-        dry_run=0
-        link_args=()
+        offer_cleanup=1
         review_existing_files </dev/null
+        echo "offer_cleanup=${offer_cleanup}"
     '
     assert_success
     assert_output --partial "File review incomplete"
+    assert_output --partial "offer_cleanup=0"
     refute_output --partial "Potential leftovers: none"
 }
 
@@ -234,4 +233,106 @@ teardown() {
     run bash -c 'printf "all\n" | "$1/scripts/file-review.sh" --source "$2" --cleanup' _ "${PROJECT_ROOT}" "${HOME}/.sources/dotfiles"
     assert_success
     [[ -d "${HOME}/.sources/dotfiles" ]]
+}
+
+# A gum stand-in: choose prints $GUM_PICK, confirm exits with $GUM_CONFIRM.
+write_gum_mock() {
+    mkdir -p "${TEST_TMPDIR}/bin"
+    cat > "${TEST_TMPDIR}/bin/gum" <<'MOCK'
+#!/usr/bin/env bash
+case "${1:-}" in
+    choose)
+        printf '%s\n' "$@" > "${TEST_TMPDIR}/gum-choose-args"
+        [[ -z "${GUM_PICK:-}" ]] || printf '%s\n' "${GUM_PICK}"
+        exit "${GUM_CHOOSE_STATUS:-0}"
+        ;;
+    confirm)
+        printf '%s\n' "$@" > "${TEST_TMPDIR}/gum-confirm-args"
+        exit "${GUM_CONFIRM:-0}"
+        ;;
+    log)
+        shift 3
+        printf '%s\n' "$*"
+        ;;
+esac
+MOCK
+    chmod +x "${TEST_TMPDIR}/bin/gum"
+}
+
+@test "select mode offers the archive picker without printing the review" {
+    printf 'keep\n' > "${HOME}/.old-file"
+    run bash -c 'printf "all\n" | "$1/scripts/file-review.sh" --source "$2" --select' _ "${PROJECT_ROOT}" "${TEST_SOURCE_DIR}"
+    assert_success
+    refute_output --partial "File review for"
+    refute_output --partial "Bulk cleanup"
+    assert_output --partial "Archive which paths?"
+    local archives=("${HOME}/.local/state/dotfiles/cleanup/"*)
+    [[ -f "${archives[0]}/.old-file" ]]
+    [[ ! -e "${HOME}/.old-file" ]]
+}
+
+@test "no-cleanup-hint drops the closing cleanup hint only" {
+    run "${PROJECT_ROOT}/scripts/file-review.sh" --source "${TEST_SOURCE_DIR}" --no-cleanup-hint
+    assert_success
+    assert_output --partial "File review for"
+    refute_output --partial "Bulk cleanup"
+}
+
+@test "gum picker archives the chosen paths after confirmation" {
+    write_gum_mock
+    printf 'keep\n' > "${HOME}/.old-file"
+    printf 'keep\n' > "${HOME}/.other-file"
+    run env PATH="${TEST_TMPDIR}/bin:${PATH}" TEST_TMPDIR="${TEST_TMPDIR}" \
+        FILE_REVIEW_PROMPT=gum GUM_PICK="${HOME}/.old-file" \
+        "${PROJECT_ROOT}/scripts/file-review.sh" --source "${TEST_SOURCE_DIR}" --select
+    assert_success
+    assert_output --partial "Selected for archiving:"
+    assert_output --partial "archived ~/.old-file"
+    grep -Fqx -- "--no-limit" "${TEST_TMPDIR}/gum-choose-args"
+    grep -Fqx -- "~/.other-file"$'\t'"${HOME}/.other-file" "${TEST_TMPDIR}/gum-choose-args"
+    grep -Fqx -- "--default=false" "${TEST_TMPDIR}/gum-confirm-args"
+    [[ ! -e "${HOME}/.old-file" && -f "${HOME}/.other-file" ]]
+}
+
+@test "gum picker moves nothing when skipped, declined, or given an unknown path" {
+    write_gum_mock
+    printf 'keep\n' > "${HOME}/.old-file"
+    local -a base=(env PATH="${TEST_TMPDIR}/bin:${PATH}" TEST_TMPDIR="${TEST_TMPDIR}" FILE_REVIEW_PROMPT=gum)
+    local -a review=("${PROJECT_ROOT}/scripts/file-review.sh" --source "${TEST_SOURCE_DIR}" --select)
+
+    run "${base[@]}" GUM_CHOOSE_STATUS=130 GUM_PICK="${HOME}/.old-file" "${review[@]}"
+    assert_success
+    assert_output --partial "Cleanup skipped; no files moved."
+
+    run "${base[@]}" GUM_PICK="${HOME}/.old-file" GUM_CONFIRM=1 "${review[@]}"
+    assert_success
+    assert_output --partial "Cleanup skipped; no files moved."
+
+    run "${base[@]}" GUM_PICK="${HOME}/.config" "${review[@]}"
+    assert_success
+    assert_output --partial "Invalid selection; no files moved"
+
+    [[ -f "${HOME}/.old-file" ]]
+    [[ ! -e "${HOME}/.local/state/dotfiles/cleanup" ]]
+}
+
+@test "interactive installer boxes the report, then archives through a separate picker" {
+    printf 'keep\n' > "${HOME}/.old-file"
+    run bash -c '
+        source "$PROJECT_ROOT/scripts/common.sh"
+        eval "$(sed -n '\''/^review_existing_files() {$/,/^}$/p;/^select_files_to_archive() {$/,/^}$/p'\'' "$PROJECT_ROOT/install.sh")"
+        BASEDIR="$PROJECT_ROOT"
+        offer_cleanup=1
+        echo "--- report"
+        review_existing_files </dev/null
+        echo "--- select"
+        printf "all\n" | FILE_REVIEW_PROMPT=read select_files_to_archive
+    '
+    assert_success
+    local report="${output%%--- select*}"
+    local select="${output#*--- select}"
+    [[ "${report}" == *"File review for"* && "${report}" == *"~/.old-file"* ]]
+    [[ "${report}" != *"Bulk cleanup"* && "${report}" != *"Archive which paths?"* ]]
+    [[ "${select}" != *"File review for"* && "${select}" == *"archived ~/.old-file"* ]]
+    [[ ! -e "${HOME}/.old-file" ]]
 }
