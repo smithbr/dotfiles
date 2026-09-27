@@ -70,13 +70,17 @@ stat_mode() {
     assert_success
     local mac="${DEST}/Library/Application Support/Code/User/settings.json"
     [ -L "${mac}" ]
-    [ "$(cat "${mac}")" = "$(cat "${PROJECT_ROOT}/editors/vscode/settings.json")" ]
+    [ "$(cat "${mac}")" = "$(cat "${PROJECT_ROOT}/editors/code/settings.json")" ]
+    local f
+    for f in settings.json keybindings.json; do
+        [ "$(cat "${DEST}/Library/Application Support/Cursor/User/${f}")" = "$(cat "${PROJECT_ROOT}/editors/code/${f}")" ]
+    done
     [ ! -e "${DEST}/.config/Code" ]
 
     DEST="${TEST_TMPDIR}/linux-home"
     DOTFILES_OS=linux run_link
     assert_success
-    [ "$(cat "${DEST}/.config/Code/User/settings.json")" = "$(cat "${PROJECT_ROOT}/editors/vscode/settings.json")" ]
+    [ "$(cat "${DEST}/.config/Code/User/settings.json")" = "$(cat "${PROJECT_ROOT}/editors/code/settings.json")" ]
     [ ! -e "${DEST}/Library" ]
     [ ! -e "${DEST}/.config/docker" ]
 }
