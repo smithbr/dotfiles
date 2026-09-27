@@ -2,7 +2,10 @@
 .DS_Store
 *.log
 
-# AI tool secrets — keep out of git entirely (1Password/env only)
+# AI tool secrets
 stow/*/.claude.json
 stow/*/.codex/auth.json
 stow/*/.codex/config.toml
+
+# Machine-local overrides
+stow/**/*?.local
