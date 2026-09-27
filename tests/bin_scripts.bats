@@ -700,9 +700,8 @@ MOCK
         "${PROJECT_ROOT}/stow/common/.local/bin/ph-update"
     assert_success
     assert_output --partial "sudo apt-get update"
-    assert_output --partial "sudo PATH=${BIN_SANDBOX}:/usr/bin:/bin"
-    assert_output --partial "PH_UPDATE_SKIP_OS_UPDATE=1"
-    assert_output --partial "ph-update"
+    refute_output --partial "PATH="
+    assert_output --partial "sudo PH_UPDATE_SKIP_OS_UPDATE=1 PH_UPDATE_PADD_BIN=${BIN_SANDBOX}/ph-padd ${PROJECT_ROOT}/stow/common/.local/bin/ph-update"
 }
 
 @test "ph-update preserves -r through self-elevating sudo" {
@@ -795,6 +794,67 @@ MOCK
     [[ "${output}" != *"sudo apt-get update"* ]]
 }
 
+@test "ph-update as root searches only system directories, not the caller's PATH" {
+    local probe_script="${TEST_TMPDIR}/ph-update"
+
+    [[ ! -e /usr/local/bin/pihole && ! -e /usr/bin/pihole ]] || skip "pihole is installed on this host"
+
+    # Take the root branch without being root; stay out of os-update and sudo.
+    sed -e 's/^if (( EUID == 0 )); then$/if true; then/' \
+        -e 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
+        "${PROJECT_ROOT}/stow/common/.local/bin/ph-update" > "${probe_script}"
+    chmod +x "${probe_script}"
+
+    local cmd
+    for cmd in pihole ph-padd shutdown gum; do
+        printf '#!/usr/bin/env bash\ntouch "%s/user-path-used"\n' "${TEST_TMPDIR}" > "${BIN_SANDBOX}/${cmd}"
+        chmod +x "${BIN_SANDBOX}/${cmd}"
+    done
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" PH_UPDATE_SKIP_OS_UPDATE=1 \
+        "${probe_script}"
+    assert_failure
+    assert_output --partial "pihole command is unavailable"
+    [[ ! -e "${TEST_TMPDIR}/user-path-used" ]]
+}
+
+@test "ph-update runs ph-padd as the invoking user when elevated" {
+    local probe_script="${TEST_TMPDIR}/ph-update"
+
+    # Elevated branches without being root: skip the re-exec and treat
+    # SUDO_USER as set by sudo.
+    sed -e 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
+        -e 's/if \[\[ "${EUID}" -eq 0 \&\& -n "${SUDO_USER:-}" \]\]; then/if [[ -n "${SUDO_USER:-}" ]]; then/' \
+        "${PROJECT_ROOT}/stow/common/.local/bin/ph-update" > "${probe_script}"
+    chmod +x "${probe_script}"
+    ln -sf "${PROJECT_ROOT}/stow/common/.local/bin/os-update" "${TEST_TMPDIR}/os-update"
+
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+printf 'sudo %s\n' "$*"
+MOCK
+
+    cat > "${BIN_SANDBOX}/pihole" <<'MOCK'
+#!/usr/bin/env bash
+printf 'pihole %s\n' "$*"
+MOCK
+
+    cat > "${TEST_TMPDIR}/padd-elsewhere" <<'MOCK'
+#!/usr/bin/env bash
+printf 'padd ran directly\n'
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/pihole" "${TEST_TMPDIR}/padd-elsewhere"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" PH_UPDATE_SKIP_OS_UPDATE=1 \
+        SUDO_USER=pi PH_UPDATE_PADD_BIN="${TEST_TMPDIR}/padd-elsewhere" \
+        "${probe_script}"
+    assert_success
+    assert_output --partial "sudo -u pi ${TEST_TMPDIR}/padd-elsewhere -u"
+    refute_output --partial "padd ran directly"
+    assert_output --partial "PADD update completed"
+}
+
 @test "ph-test displays help" {
     run "${PROJECT_ROOT}/stow/common/.local/bin/ph-test" --help
     assert_success
@@ -813,8 +873,8 @@ MOCK
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
         "${PROJECT_ROOT}/stow/common/.local/bin/ph-test" 192.0.2.53
     assert_success
-    assert_output --partial "sudo PATH=${BIN_SANDBOX}:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
-    assert_output --partial "ph-test 192.0.2.53"
+    refute_output --partial "PATH="
+    assert_output --partial "sudo ${PROJECT_ROOT}/stow/common/.local/bin/ph-test 192.0.2.53"
 }
 
 @test "ph-test finds unbound commands through supplemental sbin paths" {
@@ -825,15 +885,12 @@ MOCK
 #!/usr/bin/env bash
 set -euo pipefail
 
-path_assignment="${1}"
-script_path="${2}"
-shift 2
-
-export PATH="${path_assignment#PATH=}"
+script_path="${1}"
+shift
 
 tmp_script="$(mktemp)"
 awk '
-    /^# Self-elevate if not root \(preserve PATH for ~\/\.local\/bin commands\)$/ { skip=1; next }
+    /^# Self-elevate if not root/ { skip=1; next }
     skip && /^DNS_SERVER=/ { skip=0 }
     !skip {
         if ($0 == "main \"$@\"") {
@@ -904,15 +961,12 @@ CONF
 #!/usr/bin/env bash
 set -euo pipefail
 
-path_assignment="${1}"
-script_path="${2}"
-shift 2
-
-export PATH="${path_assignment#PATH=}"
+script_path="${1}"
+shift
 
 tmp_script="$(mktemp)"
 awk '
-    /^# Self-elevate if not root \(preserve PATH for ~\/\.local\/bin commands\)$/ { skip=1; next }
+    /^# Self-elevate if not root/ { skip=1; next }
     skip && /^DNS_SERVER=/ { skip=0 }
     !skip {
         if ($0 == "main \"$@\"") {
@@ -956,15 +1010,12 @@ CONF
 #!/usr/bin/env bash
 set -euo pipefail
 
-path_assignment="${1}"
-script_path="${2}"
-shift 2
-
-export PATH="${path_assignment#PATH=}"
+script_path="${1}"
+shift
 
 tmp_script="$(mktemp)"
 awk '
-    /^# Self-elevate if not root \(preserve PATH for ~\/\.local\/bin commands\)$/ { skip=1; next }
+    /^# Self-elevate if not root/ { skip=1; next }
     skip && /^DNS_SERVER=/ { skip=0 }
     /^main\(\) \{$/ {
         print "main() {"
@@ -1061,16 +1112,13 @@ CONF
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "${1:-}" == PATH=* ]]; then
-    path_assignment="${1}"
-    script_path="${2}"
-    shift 2
-
-    export PATH="${path_assignment#PATH=}"
+if [[ "${1:-}" == */ph-test ]]; then
+    script_path="${1}"
+    shift
 
     tmp_script="$(mktemp)"
     awk '
-        /^# Self-elevate if not root \(preserve PATH for ~\/\.local\/bin commands\)$/ { skip=1; next }
+        /^# Self-elevate if not root/ { skip=1; next }
         skip && /^DNS_SERVER=/ { skip=0 }
         !skip {
             print
@@ -1246,16 +1294,13 @@ CONF
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "${1:-}" == PATH=* ]]; then
-    path_assignment="${1}"
-    script_path="${2}"
-    shift 2
-
-    export PATH="${path_assignment#PATH=}"
+if [[ "${1:-}" == */ph-test ]]; then
+    script_path="${1}"
+    shift
 
     tmp_script="$(mktemp)"
     awk '
-        /^# Self-elevate if not root \(preserve PATH for ~\/\.local\/bin commands\)$/ { skip=1; next }
+        /^# Self-elevate if not root/ { skip=1; next }
         skip && /^DNS_SERVER=/ { skip=0 }
         !skip {
             print
@@ -1432,16 +1477,13 @@ CONF
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "${1:-}" == PATH=* ]]; then
-    path_assignment="${1}"
-    script_path="${2}"
-    shift 2
-
-    export PATH="${path_assignment#PATH=}"
+if [[ "${1:-}" == */ph-test ]]; then
+    script_path="${1}"
+    shift
 
     tmp_script="$(mktemp)"
     awk '
-        /^# Self-elevate if not root \(preserve PATH for ~\/\.local\/bin commands\)$/ { skip=1; next }
+        /^# Self-elevate if not root/ { skip=1; next }
         skip && /^DNS_SERVER=/ { skip=0 }
         !skip {
             print
@@ -1602,6 +1644,31 @@ MOCK
     assert_output --partial "Summary"
     assert_output --partial "total.num.queries: 42"
     assert_output --partial "Passed:"
+}
+
+@test "ph-test as root searches only system directories, not the caller's PATH" {
+    local probe_script="${TEST_TMPDIR}/ph-test"
+    local dir
+
+    for dir in /usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin; do
+        [[ ! -e "${dir}/unbound-control" ]] || skip "unbound is installed on this host"
+    done
+
+    # Take the root branch without being root.
+    sed 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
+        "${PROJECT_ROOT}/stow/common/.local/bin/ph-test" > "${probe_script}"
+    chmod +x "${probe_script}"
+
+    local cmd
+    for cmd in dig unbound-control unbound-checkconf ss gum sudo; do
+        printf '#!/usr/bin/env bash\ntouch "%s/user-path-used"\n' "${TEST_TMPDIR}" > "${BIN_SANDBOX}/${cmd}"
+        chmod +x "${BIN_SANDBOX}/${cmd}"
+    done
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" "${probe_script}"
+    assert_failure
+    assert_output --partial "Missing dependency: unbound-control"
+    [[ ! -e "${TEST_TMPDIR}/user-path-used" ]]
 }
 
 @test "ph-backup displays help" {

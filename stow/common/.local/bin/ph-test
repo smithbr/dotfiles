@@ -62,9 +62,12 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "-help" || "${1:-}" == "--help" || "${1:-}
     exit 0
 fi
 
-# Self-elevate if not root (preserve PATH for ~/.local/bin commands)
+# Self-elevate if not root. Root searches only system directories, never the
+# caller's user-writable ones such as ~/.local/bin.
 if [[ "${EUID}" -ne 0 ]]; then
-    exec sudo PATH="${PATH}" "${0}" "${@+"${@}"}"
+    exec sudo "${0}" "${@+"${@}"}"
+else
+    export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 fi
 
 DNS_SERVER="${1:-127.0.0.1}"
