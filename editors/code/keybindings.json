@@ -28,6 +28,10 @@
         "when": "editorFocus && findWidgetVisible"
     },
     {
+        "key": "cmd+i",
+        "command": "composerMode.agent"
+    },
+    {
         "key": "cmd+y",
         "command": "redo",
         "when": "editorTextFocus && !editorReadonly"
@@ -39,10 +43,7 @@
     },
     {
         "key": "ctrl+/",
-        "command": "editor.action.toggleWordWrap"
-    },
-    {
-        "key": "alt+z",
-        "command": "-editor.action.toggleWordWrap"
+        "command": "editor.action.commentLine",
+        "when": "editorTextFocus && !editorReadonly"
     }
 ]
