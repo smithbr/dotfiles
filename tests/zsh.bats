@@ -124,3 +124,43 @@ run_nvm_block() {
 
     teardown_tmpdir
 }
+
+@test "na appends an alias to the repo aliases file and defines it" {
+    command -v zsh >/dev/null || skip "zsh not installed"
+    setup_tmpdir
+    local aliases="${TEST_TMPDIR}/stow/common/.config/shell/aliases"
+    mkdir -p "$(dirname "${aliases}")"
+    echo 'alias h="history"' > "${aliases}"
+
+    run env DOTFILES_DIR="${TEST_TMPDIR}" zsh -fc '
+        source "'"${PROJECT_ROOT}"'/stow/common/.config/shell/functions"
+        na drm2 "docker rm \$(docker ps -q) \"x\"" || exit 1
+        alias drm2
+    '
+
+    assert_success
+    [[ "${output}" == *"drm2="* ]]
+    run tail -n1 "${aliases}"
+    assert_output 'alias drm2="docker rm \$(docker ps -q) \"x\""'
+    teardown_tmpdir
+}
+
+@test "na refuses duplicates and bad usage without writing" {
+    command -v zsh >/dev/null || skip "zsh not installed"
+    setup_tmpdir
+    local aliases="${TEST_TMPDIR}/stow/common/.config/shell/aliases"
+    mkdir -p "$(dirname "${aliases}")"
+    echo 'alias h="history"' > "${aliases}"
+    local fns="${PROJECT_ROOT}/stow/common/.config/shell/functions"
+
+    run env DOTFILES_DIR="${TEST_TMPDIR}" zsh -fc "source '${fns}'; na h ls"
+    assert_failure 1
+    run env DOTFILES_DIR="${TEST_TMPDIR}" zsh -fc "source '${fns}'; na onlyname"
+    assert_failure 2
+    run env DOTFILES_DIR="${TEST_TMPDIR}" zsh -fc "source '${fns}'; na 'bad name' ls"
+    assert_failure 2
+
+    run cat "${aliases}"
+    assert_output 'alias h="history"'
+    teardown_tmpdir
+}
