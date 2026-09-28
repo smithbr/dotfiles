@@ -1,53 +1,9 @@
 # Machine-specific git config overrides
 # Copy to ~/.config/git/config.local
+#
+# Platform settings come from the persona's layers and need no copying:
+# config.desktop (Mac editor, keychain, 1Password signing) and config.server
+# (Linux delta, vimdiff, keys on disk). Anything set here overrides them.
 
 # [user]
-#     name = Your Name
-#     email = you@example.com
-#     username = your-github-username
 #     signingkey = ssh-ed25519 AAAA ...
-
-############
-# --- macOS (1Password SSH agent) ---
-############
-# No sshCommand needed — 1Password agent handles key selection via SSH_AUTH_SOCK.
-# [credential]
-#     helper = osxkeychain
-# [core]
-#     editor = code
-# [diff]
-#     tool = code
-# [merge]
-#     tool = code
-# Signing uses the 1Password-held public key set as signingkey in the [user]
-# block above — do NOT redefine signingkey here to an on-disk key path, or
-# op-ssh-sign will be asked for a private key 1Password doesn't hold.
-# [commit]
-#     gpgsign = true
-# [gpg]
-#     format = ssh
-# [gpg "ssh"]
-#     program = /Applications/1Password.app/Contents/MacOS/op-ssh-sign
-
-############
-# --- Linux (keys on disk) ---
-############
-# [credential]
-#     helper = store
-# [core]
-#     editor = nano
-#     pager = delta
-#     sshCommand = ssh -i ~/.ssh/id_ed25519 -o AddKeysToAgent=yes
-# [interactive]
-#     diffFilter = delta --color-only
-# [delta]
-#     navigate = true
-#     true-color = always
-#     line-numbers = true
-#     side-by-side = true
-# [merge]
-#     conflictStyle = zdiff3
-#     tool = vimdiff
-# [diff]
-#     colorMoved = default
-#     tool = vimdiff

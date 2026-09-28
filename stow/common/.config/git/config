@@ -1,7 +1,11 @@
 # Shared git defaults (machine-specific overrides live in ~/.config/git/config.local)
 [core]
     ignorecase = false
+# Layer settings, linked only where the persona has the layer (missing
+# includes are skipped). config.local comes last so it can override them.
 [include]
+    path = ~/.config/git/config.desktop
+    path = ~/.config/git/config.server
     path = ~/.config/git/config.local
 [init]
     defaultBranch = main

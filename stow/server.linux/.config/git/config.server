@@ -1,0 +1,22 @@
+# Linux server git settings: keys on disk, delta for diffs, vimdiff for merges.
+# Included by ~/.config/git/config.
+
+[credential]
+    helper = store
+[core]
+    editor = nano
+    pager = delta
+    sshCommand = ssh -i ~/.ssh/id_ed25519 -o AddKeysToAgent=yes
+[interactive]
+    diffFilter = delta --color-only
+[delta]
+    navigate = true
+    true-color = always
+    line-numbers = true
+    side-by-side = true
+[merge]
+    conflictStyle = zdiff3
+    tool = vimdiff
+[diff]
+    colorMoved = default
+    tool = vimdiff
