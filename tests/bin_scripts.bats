@@ -3536,6 +3536,111 @@ fake_df_repo() {
     refute_output --partial "--cleanup"
 }
 
+# Sets up a fake remote machine for df-deploy: an origin repo with a link.sh and a
+# ph-agent-setup that log their calls, the remote home's clone of it, and a stub ssh that
+# records its arguments and runs the remote command locally as that home.
+df_deploy_sandbox() {
+    local g=(git -c user.name=t -c user.email=t@example.com -c init.defaultBranch=main)
+    DF_ORIGIN="${TEST_TMPDIR}/origin"
+    DF_REMOTE_HOME="${TEST_TMPDIR}/remote-home"
+    export PH_AGENT_BIN_DIR="${TEST_TMPDIR}/rootbin"
+    mkdir -p "${DF_ORIGIN}/scripts" "${DF_ORIGIN}/stow/server.linux/.local/bin" "${DF_REMOTE_HOME}" "${PH_AGENT_BIN_DIR}"
+    printf '#!/usr/bin/env bash\necho "link.sh ran" >> "%s/calls"\n' "${TEST_TMPDIR}" > "${DF_ORIGIN}/scripts/link.sh"
+    printf '#!/usr/bin/env bash\n# v1\necho "ph-agent-setup $*" >> "%s/calls"\n' "${TEST_TMPDIR}" \
+        > "${DF_ORIGIN}/stow/server.linux/.local/bin/ph-agent-setup"
+    chmod +x "${DF_ORIGIN}/scripts/link.sh" "${DF_ORIGIN}/stow/server.linux/.local/bin/ph-agent-setup"
+    "${g[@]}" init --quiet "${DF_ORIGIN}"
+    "${g[@]}" -C "${DF_ORIGIN}" add . && "${g[@]}" -C "${DF_ORIGIN}" commit --quiet -m one
+    "${g[@]}" clone --quiet "${DF_ORIGIN}" "${DF_REMOTE_HOME}/.dotfiles"
+    cat > "${BIN_SANDBOX}/ssh" <<MOCK
+#!/usr/bin/env bash
+printf 'ssh %s %s\n' "\$1" "\$2" >> "${TEST_TMPDIR}/calls"
+HOME="${DF_REMOTE_HOME}" bash -c "\$3"
+MOCK
+    chmod +x "${BIN_SANDBOX}/ssh"
+    # Outside any git checkout, so the unpushed-commit check stays quiet.
+    mkdir -p "${TEST_TMPDIR}/tools"
+    cp "${PROJECT_ROOT}/stow/tools/.local/bin/df-deploy" "${TEST_TMPDIR}/tools/"
+    DF_DEPLOY="${TEST_TMPDIR}/tools/df-deploy"
+}
+
+run_df_deploy() {
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" DF_DEPLOY_HOSTS="${DF_DEPLOY_HOSTS:-}" "${DF_DEPLOY}" "$@"
+}
+
+@test "df-deploy pulls, relinks, and reinstalls ph-agent-setup only when the repo copy changed" {
+    df_deploy_sandbox
+    local g=(git -c user.name=t -c user.email=t@example.com)
+    cp "${DF_REMOTE_HOME}/.dotfiles/stow/server.linux/.local/bin/ph-agent-setup" "${PH_AGENT_BIN_DIR}/"
+    sed -i.bak 's/# v1/# v2/' "${DF_ORIGIN}/stow/server.linux/.local/bin/ph-agent-setup"
+    "${g[@]}" -C "${DF_ORIGIN}" commit --quiet -am two
+
+    run_df_deploy box
+    assert_success
+    assert_output --partial "ph-agent-setup changed; reinstalling"
+    run cat "${TEST_TMPDIR}/calls"
+    assert_output "$(printf 'ssh -t box\nlink.sh ran\nph-agent-setup user')"
+    run git -C "${DF_REMOTE_HOME}/.dotfiles" log -1 --format=%s
+    assert_output "two"
+
+    # The installed copy now matches (the stub doesn't install it, so do it here).
+    cp "${DF_REMOTE_HOME}/.dotfiles/stow/server.linux/.local/bin/ph-agent-setup" "${PH_AGENT_BIN_DIR}/"
+    rm "${TEST_TMPDIR}/calls"
+    run_df_deploy box
+    assert_success
+    assert_output --partial "ph-agent-setup is up to date"
+    run grep -c "ph-agent-setup user" "${TEST_TMPDIR}/calls"
+    assert_output "0"
+}
+
+@test "df-deploy skips ph-agent-setup on a machine without it and updates every named host" {
+    df_deploy_sandbox
+    DF_DEPLOY_HOSTS="one two" run_df_deploy
+    assert_success
+    refute_output --partial "ph-agent-setup"
+    run grep -c "^ssh -t " "${TEST_TMPDIR}/calls"
+    assert_output "2"
+    run grep -c "ph-agent-setup user" "${TEST_TMPDIR}/calls"
+    assert_output "0"
+}
+
+@test "df-deploy stops a host whose pull is not a fast-forward, and says which failed" {
+    df_deploy_sandbox
+    local g=(git -c user.name=t -c user.email=t@example.com)
+    printf 'local\n' > "${DF_REMOTE_HOME}/.dotfiles/local-change"
+    "${g[@]}" -C "${DF_REMOTE_HOME}/.dotfiles" add . && "${g[@]}" -C "${DF_REMOTE_HOME}/.dotfiles" commit --quiet -m diverge
+    printf 'origin\n' > "${DF_ORIGIN}/origin-change"
+    "${g[@]}" -C "${DF_ORIGIN}" add . && "${g[@]}" -C "${DF_ORIGIN}" commit --quiet -m other
+
+    run_df_deploy box
+    assert_failure
+    assert_output --partial "df-deploy: box failed"
+    run grep -c "link.sh ran" "${TEST_TMPDIR}/calls"
+    assert_output "0"
+}
+
+@test "df-deploy needs a host, prints commands on a dry run, and warns about unpushed commits" {
+    df_deploy_sandbox
+    run_df_deploy
+    assert_failure
+    assert_output --partial "name a host, or set DF_DEPLOY_HOSTS"
+
+    run_df_deploy --dry-run box
+    assert_success
+    assert_output --partial "ssh -t box bash -c "
+    [ ! -e "${TEST_TMPDIR}/calls" ]
+
+    # A checkout one commit ahead of its upstream.
+    local g=(git -c user.name=t -c user.email=t@example.com) mac="${TEST_TMPDIR}/mac"
+    "${g[@]}" clone --quiet "${DF_ORIGIN}" "${mac}"
+    "${g[@]}" -C "${mac}" commit --quiet --allow-empty -m unpushed
+    mkdir -p "${mac}/stow/tools/.local/bin"
+    cp "${PROJECT_ROOT}/stow/tools/.local/bin/df-deploy" "${mac}/stow/tools/.local/bin/"
+    DF_DEPLOY="${mac}/stow/tools/.local/bin/df-deploy" run_df_deploy box
+    assert_success
+    assert_output --partial "1 commit(s) here are not pushed"
+}
+
 @test "df- wrappers fail clearly outside a dotfiles repo" {
     mkdir -p "${TEST_TMPDIR}/loose"
     cp "${PROJECT_ROOT}/stow/tools/.local/bin/df-link" "${TEST_TMPDIR}/loose/"
