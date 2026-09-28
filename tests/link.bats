@@ -677,6 +677,39 @@ persona_state() {
     [ ! -e "${DEST}/.local/bin" ]
 }
 
+# Prints a git setting as git resolves it with DEST as the home directory.
+dest_git_config() {
+    HOME="${DEST}" XDG_CONFIG_HOME="${DEST}/.config" GIT_CONFIG_NOSYSTEM=1 \
+        git config --global --get "$1"
+}
+
+@test "git and ssh pick up the settings of the persona's layers" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    run_link --persona work
+    assert_success
+    [[ "$(dest_git_config core.editor)" == code ]]
+    [[ "$(dest_git_config gpg.format)" == ssh ]]
+    [ -L "${DEST}/.ssh/config.d/1password" ]
+
+    # config.local overrides a layer setting.
+    printf '[core]\n    editor = vim\n' > "${DEST}/.config/git/config.local"
+    [[ "$(dest_git_config core.editor)" == vim ]]
+
+    DEST="${TEST_TMPDIR}/pi-home"
+    DOTFILES_OS=linux run_link --persona server
+    assert_success
+    [[ "$(dest_git_config core.pager)" == delta ]]
+    [[ "$(dest_git_config merge.tool)" == vimdiff ]]
+    [ ! -e "${DEST}/.ssh/config.d" ]
+
+    DEST="${TEST_TMPDIR}/sandbox-home"
+    DOTFILES_OS=linux run_link --persona sandbox
+    assert_success
+    [[ "$(dest_git_config user.name)" == smithbr ]]
+    run dest_git_config core.pager
+    assert_failure
+}
+
 # Links a run of the single-layer layout left: every tool under stow/common.
 plant_single_layer_links() {
     local name
