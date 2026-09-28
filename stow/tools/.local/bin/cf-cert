@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# Issue a Let's Encrypt certificate through Cloudflare DNS-01 with acme.sh and
+# optionally install it where a service reads it.
+set -euo pipefail
+
+DOMAIN=""
+KEY_FILE=""
+FULLCHAIN_FILE=""
+PEM_FILE=""
+RELOAD_CMD=""
+PIHOLE=false
+
+usage() {
+    cat <<'EOF'
+Usage: cf-cert [options] DOMAIN
+
+Issue a Let's Encrypt certificate for DOMAIN through Cloudflare DNS-01 with
+acme.sh (EC-256), and optionally install it. acme.sh renews it from cron and
+repeats the install each time. Installs acme.sh if it is missing and asks once
+for a Cloudflare API token (Zone > DNS > Edit), unless CF_Token is set.
+Safe to rerun.
+
+Options:
+  --key-file PATH        Install the private key here.
+  --fullchain-file PATH  Install the full chain here.
+  --pem-file PATH        Also write key and full chain combined here (mode 600).
+                         Key and chain default to PATH's .key and .fullchain.
+  --reload CMD           Run CMD after each install, e.g. 'systemctl reload nginx'.
+  --pihole               Pi-hole v6: install to /etc/pihole/DOMAIN.pem, point
+                         pihole-FTL's web server at it, restart FTL on renewal.
+  -h, --help             Show this help.
+
+acme.sh lives in ~/.acme.sh of the running user (root's under sudo); set
+ACME_HOME to use another. Writing root-owned paths needs sudo.
+
+Examples:
+  sudo cf-cert --pihole pihole.bsm.sh
+  sudo cf-cert --fullchain-file /etc/nginx/tls/fullchain.pem \
+      --key-file /etc/nginx/tls/key.pem --reload 'systemctl reload nginx' host.bsm.sh
+EOF
+}
+
+die() { echo "cf-cert: $*" >&2; exit 1; }
+
+while (( $# )); do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --key-file|--fullchain-file|--pem-file|--reload)
+            [[ $# -ge 2 && -n "$2" ]] || { echo "cf-cert: $1 needs a value" >&2; exit 2; }
+            case "$1" in
+                --key-file) KEY_FILE="$2" ;;
+                --fullchain-file) FULLCHAIN_FILE="$2" ;;
+                --pem-file) PEM_FILE="$2" ;;
+                --reload) RELOAD_CMD="$2" ;;
+            esac
+            shift 2 ;;
+        --pihole) PIHOLE=true; shift ;;
+        -*) usage >&2; exit 2 ;;
+        *)
+            [[ -z "${DOMAIN}" ]] || { usage >&2; exit 2; }
+            DOMAIN="$1"; shift ;;
+    esac
+done
+[[ -n "${DOMAIN}" ]] || { usage >&2; exit 2; }
+
+if [[ "${PIHOLE}" == true ]]; then
+    (( EUID == 0 )) || die "--pihole needs root; run with sudo."
+    command -v pihole-FTL >/dev/null 2>&1 || die "pihole-FTL not found."
+    PEM_FILE="${PEM_FILE:-/etc/pihole/${DOMAIN}.pem}"
+fi
+
+if [[ -n "${PEM_FILE}" ]]; then
+    KEY_FILE="${KEY_FILE:-${PEM_FILE%.pem}.key}"
+    FULLCHAIN_FILE="${FULLCHAIN_FILE:-${PEM_FILE%.pem}.fullchain}"
+fi
+
+if [[ -z "${ACME_HOME:-}" ]]; then
+    if (( EUID == 0 )); then
+        ACME_HOME="$(cd ~root && pwd)/.acme.sh"
+    else
+        ACME_HOME="${HOME}/.acme.sh"
+    fi
+fi
+ACME="${ACME_HOME}/acme.sh"
+
+if [[ ! -x "${ACME}" ]]; then
+    echo "Installing acme.sh into ${ACME_HOME}..."
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "${tmp}"' EXIT
+    curl -fsSL https://github.com/acmesh-official/acme.sh/archive/master.tar.gz | tar xz -C "${tmp}"
+    (cd "${tmp}/acme.sh-master" && ./acme.sh --install --home "${ACME_HOME}")
+fi
+
+if ! grep -q "SAVED_CF_Token" "${ACME_HOME}/account.conf" 2>/dev/null; then
+    if [[ -z "${CF_Token:-}" ]]; then
+        read -rsp "Cloudflare API token (Zone > DNS > Edit): " CF_Token || true
+        echo
+    fi
+    [[ -n "${CF_Token:-}" ]] || die "no Cloudflare API token given."
+    export CF_Token
+fi
+
+"${ACME}" --home "${ACME_HOME}" --set-default-ca --server letsencrypt
+# Exit status 2 means the certificate is still valid and was not renewed.
+status=0
+"${ACME}" --home "${ACME_HOME}" --issue --dns dns_cf -d "${DOMAIN}" --keylength ec-256 || status=$?
+(( status == 0 || status == 2 )) || die "acme.sh --issue failed (exit ${status})."
+
+reload=()
+if [[ -n "${PEM_FILE}" ]]; then
+    reload+=("cat $(printf '%q %q > %q' "${KEY_FILE}" "${FULLCHAIN_FILE}" "${PEM_FILE}")")
+    reload+=("chmod 600 $(printf '%q %q' "${PEM_FILE}" "${KEY_FILE}")")
+fi
+if [[ "${PIHOLE}" == true ]]; then
+    reload+=("chown pihole:pihole $(printf '%q %q' "${PEM_FILE}" "${KEY_FILE}")")
+    reload+=("systemctl restart pihole-FTL")
+fi
+[[ -z "${RELOAD_CMD}" ]] || reload+=("${RELOAD_CMD}")
+
+install_args=()
+[[ -z "${KEY_FILE}" ]] || install_args+=(--key-file "${KEY_FILE}")
+[[ -z "${FULLCHAIN_FILE}" ]] || install_args+=(--fullchain-file "${FULLCHAIN_FILE}")
+if (( ${#reload[@]} )); then
+    joined="${reload[0]}"
+    for step in "${reload[@]:1}"; do joined+=" && ${step}"; done
+    install_args+=(--reloadcmd "${joined}")
+fi
+
+if [[ "${PIHOLE}" == true ]]; then
+    pihole-FTL --config webserver.domain "${DOMAIN}"
+    pihole-FTL --config webserver.tls.cert "${PEM_FILE}"
+fi
+
+if (( ${#install_args[@]} )); then
+    "${ACME}" --home "${ACME_HOME}" --install-cert -d "${DOMAIN}" --ecc "${install_args[@]}"
+else
+    echo "Issued; nothing to install. Files are in ${ACME_HOME}/${DOMAIN}_ecc/."
+fi
+
+echo "Done. Renewal cron:"
+crontab -l 2>/dev/null | grep acme.sh || echo "  (no acme.sh cron entry found)"

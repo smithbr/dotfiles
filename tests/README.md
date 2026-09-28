@@ -80,6 +80,7 @@ This is process-level isolation, not a real container or VM.
 
 - Covers scripts in [`stow/tools/.local/bin`](/Users/bran/.dotfiles/stow/tools/.local/bin) and [`stow/server.linux/.local/bin`](/Users/bran/.dotfiles/stow/server.linux/.local/bin)
 - Verifies help output and startup probing for `ph-padd`
+- Runs `cf-cert` against a mocked acme.sh: argument checks, issue-only runs, the combined-pem install and chained reload command, stopping on a failed issue, a missing token on closed stdin, and `--pihole` refusing to run without root
 - Verifies non-root self-elevation behavior for `ph-update`, `ph-test`, and `ph-backup`
 - Runs `ph-backup` against mocked Pi-hole, Unbound, and Tailscale and inspects the resulting zip
 - Runs `ts-test` in a fully mocked sandbox

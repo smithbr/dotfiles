@@ -664,6 +664,86 @@ MOCK
     done
 }
 
+setup_cf_cert_sandbox() {
+    export ACME_HOME="${TEST_TMPDIR}/acme"
+    mkdir -p "${ACME_HOME}"
+    printf "SAVED_CF_Token='x'\n" > "${ACME_HOME}/account.conf"
+    cat > "${ACME_HOME}/acme.sh" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${ACME_HOME}/calls.log"
+[[ " $* " != *" --issue "* ]] || exit "${ACME_ISSUE_STATUS:-0}"
+MOCK
+    printf '#!/usr/bin/env bash\nexit 1\n' > "${BIN_SANDBOX}/crontab"
+    chmod +x "${ACME_HOME}/acme.sh" "${BIN_SANDBOX}/crontab"
+    CF_CERT="${PROJECT_ROOT}/stow/tools/.local/bin/cf-cert"
+}
+
+@test "cf-cert displays help" {
+    run "${PROJECT_ROOT}/stow/tools/.local/bin/cf-cert" --help
+    assert_success
+    assert_output --partial "Usage: cf-cert [options] DOMAIN"
+    assert_output --partial "--pihole"
+}
+
+@test "cf-cert requires one domain and rejects unknown options" {
+    run "${PROJECT_ROOT}/stow/tools/.local/bin/cf-cert"
+    assert_failure 2
+    run "${PROJECT_ROOT}/stow/tools/.local/bin/cf-cert" a.test b.test
+    assert_failure 2
+    run "${PROJECT_ROOT}/stow/tools/.local/bin/cf-cert" --bogus a.test
+    assert_failure 2
+    run "${PROJECT_ROOT}/stow/tools/.local/bin/cf-cert" --reload
+    assert_failure 2
+}
+
+@test "cf-cert issues without installing when no destination is given" {
+    setup_cf_cert_sandbox
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${CF_CERT}" a.test
+    assert_success
+    assert_output --partial "nothing to install"
+    run grep -c -- "--issue --dns dns_cf -d a.test --keylength ec-256" "${ACME_HOME}/calls.log"
+    assert_output "1"
+    run grep -- "--install-cert" "${ACME_HOME}/calls.log"
+    assert_failure
+}
+
+@test "cf-cert installs a combined pem and chains the reload command" {
+    setup_cf_cert_sandbox
+    run env PATH="${BIN_SANDBOX}:${PATH}" ACME_ISSUE_STATUS=2 "${CF_CERT}" \
+        --pem-file /srv/tls/a.test.pem --reload "systemctl reload nginx" a.test
+    assert_success
+    run grep -- "--install-cert" "${ACME_HOME}/calls.log"
+    assert_output "--home ${ACME_HOME} --install-cert -d a.test --ecc --key-file /srv/tls/a.test.key --fullchain-file /srv/tls/a.test.fullchain --reloadcmd cat /srv/tls/a.test.key /srv/tls/a.test.fullchain > /srv/tls/a.test.pem && chmod 600 /srv/tls/a.test.pem /srv/tls/a.test.key && systemctl reload nginx"
+}
+
+@test "cf-cert stops on a failed issue before installing" {
+    setup_cf_cert_sandbox
+    run env PATH="${BIN_SANDBOX}:${PATH}" ACME_ISSUE_STATUS=1 "${CF_CERT}" --key-file /srv/k a.test
+    assert_failure
+    run grep -- "--install-cert" "${ACME_HOME}/calls.log"
+    assert_failure
+}
+
+@test "cf-cert without a saved or given token fails on closed stdin before issuing" {
+    setup_cf_cert_sandbox
+    rm "${ACME_HOME}/account.conf"
+    run env -u CF_Token PATH="${BIN_SANDBOX}:${PATH}" "${CF_CERT}" a.test < /dev/null
+    assert_failure 1
+    assert_output --partial "no Cloudflare API token given"
+    [[ ! -e "${ACME_HOME}/calls.log" ]]
+}
+
+@test "cf-cert --pihole refuses to run without root" {
+    if (( EUID == 0 )); then
+        skip "running as root"
+    fi
+    setup_cf_cert_sandbox
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${CF_CERT}" --pihole a.test
+    assert_failure 1
+    assert_output --partial "--pihole needs root"
+    [[ ! -e "${ACME_HOME}/calls.log" ]]
+}
+
 @test "ph-update displays help" {
     run "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update" --help
     assert_success
