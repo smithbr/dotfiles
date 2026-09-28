@@ -3413,3 +3413,41 @@ MOCK
     run cat "${vault}/_attachments/day/scan-2026.pdf"
     assert_output "scan"
 }
+
+# Copies a df- wrapper into a fake repo whose scripts/<name> prints its
+# arguments, and links it from a bin directory the way stow would.
+fake_df_repo() {
+    local wrapper="$1" script="$2"
+    FAKE_REPO="${TEST_TMPDIR}/fake repo"
+    mkdir -p "${FAKE_REPO}/stow/tools/.local/bin" "${FAKE_REPO}/scripts" "${TEST_TMPDIR}/home/.local/bin"
+    cp "${PROJECT_ROOT}/stow/tools/.local/bin/${wrapper}" "${FAKE_REPO}/stow/tools/.local/bin/"
+    printf '#!/usr/bin/env bash\nprintf "%%s|" "${BASH_SOURCE[0]}" "$@"\n' > "${FAKE_REPO}/scripts/${script}"
+    ln -s "../../../fake repo/stow/tools/.local/bin/${wrapper}" "${TEST_TMPDIR}/home/.local/bin/${wrapper}"
+}
+
+@test "df-link runs its repo's link.sh through the stow link with every argument" {
+    fake_df_repo df-link link.sh
+    run "${TEST_TMPDIR}/home/.local/bin/df-link" add --layer tools "a file"
+    assert_success
+    assert_output --partial "/fake repo/scripts/link.sh|add|--layer|tools|a file|"
+}
+
+@test "df-file-review runs the cleanup review by default and passes arguments through" {
+    fake_df_repo df-file-review file-review.sh
+    run "${TEST_TMPDIR}/home/.local/bin/df-file-review"
+    assert_success
+    assert_output --partial "/fake repo/scripts/file-review.sh|--cleanup|"
+
+    run "${TEST_TMPDIR}/home/.local/bin/df-file-review" --all
+    assert_success
+    assert_output --partial "file-review.sh|--all|"
+    refute_output --partial "--cleanup"
+}
+
+@test "df- wrappers fail clearly outside a dotfiles repo" {
+    mkdir -p "${TEST_TMPDIR}/loose"
+    cp "${PROJECT_ROOT}/stow/tools/.local/bin/df-link" "${TEST_TMPDIR}/loose/"
+    run "${TEST_TMPDIR}/loose/df-link" status
+    assert_failure
+    assert_output --partial "cannot find scripts/link.sh"
+}
