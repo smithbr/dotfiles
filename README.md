@@ -17,11 +17,12 @@ Pick the persona that fits the machine:
 
 ## Managing files
 ```bash
-df-link add ~/.config/tool/config # adds file and symlinks it
-df-link status                    # shows drift
-df-file-review                    # shows leftovers to archive
-df-link                           # After adding a file under `stow/`
-df-deploy pihole                  # After pushing: pull and relink on other machines
+df-add stow ~/.config/tool/config  # adds file and symlinks it
+df-add brew llmfit                 # installs it and adds it to a Brewfile
+df-link status                     # shows drift
+df-file-review                     # shows leftovers to archive
+df-link                            # After adding a file under `stow/`
+df-deploy pihole                   # After pushing: pull and relink on other machines
 ```
 
 See [AGENTS.md](AGENTS.md) for maintenance and quality rules.
