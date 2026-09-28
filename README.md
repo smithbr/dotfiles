@@ -7,16 +7,21 @@ Every managed file in `~` is a symlink into this repo, so edit it in place and c
 git clone https://github.com/smithbr/dotfiles.git ~/.dotfiles
 ~/.dotfiles/install.sh --persona home
 ```
+## Personas
+Pick the persona that fits the machine:
 
-Pick the persona that fits the machine: `home` (your Mac), `work` (a work Mac,
-no private agents config), `server` (a headless box, macOS or Linux), or
-`sandbox` (throwaway VMs and CI). The choice is saved; without `--persona`,
-the installer asks. Run `~/.dotfiles/install.sh --help` for installation options.
+- `home` (everything),
+- `work` (scoped config),
+- `server` (a headless box, macOS or Linux)
+- `sandbox` (throwaway VMs and CI).
 
-To start managing a file that already lives in `~`, run
-`df-link add ~/.config/tool/config --layer common`: it copies the file into
-that layer and links it. `df-link status` shows drift, and `df-file-review`
-picks leftovers to archive. After adding a file under `stow/` by hand, run
-`df-link` (or `~/.dotfiles/scripts/link.sh`) to link it.
+## Managing files
+```bash
+df-link add ~/.config/tool/config # adds file and symlinks it
+df-link status                    # shows drift
+df-file-review                    # shows leftovers to archive
+df-link                           # After adding a file under `stow/`
+df-deploy pihole                  # After pushing: pull and relink on other machines
+```
 
 See [AGENTS.md](AGENTS.md) for maintenance and quality rules.
