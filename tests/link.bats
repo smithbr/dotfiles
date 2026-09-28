@@ -525,6 +525,139 @@ plant_old_links() {
 }
 
 # ---------------------------------------------------------------------------
+# Adding files
+# ---------------------------------------------------------------------------
+
+@test "add copies a file into the layer and links it without a backup" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_fixture_repo
+    mkdir -p "${DEST}/.config/tool"
+    printf 'setting=1\n' > "${DEST}/.config/tool/rc"
+    chmod 755 "${DEST}/.config/tool/rc"
+
+    run_fixture_link add --layer common "${DEST}/.config/tool/rc" < /dev/null
+    assert_success
+    assert_output --partial "/fixture add stow/common"
+    [[ "$(cat "${FIXTURE}/stow/common/.config/tool/rc")" == "setting=1" ]]
+    [ -x "${FIXTURE}/stow/common/.config/tool/rc" ]
+    [ -L "${DEST}/.config/tool/rc" ]
+    [[ "$(cat "${DEST}/.config/tool/rc")" == "setting=1" ]]
+    [ ! -e "${DEST}/.local/state/dotfiles/clobbered" ]
+}
+
+@test "add takes a directory, a platform part, and paths relative to the current directory" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_fixture_repo
+    mkdir -p "${DEST}/.config/app/themes"
+    printf 'a\n' > "${DEST}/.config/app/config"
+    printf 'b\n' > "${DEST}/.config/app/themes/dark"
+
+    cd "${DEST}/.config"
+    run_fixture_link add --layer common --platform app < /dev/null
+    assert_success
+    [ -f "${FIXTURE}/stow/common.darwin/.config/app/config" ]
+    [ -f "${FIXTURE}/stow/common.darwin/.config/app/themes/dark" ]
+    [ -L "${DEST}/.config/app/config" ]
+    [ -L "${DEST}/.config/app/themes/dark" ]
+    [ -d "${DEST}/.config/app" ] && [ ! -L "${DEST}/.config/app" ]
+}
+
+@test "add --seed copies the file as a seed and leaves the live file alone" {
+    make_fixture_repo
+    mkdir -p "${DEST}/.config/app"
+    printf 'owned by the app\n' > "${DEST}/.config/app/state.json"
+
+    run_fixture_link add --layer common --seed "${DEST}/.config/app/state.json" < /dev/null
+    assert_success
+    [ -f "${FIXTURE}/seed/common/.config/app/state.json" ]
+    [ -f "${DEST}/.config/app/state.json" ] && [ ! -L "${DEST}/.config/app/state.json" ]
+}
+
+@test "add refuses secrets, local overrides, managed and outside paths before copying anything" {
+    make_fixture_repo
+    mkdir -p "${DEST}/.ssh" "${DEST}/.config/zsh" "${DEST}/.config/agents" "${DEST}/.config/Code/User"
+    printf 'fine\n' > "${DEST}/.fine"
+    printf -- '-----BEGIN OPENSSH PRIVATE KEY-----\n' > "${DEST}/.ssh/work"
+    printf 'key\n' > "${DEST}/.ssh/id_ed25519"
+    printf 'TOKEN=x\n' > "${DEST}/.env"
+    printf 'alias x=y\n' > "${DEST}/.config/zsh/.zshrc.local"
+    printf 'rules\n' > "${DEST}/.config/agents/AGENTS.md"
+    printf '{}\n' > "${DEST}/.config/Code/User/keybindings.json"
+    printf 'keep\n' > "${DEST}/.keep"
+    printf 'outside\n' > "${TEST_TMPDIR}/outside"
+
+    for path in .ssh/work .ssh/id_ed25519 .env .config/zsh/.zshrc.local \
+        .config/agents/AGENTS.md .config/Code/User/keybindings.json .keep; do
+        run_fixture_link add --layer common "${DEST}/.fine" "${DEST}/${path}" < /dev/null
+        assert_failure
+        assert_output --partial "Not adding ~/${path}"
+    done
+    run_fixture_link add --layer common "${TEST_TMPDIR}/outside" < /dev/null
+    assert_failure
+    assert_output --partial "Not inside"
+
+    [ ! -e "${FIXTURE}/stow/common/.fine" ]
+    [ -f "${DEST}/.fine" ] && [ ! -L "${DEST}/.fine" ]
+}
+
+@test "add refuses a file with a banned word without naming the word" {
+    make_fixture_repo
+    mkdir -p "${DEST}/.config"
+    printf '# comment\nzorblax\n' > "${DEST}/.config/banned-words"
+    printf 'say ZORBLAX here\n' > "${DEST}/.rc"
+
+    run_fixture_link add --layer common "${DEST}/.rc" < /dev/null
+    assert_failure
+    assert_output --partial "contains a banned word"
+    refute_output --partial "orblax"
+    [ ! -e "${FIXTURE}/stow/common/.rc" ]
+}
+
+@test "add needs a layer this persona links, and asks for none without a terminal" {
+    make_fixture_repo
+    printf 'x\n' > "${DEST}/.rc"
+
+    run_fixture_link add "${DEST}/.rc" < /dev/null
+    assert_failure
+    assert_output --partial "Name the layer with --layer"
+
+    run_fixture_link add --layer extra "${DEST}/.rc" < /dev/null
+    assert_failure
+    assert_output --partial "does not link layer 'extra'"
+    [ ! -e "${FIXTURE}/stow/extra/.rc" ]
+
+    run_fixture_link --layer common status
+    assert_failure
+    assert_output --partial "only apply to add"
+}
+
+@test "add dry run copies and links nothing" {
+    make_fixture_repo
+    printf 'x\n' > "${DEST}/.rc"
+
+    run_fixture_link --dry-run add --layer common "${DEST}/.rc" < /dev/null
+    assert_success
+    assert_output --partial "Would copy ~/.rc to stow/common/.rc"
+    [ ! -e "${FIXTURE}/stow/common/.rc" ]
+    [ -f "${DEST}/.rc" ] && [ ! -L "${DEST}/.rc" ]
+}
+
+@test "add refuses a symlink, whether ours or foreign" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_fixture_repo
+    run_fixture_link
+    assert_success
+    ln -s /etc/hosts "${DEST}/.hosts"
+
+    run_fixture_link add --layer common "${DEST}/.keep" < /dev/null
+    assert_failure
+    assert_output --partial "Already managed"
+    run_fixture_link add --layer common "${DEST}/.hosts" < /dev/null
+    assert_failure
+    assert_output --partial "Not adding a symlink"
+}
+
+# ---------------------------------------------------------------------------
 # Personas
 # ---------------------------------------------------------------------------
 

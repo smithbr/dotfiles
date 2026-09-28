@@ -38,6 +38,10 @@ DRY_RUN=0
 REFRESH=0
 COMMAND=apply
 PERSONA=""
+ADD_LAYER=""
+ADD_PLATFORM=0
+ADD_SEED=0
+declare -a add_paths=()
 declare -a stow_args=()
 
 AGENTS_REPO_URL="${AGENTS_REPO_URL:-git@github.com:smithbr/agents-private.git}"
@@ -88,6 +92,9 @@ Commands:
             (flag, env, saved or default)
   personas  List the personas this OS can use, with their descriptions
   installs  Print the persona's brew, brew_optional and linux_optional lists
+  add PATH...
+            Start managing files from the home directory: copy each one into
+            a layer, then link it (a directory adds every file in it)
 
 Options:
   -n, --dry-run           Report what would change without touching anything
@@ -96,6 +103,12 @@ Options:
       --refresh           Pull the agents checkout even if it is fresh
       --repo PATH         Dotfiles repo to read (default: this script's repo)
       --destination PATH  Home directory to link into (default: $HOME)
+      --layer NAME        add: the layer to put the files in (asked on a
+                          terminal when missing)
+      --platform          add: use the layer's part for this OS only
+                          (stow/<layer>.<os>)
+      --seed              add: copy once as a seed file the app then owns,
+                          instead of linking
   -h, --help              Show this help and exit
 
 Arguments after -- go to stow, e.g. link.sh -- --verbose=2
@@ -107,7 +120,9 @@ parse_args() {
         case "$1" in
             -n|--dry-run) DRY_RUN=1 ;;
             --refresh) REFRESH=1 ;;
-            --repo|--destination|--persona)
+            --platform) ADD_PLATFORM=1 ;;
+            --seed) ADD_SEED=1 ;;
+            --repo|--destination|--persona|--layer)
                 if [[ $# -lt 2 ]]; then
                     log_error "$1 requires a value"
                     exit 2
@@ -115,25 +130,43 @@ parse_args() {
                 case "$1" in
                     --repo) REPO="$2" ;;
                     --destination) DEST="$2" ;;
+                    --layer) ADD_LAYER="$2" ;;
                     *) PERSONA="$2" ;;
                 esac
                 shift
                 ;;
-            apply|managed|status|persona|personas|installs) COMMAND="$1" ;;
+            apply|managed|status|persona|personas|installs|add) COMMAND="$1" ;;
             -h|--help) usage; exit 0 ;;
             --)
                 shift
                 stow_args+=("$@")
                 break
                 ;;
-            *)
+            -*)
                 log_error "Unknown argument: $1"
                 usage >&2
                 exit 2
                 ;;
+            *)
+                if [[ "${COMMAND}" != add ]]; then
+                    log_error "Unknown argument: $1"
+                    usage >&2
+                    exit 2
+                fi
+                add_paths+=("$1")
+                ;;
         esac
         shift
     done
+
+    if [[ "${COMMAND}" == add && "${#add_paths[@]}" -eq 0 ]]; then
+        log_error "add needs at least one path"
+        exit 2
+    fi
+    if [[ "${COMMAND}" != add && ( -n "${ADD_LAYER}" || "${ADD_PLATFORM}" -eq 1 || "${ADD_SEED}" -eq 1 ) ]]; then
+        log_error "--layer, --platform and --seed only apply to add"
+        exit 2
+    fi
 
     local arg
     for arg in ${stow_args[@]+"${stow_args[@]}"}; do
@@ -792,6 +825,194 @@ print_status() {
     done < <(stale_links)
 }
 
+# ---------------------------------------------------------------------------
+# add: start managing files that already live in the home directory
+# ---------------------------------------------------------------------------
+
+# Why a home-relative path must not enter the repo, or nothing when it may.
+# The repo is public, so secrets and machine-specific files stay out.
+add_refusal() {
+    local relative="$1" file="$2" name entry dir os banned="${DEST}/.config/banned-words"
+    name="${relative##*/}"
+
+    for dir in "${REPO}"/stow/*/ "${REPO}"/seed/*/; do
+        if [[ -e "${dir}${relative}" || -L "${dir}${relative}" ]]; then
+            printf 'already in the repo at %s\n' "${dir#"${REPO}"/}${relative}"
+            return 0
+        fi
+    done
+    case "${relative}" in
+        .config/agents|.config/agents/*|.agents/*)
+            printf 'belongs to the private agents repo\n'
+            return 0
+            ;;
+    esac
+    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}"; do
+        if [[ "${relative}" == "${entry%%|*}" || "${relative}" == "${entry%%|*}/"* ]]; then
+            printf 'belongs to the private agents repo\n'
+            return 0
+        fi
+    done
+    for os in darwin linux; do
+        while IFS= read -r entry; do
+            if [[ "${relative}" == "${entry%%|*}/"* ]]; then
+                printf 'editor settings go in editors/, not stow/\n'
+                return 0
+            fi
+        done < <(editor_dirs "${os}")
+    done
+    case "${name}" in
+        *.local|*.local.*)
+            printf 'a .local file holds this machine'"'"'s overrides\n'
+            return 0
+            ;;
+        .env|.env.*|*.env|.netrc|.git-credentials|*.pem|*.key|*.p12|*.pfx)
+            printf 'looks like a secret\n'
+            return 0
+            ;;
+        id_*)
+            if [[ "${name}" != *.pub ]]; then
+                printf 'looks like a private key\n'
+                return 0
+            fi
+            ;;
+    esac
+    if grep -qE -- '-----BEGIN ([A-Z]+ )*PRIVATE KEY-----' "${file}" 2>/dev/null; then
+        printf 'contains a private key\n'
+        return 0
+    fi
+    if [[ -f "${banned}" ]] && grep -qwiIE -f <(grep -v '^#' "${banned}" | grep -v '^[[:space:]]*$') "${file}" 2>/dev/null; then
+        printf 'contains a banned word\n'
+        return 0
+    fi
+    return 0
+}
+
+# Pick the layer for add: --layer, else a choice on a terminal. Only layers
+# this persona links qualify, so the added file is linked right here.
+choose_add_layer() {
+    local layer choice index=1
+    local -a layers=()
+    read -r -a layers <<< "${PERSONA_LAYERS}"
+
+    if [[ -n "${ADD_LAYER}" ]]; then
+        for layer in "${layers[@]}"; do
+            [[ "${layer}" == "${ADD_LAYER}" ]] && return 0
+        done
+        log_error "Persona '${PERSONA_NAME}' does not link layer '${ADD_LAYER}'. Choose one of: ${PERSONA_LAYERS}"
+        exit 2
+    fi
+    if [[ ! -t 0 ]]; then
+        log_error "Name the layer with --layer (one of: ${PERSONA_LAYERS})"
+        exit 2
+    fi
+    if command -v gum >/dev/null 2>&1; then
+        ADD_LAYER="$(gum choose --header "Layer for the new files" "${layers[@]}")" || ADD_LAYER=""
+    else
+        for layer in "${layers[@]}"; do
+            printf '  %d) %s\n' "${index}" "${layer}"
+            index=$((index + 1))
+        done
+        printf 'Layer for the new files [1-%d]: ' "${#layers[@]}"
+        IFS= read -r choice || choice=""
+        if [[ "${choice}" =~ ^[0-9]+$ && "${choice}" -ge 1 && "${choice}" -le "${#layers[@]}" ]]; then
+            ADD_LAYER="${layers[$((choice - 1))]}"
+        fi
+    fi
+    if [[ -z "${ADD_LAYER}" ]]; then
+        log_error "No layer chosen; nothing added"
+        exit 1
+    fi
+}
+
+# Home-relative paths of the files to add, one per line. A directory adds
+# every file inside it; each path must resolve inside the destination.
+collect_add_files() {
+    local path entry dir absolute real_dest relative
+    real_dest="$(cd -P "${DEST}" && pwd)"
+    for path in "${add_paths[@]}"; do
+        if [[ -L "${path}" ]]; then
+            if is_repo_link "${path}"; then
+                log_error "Already managed: ${path}"
+            else
+                log_error "Not adding a symlink: ${path}"
+            fi
+            return 1
+        fi
+        if [[ ! -e "${path}" ]]; then
+            log_error "No such file: ${path}"
+            return 1
+        fi
+        dir="$(cd -P "$(dirname "${path}")" && pwd)" || return 1
+        absolute="${dir}/$(basename "${path}")"
+        if [[ "${absolute}" != "${real_dest}/"* ]]; then
+            log_error "Not inside ${DEST}: ${path}"
+            return 1
+        fi
+        relative="${absolute#"${real_dest}"/}"
+        if [[ -d "${absolute}" ]]; then
+            while IFS= read -r entry; do
+                printf '%s/%s\n' "${relative}" "${entry#./}"
+            done < <(cd "${absolute}" && find . -type f ! -name .DS_Store -print)
+        elif [[ -f "${absolute}" ]]; then
+            printf '%s\n' "${relative}"
+        else
+            log_error "Not a regular file: ${path}"
+            return 1
+        fi
+    done
+}
+
+add_files() {
+    local package kind=stow relative source reason refused=0 files
+    local -a relatives=()
+
+    files="$(collect_add_files)" || exit 1
+    while IFS= read -r relative; do
+        [[ -n "${relative}" ]] && relatives+=("${relative}")
+    done < <(printf '%s\n' "${files}" | LC_ALL=C sort -u)
+    if [[ "${#relatives[@]}" -eq 0 ]]; then
+        log_error "No files to add"
+        exit 1
+    fi
+    for relative in "${relatives[@]}"; do
+        reason="$(add_refusal "${relative}" "${DEST}/${relative}")"
+        if [[ -n "${reason}" ]]; then
+            log_error "Not adding ~/${relative}: ${reason}"
+            refused=1
+        fi
+    done
+    [[ "${refused}" -eq 0 ]] || exit 1
+
+    choose_add_layer
+    package="${ADD_LAYER}"
+    [[ "${ADD_PLATFORM}" -eq 1 ]] && package="${ADD_LAYER}.$(platform)"
+    [[ "${ADD_SEED}" -eq 1 ]] && kind=seed
+
+    # Copy everything before linking anything, so a failure leaves every live
+    # file where it was.
+    for relative in "${relatives[@]}"; do
+        source="${REPO}/${kind}/${package}/${relative}"
+        if [[ "${DRY_RUN}" -eq 1 ]]; then
+            printf 'Would copy ~/%s to %s\n' "${relative}" "${kind}/${package}/${relative}"
+            continue
+        fi
+        mkdir -p "$(dirname "${source}")"
+        cp -p "${DEST}/${relative}" "${source}"
+        printf 'Copied ~/%s to %s\n' "${relative}" "${kind}/${package}/${relative}"
+    done
+    [[ "${DRY_RUN}" -eq 0 ]] || return 0
+
+    # The live files now match the repo, so linking swaps them for links
+    # without a backup. Seed files stay as they are; the app owns them.
+    if [[ "${kind}" == stow ]]; then
+        run_stow
+        secure_private_dirs
+    fi
+    printf 'Added %d file(s). Commit them with: git -C %s add %s\n' \
+        "${#relatives[@]}" "${REPO}" "${kind}/${package}"
+}
+
 main() {
     parse_args "$@"
 
@@ -823,6 +1044,7 @@ main() {
             ;;
         managed) print_managed ;;
         status) print_status ;;
+        add) add_files ;;
         apply)
             if [[ "${PERSONA_SOURCE}" == default ]]; then
                 log_warn "No persona chosen; linking as '${PERSONA_NAME}', the default for $(platform). Pick one with: install.sh --persona NAME"

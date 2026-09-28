@@ -85,6 +85,7 @@ This is process-level isolation, not a real container or VM.
 - Runs `ph-backup` against mocked Pi-hole, Unbound, and Tailscale and inspects the resulting zip
 - Runs `ts-test` in a fully mocked sandbox
 - Runs `sshkey` help, local key creation, and cleanup flows inside an isolated home directory
+- Runs `df-link` and `df-file-review` through a stow-style link into a fake repo: arguments pass through, `df-file-review` defaults to `--cleanup`, and a wrapper outside a repo fails clearly
 - Runs `ph-agent-setup` steps with mocked identity, sudo, git, crontab, `ob`, and `claude`: wrong-user and off-Linux refusals; `authorize` writing one comment-free fetch-only key line and rejecting multi-line, CR, non-ed25519, and unreadable keys; `user` copying only option-less keys into a root-owned key file and installing the script and wrappers root-owned; one cron entry pointing at `/usr/local/bin`; an empty-inbox import that never starts Claude; an import that refuses to start without the root-owned helpers; a Claude allowlist that scopes Write/Edit to the vault, denies `~/.local`, `~/.ssh`, `~/.claude`, `~/.config`, and the tools checkout, and has no `find`, `cp`, or `mv`; and `mv` (vault-mv) refusing links, overwrites, and destinations outside the vault or in `.claude/`
 
 [`brew.bats`](/Users/bran/.dotfiles/tests/brew.bats)
@@ -121,6 +122,7 @@ This is process-level isolation, not a real container or VM.
 - Runs the real [`scripts/link.sh`](/Users/bran/.dotfiles/scripts/link.sh) and GNU Stow against a scratch home and a local agents repo fixture
 - Verifies linking per platform, shared editor settings, backups of changed copies and foreign links, removal of stale repo links (files that moved, were deleted, or belong to an unused package) while real files and foreign links stay, persona choice (flag, environment, saved state, OS default, unknown or wrong-OS names), personas without agents or editors, idempotency, and dry runs
 - Covers agent links (clone, backup of real agent config, unreachable repo), seed files, and the `managed` and `status` reports
+- Runs `add` against a fixture repo: a file becomes a link with no backup and keeps its executable bit; directories, `--platform`, relative paths, `--seed`, dry runs; refusals of secrets, private keys, `.local` overrides, agent and editor paths, repo files, outside paths, symlinks, banned words (without naming them), a layer the persona does not link, and a missing layer on closed stdin
 
 [`install.bats`](/Users/bran/.dotfiles/tests/install.bats)
 
