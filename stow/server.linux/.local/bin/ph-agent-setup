@@ -174,13 +174,22 @@ step_user() {
     fi
 }
 
+# True when pi's authorized_keys already holds agent's read-only key, whatever its comment
+# (older runs of authorize wrote a different one). The key is read as agent, as authorize does.
+agent_key_authorized() {
+    local raw blob
+    raw="$(sudo -u "${AGENT_USER}" cat -- "${AGENT_HOME}/.ssh/vault_ro.pub" 2>/dev/null)" || return 1
+    blob="$(parse_agent_key "${raw}")" || return 1
+    key_in_file "${blob}" "${HOME}/.ssh/authorized_keys"
+}
+
 # The first later step that hasn't run yet, as "as USER: ph-agent-setup STEP", or nothing
 # when all have. Each step leaves a marker; agent's home is closed to pi, so look with sudo.
 next_setup_step() {
     local tools="${PH_AGENT_TOOLS_DIR:-${AGENT_HOME}/.local/share/blife-tools}"
     if ! sudo test -x "${AGENT_HOME}/.local/bin/claude"; then
         printf 'as %s: ph-agent-setup install\n' "${AGENT_USER}"
-    elif ! grep -qs 'agent-vault-ro$' "${HOME}/.ssh/authorized_keys"; then
+    elif ! agent_key_authorized; then
         printf 'as %s: ph-agent-setup authorize\n' "${ADMIN_USER}"
     elif ! sudo test -d "${tools}/.git"; then
         printf 'as %s: ph-agent-setup link\n' "${AGENT_USER}"
@@ -264,6 +273,11 @@ step_install() {
 
 # Prints the base64 blob of the single ed25519 public key in ${1}, or fails. The input is
 # agent-controlled, so it is never echoed and only the blob survives: no options, no comment.
+# True when some line of file ${2} carries the key data ${1} as one of its fields.
+key_in_file() {
+    [[ -f "${2}" ]] && awk -v b="${1}" '{ for (i = 1; i <= NF; i++) if ($i == b) f = 1 } END { exit !f }' "${2}"
+}
+
 parse_agent_key() {
     local raw="${1}" type="" blob="" tmp fingerprint
     [[ "${raw}" != *$'\n'* && "${raw}" != *$'\r'* ]] || return 1
@@ -292,7 +306,7 @@ step_authorize() {
     blob="$(parse_agent_key "${raw}")" || die "not an ed25519 public key (expected one 'ssh-ed25519 KEY' line)"
     # Fetch only: upload-pack serves clones and fetches and never accepts a push.
     line="restrict,command=\"git upload-pack '${VAULT_REPO}'\" ssh-ed25519 ${blob} agent-vault-ro"
-    if [[ -f "${keys}" ]] && awk -v b="${blob}" '{ for (i = 1; i <= NF; i++) if ($i == b) f = 1 } END { exit !f }' "${keys}"; then
+    if key_in_file "${blob}" "${keys}"; then
         log "agent key already authorized"
     else
         printf '%s\n' "${line}" >> "${keys}"
