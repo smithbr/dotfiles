@@ -9,6 +9,7 @@ $RECYCLE.BIN/
 *.log
 *.bak
 *.orig
+*.sw[po]
 .cache/
 
 # AI
