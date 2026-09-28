@@ -3187,6 +3187,7 @@ KEYS
 #!/usr/bin/env bash
 case "${1}" in
     test) shift; exec test "$@" ;;
+    -u) shift 2; exec "$@" ;;
     crontab) cat "${TEST_TMPDIR}/agent-crontab" 2>/dev/null ;;
     sshd) printf 'authorizedkeysfile /etc/ssh/authorized_keys/%%u\n' ;;
     *) printf 'sudo %s\n' "$*" >> "${TEST_TMPDIR}/calls" ;;
@@ -3204,7 +3205,13 @@ MOCK
     run_agent_setup user
     assert_output --partial "Next, as pi: ph-agent-setup authorize"
 
-    printf 'restrict,command="git upload-pack x" ssh-ed25519 AAAAro agent-vault-ro\n' >> "${TEST_TMPDIR}/home/.ssh/authorized_keys"
+    # Authorized under an older comment: the key data decides, not the comment.
+    mkdir -p "${PH_AGENT_HOME}/.ssh"
+    ssh-keygen -q -t ed25519 -N "" -C agent -f "${PH_AGENT_HOME}/.ssh/vault_ro"
+    run_agent_setup user
+    assert_output --partial "Next, as pi: ph-agent-setup authorize"
+    printf 'restrict,command="git upload-pack x" ssh-ed25519 %s read-only\n' \
+        "$(cut -d' ' -f2 "${PH_AGENT_HOME}/.ssh/vault_ro.pub")" >> "${TEST_TMPDIR}/home/.ssh/authorized_keys"
     run_agent_setup user
     assert_output --partial "Next, as agent: ph-agent-setup link"
 
