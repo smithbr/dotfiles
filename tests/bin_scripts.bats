@@ -3212,10 +3212,10 @@ MOCK
     assert_output "1"
 }
 
-@test "ph-agent-setup import syncs and skips Claude when the inbox is empty" {
+@test "ph-agent-setup import syncs and skips Claude when imports and captures are empty" {
     agent_setup_sandbox agent
-    mkdir -p "${TEST_TMPDIR}/home/blife/_inbox"
-    touch "${TEST_TMPDIR}/home/blife/_inbox/.gitkeep" "${TEST_TMPDIR}/home/blife/_inbox/.DS_Store"
+    mkdir -p "${TEST_TMPDIR}/home/blife/_imports"
+    touch "${TEST_TMPDIR}/home/blife/_imports/.gitkeep" "${TEST_TMPDIR}/home/blife/_imports/.DS_Store"
     local tool
     for tool in ob claude flock; do
         cat > "${BIN_SANDBOX}/${tool}" <<MOCK
@@ -3226,43 +3226,43 @@ MOCK
     done
     run_agent_setup import
     assert_success
-    assert_output --partial "inbox and captures empty"
+    assert_output --partial "imports and captures empty"
     run grep -c "^ob sync --path ${TEST_TMPDIR}/home/blife" "${TEST_TMPDIR}/calls"
     assert_output "1"
     run grep -c "^claude" "${TEST_TMPDIR}/calls"
     assert_output "0"
 }
 
-@test "ph-agent-setup status counts hidden inbox files but not .gitkeep or .DS_Store" {
+@test "ph-agent-setup status counts hidden import files but not .gitkeep or .DS_Store" {
     agent_setup_sandbox agent
-    mkdir -p "${TEST_TMPDIR}/home/blife/_inbox/sub"
-    touch "${TEST_TMPDIR}/home/blife/_inbox/.gitkeep" \
-        "${TEST_TMPDIR}/home/blife/_inbox/.DS_Store" \
-        "${TEST_TMPDIR}/home/blife/_inbox/sub/.DS_Store" \
-        "${TEST_TMPDIR}/home/blife/_inbox/.hidden-note" \
-        "${TEST_TMPDIR}/home/blife/_inbox/sub/.gitkeep"
+    mkdir -p "${TEST_TMPDIR}/home/blife/_imports/sub"
+    touch "${TEST_TMPDIR}/home/blife/_imports/.gitkeep" \
+        "${TEST_TMPDIR}/home/blife/_imports/.DS_Store" \
+        "${TEST_TMPDIR}/home/blife/_imports/sub/.DS_Store" \
+        "${TEST_TMPDIR}/home/blife/_imports/.hidden-note" \
+        "${TEST_TMPDIR}/home/blife/_imports/sub/.gitkeep"
     run_agent_setup status
     assert_success
-    assert_output --partial "inbox     2 file(s)"
+    assert_output --partial "imports   2 file(s)"
 }
 
-@test "ph-agent-setup status counts captures separately from the inbox" {
+@test "ph-agent-setup status counts captures separately from imports" {
     agent_setup_sandbox agent
-    mkdir -p "${TEST_TMPDIR}/home/blife/_inbox" "${TEST_TMPDIR}/home/blife/_captures/sweep-2026-09-27-2000"
-    touch "${TEST_TMPDIR}/home/blife/_inbox/scan.pdf" \
+    mkdir -p "${TEST_TMPDIR}/home/blife/_imports" "${TEST_TMPDIR}/home/blife/_captures/sweep-2026-09-27-2000"
+    touch "${TEST_TMPDIR}/home/blife/_imports/scan.pdf" \
         "${TEST_TMPDIR}/home/blife/_captures/.gitkeep" \
         "${TEST_TMPDIR}/home/blife/_captures/sweep-2026-09-27-2000/pay-the-bill.md" \
         "${TEST_TMPDIR}/home/blife/_captures/sweep-2026-09-27-2000/bill.pdf"
     run_agent_setup status
     assert_success
-    assert_output --partial "inbox     1 file(s)"
+    assert_output --partial "imports   1 file(s)"
     assert_output --partial "captures  2 file(s)"
 }
 
 @test "ph-agent-setup import starts Claude when only _captures/ has files" {
     agent_setup_sandbox agent
-    mkdir -p "${TEST_TMPDIR}/home/blife/_inbox" "${TEST_TMPDIR}/home/blife/_captures" "${TEST_TMPDIR}/rootbin"
-    touch "${TEST_TMPDIR}/home/blife/_inbox/.gitkeep" "${TEST_TMPDIR}/home/blife/_captures/note.md"
+    mkdir -p "${TEST_TMPDIR}/home/blife/_imports" "${TEST_TMPDIR}/home/blife/_captures" "${TEST_TMPDIR}/rootbin"
+    touch "${TEST_TMPDIR}/home/blife/_imports/.gitkeep" "${TEST_TMPDIR}/home/blife/_captures/note.md"
     export PH_AGENT_BIN_DIR="${TEST_TMPDIR}/rootbin"
     local tool
     for tool in vault-lint vault-mv vault-cp; do
@@ -3285,8 +3285,8 @@ MOCK
 
 @test "ph-agent-setup import gives Claude a vault-scoped allowlist without find, cp, or mv" {
     agent_setup_sandbox agent
-    mkdir -p "${TEST_TMPDIR}/home/blife/_inbox" "${TEST_TMPDIR}/rootbin"
-    touch "${TEST_TMPDIR}/home/blife/_inbox/scan.pdf"
+    mkdir -p "${TEST_TMPDIR}/home/blife/_imports" "${TEST_TMPDIR}/rootbin"
+    touch "${TEST_TMPDIR}/home/blife/_imports/scan.pdf"
     export PH_AGENT_BIN_DIR="${TEST_TMPDIR}/rootbin"
     local tool home="${TEST_TMPDIR}/home"
     for tool in vault-lint vault-mv vault-cp; do
@@ -3335,8 +3335,8 @@ MOCK
 
 @test "ph-agent-setup import refuses to start Claude without the root-owned helpers" {
     agent_setup_sandbox agent
-    mkdir -p "${TEST_TMPDIR}/home/blife/_inbox" "${TEST_TMPDIR}/rootbin"
-    touch "${TEST_TMPDIR}/home/blife/_inbox/scan.pdf"
+    mkdir -p "${TEST_TMPDIR}/home/blife/_imports" "${TEST_TMPDIR}/rootbin"
+    touch "${TEST_TMPDIR}/home/blife/_imports/scan.pdf"
     export PH_AGENT_BIN_DIR="${TEST_TMPDIR}/rootbin"
     local tool
     for tool in ob claude flock; do
@@ -3356,38 +3356,38 @@ MOCK
 @test "ph-agent-setup mv moves a file within the vault and nowhere else" {
     agent_setup_sandbox agent
     local vault="${TEST_TMPDIR}/home/blife"
-    mkdir -p "${vault}/_inbox" "${vault}/_attachments/day" "${vault}/.claude" "${TEST_TMPDIR}/home/.local/bin"
-    printf 'scan\n' > "${vault}/_inbox/scan.pdf"
-    printf 'other\n' > "${vault}/_inbox/other.pdf"
+    mkdir -p "${vault}/_imports" "${vault}/_attachments/day" "${vault}/.claude" "${TEST_TMPDIR}/home/.local/bin"
+    printf 'scan\n' > "${vault}/_imports/scan.pdf"
+    printf 'other\n' > "${vault}/_imports/other.pdf"
     printf 'taken\n' > "${vault}/_attachments/day/taken.pdf"
     printf 'secret\n' > "${TEST_TMPDIR}/outside"
-    ln -s "${TEST_TMPDIR}/outside" "${vault}/_inbox/link.pdf"
+    ln -s "${TEST_TMPDIR}/outside" "${vault}/_imports/link.pdf"
 
-    run_agent_setup mv "${vault}/_inbox/other.pdf" "${TEST_TMPDIR}/home/.local/bin/vault-lint"
+    run_agent_setup mv "${vault}/_imports/other.pdf" "${TEST_TMPDIR}/home/.local/bin/vault-lint"
     assert_failure
     assert_output --partial "outside the vault"
-    run_agent_setup mv "${vault}/_inbox/other.pdf" "${vault}/_attachments/../../.local/bin/x"
+    run_agent_setup mv "${vault}/_imports/other.pdf" "${vault}/_attachments/../../.local/bin/x"
     assert_failure
-    run_agent_setup mv "${vault}/_inbox/other.pdf" "${vault}/.claude/settings.json"
+    run_agent_setup mv "${vault}/_imports/other.pdf" "${vault}/.claude/settings.json"
     assert_failure
-    run_agent_setup mv "${vault}/_inbox/other.pdf" "${vault}/_attachments/day/taken.pdf"
+    run_agent_setup mv "${vault}/_imports/other.pdf" "${vault}/_attachments/day/taken.pdf"
     assert_failure
     assert_output --partial "destination exists"
-    run_agent_setup mv "${vault}/_inbox/link.pdf" "${vault}/_attachments/day/"
+    run_agent_setup mv "${vault}/_imports/link.pdf" "${vault}/_attachments/day/"
     assert_failure
     assert_output --partial "not a regular file"
     run_agent_setup mv "${TEST_TMPDIR}/outside" "${vault}/_attachments/day/"
     assert_failure
     assert_output --partial "source is outside the vault"
-    assert [ -f "${vault}/_inbox/other.pdf" ]
+    assert [ -f "${vault}/_imports/other.pdf" ]
     assert [ ! -e "${TEST_TMPDIR}/home/.local/bin/vault-lint" ]
     assert [ ! -e "${TEST_TMPDIR}/home/.local/bin/x" ]
     run cat "${vault}/_attachments/day/taken.pdf"
     assert_output "taken"
 
-    run_agent_setup mv "${vault}/_inbox/scan.pdf" "${vault}/_attachments/day/"
+    run_agent_setup mv "${vault}/_imports/scan.pdf" "${vault}/_attachments/day/"
     assert_success
-    assert [ ! -e "${vault}/_inbox/scan.pdf" ]
+    assert [ ! -e "${vault}/_imports/scan.pdf" ]
     run cat "${vault}/_attachments/day/scan.pdf"
     assert_output "scan"
 }

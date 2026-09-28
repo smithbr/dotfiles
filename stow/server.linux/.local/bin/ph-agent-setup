@@ -32,7 +32,7 @@ usage() {
     help_text="$(cat <<'EOF'
 # ph-agent-setup
 
-Set up the locked-down `agent` user on the Pi-hole box and run the daily blife `_inbox/` and `_captures/` import.
+Set up the locked-down `agent` user on the Pi-hole box and run the daily blife `_imports/` and `_captures/` import.
 
 ## Steps, in order
 
@@ -43,8 +43,8 @@ Set up the locked-down `agent` user on the Pi-hole box and run the daily blife `
 | `authorize` | pi (sudo, or the key on stdin) | Let agent's key fetch `~/git/vault.git` and nothing else |
 | `link` | agent | Sync the vault to `~/blife` (runs `ob login` if needed), check out `.scripts/` read-only |
 | `schedule` | agent | Install the daily cron job |
-| `import` | agent | One import run: sync, import `_inbox/` and `_captures/` as the importer role, sync |
-| `status` | agent | Show versions, sync state, cron entry, and inbox and captures counts |
+| `import` | agent | One import run: sync, import `_imports/` and `_captures/` as the importer role, sync |
+| `status` | agent | Show versions, sync state, cron entry, and imports and captures counts |
 
 The import calls `vault-lint ARGS` (`ph-agent-setup lint ARGS`), `vault-mv SRC DEST`
 (`ph-agent-setup mv SRC DEST`, a move that stays inside the vault), and `vault-cp SRC DEST`
@@ -72,7 +72,7 @@ Usage:
   ph-agent-setup --help
 
 Set up the locked-down agent user on the Pi-hole box and run the daily blife
-_inbox/ and _captures/ import. Run the steps in order: user (as pi, uses sudo), install
+_imports/ and _captures/ import. Run the steps in order: user (as pi, uses sudo), install
 (as agent), authorize (as pi), link, schedule (as agent). Every step is safe
 to re-run. lint, mv, and cp back the vault-lint, vault-mv, and vault-cp commands the
 import uses.
@@ -464,7 +464,7 @@ import_prompt() {
     cat <<EOF
 You are the intake file importer for Bran's Obsidian vault at ${VAULT_DIR}, on the Pi-hole box as the locked-down '${AGENT_USER}' user, in an unattended daily run. Keep this prompt in step with the Mac's "Process inbox>vault" routine (~/.claude/scheduled-tasks/blife-inbox-import/SKILL.md).
 
-Read AGENTS.md and work as the intake file importer (Agents/roles/role-intake-file-importer.md) on all of _inbox/ (foreign files) and _captures/ (capture notes), following the manual exactly, from the lint baseline to the run log.
+Read AGENTS.md and work as the intake file importer (Agents/roles/role-intake-file-importer.md) on all of _imports/ (foreign files) and _captures/ (capture notes), following the manual exactly, from the lint baseline to the run log.
 
 On this machine: wherever the manual says \`python3 .scripts/vault-lint ...\`, run \`vault-lint ...\` (.scripts/ isn't synced here). Move with \`vault-mv SRC DEST\` and copy with \`vault-cp SRC DEST\`: both paths inside the vault, DEST's folder created first with \`mkdir -p\`, never overwriting. There is no cp, mv, rm, or git, and no network.
 
@@ -472,19 +472,19 @@ Nobody is watching, so:
 - Don't ask. When something needs Bran (an ambiguous destination or meaning), make the safest choice the manual allows, usually leaving the file where it is or creating an inbox task, and list it under "Decisions for Bran".
 - Nothing leaves the vault, nothing is deleted, nothing is committed.
 
-Reply with: files in, Resources and People created or updated, tasks created, files left in _inbox/ or _captures/ and why, and the decisions for Bran.
+Reply with: files in, Resources and People created or updated, tasks created, files left in _imports/ or _captures/ and why, and the decisions for Bran.
 EOF
 }
 
-# Files waiting in one drop folder (default _inbox), not counting its top-level .gitkeep or any .DS_Store.
+# Files waiting in one drop folder (default _imports), not counting its top-level .gitkeep or any .DS_Store.
 drop_count() {
-    local dir="${VAULT_DIR}/${1:-_inbox}"
+    local dir="${VAULT_DIR}/${1:-_imports}"
     find "${dir}" -type f ! -path "${dir}/.gitkeep" ! -name .DS_Store 2>/dev/null | wc -l | tr -d ' '
 }
 
-# Files waiting in both drop folders: _inbox/ (foreign files) and _captures/ (capture notes).
-inbox_count() {
-    echo $(( $(drop_count _inbox) + $(drop_count _captures) ))
+# Files waiting in both drop folders: _imports/ (foreign files) and _captures/ (capture notes).
+pending_count() {
+    echo $(( $(drop_count _imports) + $(drop_count _captures) ))
 }
 
 step_import() {
@@ -501,9 +501,9 @@ step_import() {
     git -C "${TOOLS_DIR}" pull --quiet --depth 1 || log "could not update vault-lint; using the current copy"
 
     local count
-    count="$(inbox_count)"
+    count="$(pending_count)"
     if [[ "${count}" -eq 0 ]]; then
-        log "inbox and captures empty"
+        log "imports and captures empty"
         return 0
     fi
     [[ -x "${BIN_DIR}/vault-lint" && -x "${BIN_DIR}/vault-mv" && -x "${BIN_DIR}/vault-cp" ]] \
@@ -517,7 +517,7 @@ step_import() {
     cat "${STATE_DIR}/last-run.txt"
     log "sync up"
     ob sync --path "${VAULT_DIR}"
-    log "$(date '+%F %T') done (claude exit ${status}); ${count} in, $(inbox_count) left in _inbox/ and _captures/"
+    log "$(date '+%F %T') done (claude exit ${status}); ${count} in, $(pending_count) left in _imports/ and _captures/"
     return "${status}"
 }
 
@@ -531,7 +531,7 @@ step_status() {
     printf 'claude    %s\n' "$(claude --version 2>/dev/null || echo missing)"
     printf 'vault     %s\n' "$([[ -d "${VAULT_DIR}" ]] && echo "${VAULT_DIR}" || echo 'not linked')"
     printf 'lint      %s\n' "$([[ -f "${TOOLS_DIR}/.scripts/vault-lint" ]] && echo ok || echo missing)"
-    printf 'inbox     %s file(s)\n' "$(drop_count _inbox)"
+    printf 'imports   %s file(s)\n' "$(drop_count _imports)"
     printf 'captures  %s file(s)\n' "$(drop_count _captures)"
     printf 'cron      %s\n' "$(crontab -l 2>/dev/null | grep -F "${CRON_TAG}" || echo none)"
 }
