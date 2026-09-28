@@ -457,9 +457,9 @@ EOF
 
 import_prompt() {
     cat <<EOF
-You are the importer for Bran's Obsidian vault at ${VAULT_DIR}, on the Pi-hole box as the locked-down '${AGENT_USER}' user, in an unattended daily run. Keep this prompt in step with the Mac's "Process inbox>vault" routine (~/.claude/scheduled-tasks/blife-inbox-import/SKILL.md).
+You are the intake file importer for Bran's Obsidian vault at ${VAULT_DIR}, on the Pi-hole box as the locked-down '${AGENT_USER}' user, in an unattended daily run. Keep this prompt in step with the Mac's "Process inbox>vault" routine (~/.claude/scheduled-tasks/blife-inbox-import/SKILL.md).
 
-Read AGENTS.md and work as the importer (Agents/roles/role-importer.md) on all of _inbox/, following the manual exactly, from the lint baseline to the run log.
+Read AGENTS.md and work as the intake file importer (Agents/roles/role-intake-file-importer.md) on all of _inbox/, following the manual exactly, from the lint baseline to the run log.
 
 On this machine: wherever the manual says \`python3 .scripts/vault-lint ...\`, run \`vault-lint ...\` (.scripts/ isn't synced here). Move with \`vault-mv SRC DEST\` and copy with \`vault-cp SRC DEST\`: both paths inside the vault, DEST's folder created first with \`mkdir -p\`, never overwriting. There is no cp, mv, rm, or git, and no network.
 
