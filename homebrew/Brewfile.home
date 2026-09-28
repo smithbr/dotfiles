@@ -2,3 +2,4 @@
 # Usage: brew bundle [--file=Brewfile.home]
 
 brew "vhs"
+brew "superradcompany/tap/microsandbox"

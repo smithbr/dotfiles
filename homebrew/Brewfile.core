@@ -24,7 +24,6 @@ brew "ripgrep"
 brew "shellcheck"
 brew "skills"
 brew "stow"
-brew "superradcompany/tap/microsandbox"
 brew "uv"
 brew "xdg-ninja", args:["--HEAD"]
 cask "1password-cli"
