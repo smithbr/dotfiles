@@ -148,6 +148,11 @@ install_commands() {
 
 step_user() {
     require_not_user "${AGENT_USER}" user
+    # The installed copy can come first on PATH in a shell opened before the dotfiles were
+    # linked; installing it over itself fails and never picks up the repo's version.
+    if [[ "${BASH_SOURCE[0]}" -ef "${BIN_DIR}/ph-agent-setup" ]]; then
+        die "this is the installed copy in ${BIN_DIR}; run the repo's: ~/.local/bin/ph-agent-setup user"
+    fi
     if id "${AGENT_USER}" >/dev/null 2>&1; then
         log "user ${AGENT_USER} exists"
     else

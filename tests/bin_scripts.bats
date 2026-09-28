@@ -3178,6 +3178,19 @@ KEYS
     assert_output --partial 'exec /usr/local/bin/ph-agent-setup cp "$@"'
 }
 
+@test "ph-agent-setup user refuses to reinstall the installed copy over itself" {
+    agent_setup_sandbox pi
+    export PH_AGENT_BIN_DIR="${TEST_TMPDIR}/rootbin"
+    mkdir -p "${PH_AGENT_BIN_DIR}"
+    cp "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-agent-setup" "${PH_AGENT_BIN_DIR}/"
+    run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        "${PH_AGENT_BIN_DIR}/ph-agent-setup" user
+    assert_failure
+    assert_output --partial "this is the installed copy"
+    assert_output --partial "~/.local/bin/ph-agent-setup user"
+    [ ! -e "${TEST_TMPDIR}/calls" ]
+}
+
 @test "ph-agent-setup schedule keeps exactly one tagged cron entry" {
     agent_setup_sandbox agent
     cat > "${BIN_SANDBOX}/crontab" <<'MOCK'
