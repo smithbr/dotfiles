@@ -43,8 +43,8 @@ Set up the locked-down `agent` user on the Pi-hole box and run the daily blife `
 | `authorize` | pi (sudo, or the key on stdin) | Let agent's key fetch `~/git/vault.git` and nothing else |
 | `link` | agent | Sync the vault to `~/blife` (runs `ob login` if needed), check out `.scripts/` read-only |
 | `schedule` | agent | Install the daily cron job |
-| `import` | agent | One import run: sync, import `_imports/` and `_captures/` as the importer role, sync |
-| `status` | agent | Show versions, sync state, cron entry, and imports and captures counts |
+| `import` | agent (or pi, which switches to agent) | One import run: sync, import `_imports/` and `_captures/` as the importer role, sync |
+| `status` | agent (or pi, which switches to agent) | Show versions, sync state, cron entry, and imports and captures counts |
 | `sync` | agent (or pi, which switches to agent) | Sync the vault now, then show `status` |
 
 The import calls `vault-lint ARGS` (`ph-agent-setup lint ARGS`), `vault-mv SRC DEST`
@@ -490,6 +490,7 @@ pending_count() {
 
 step_import() {
     require_linux
+    switch_to_agent import
     require_user "${AGENT_USER}" import
     use_local_bin
     umask 077
@@ -524,13 +525,19 @@ step_import() {
 
 # ---- status ------------------------------------------------------------------
 
-# Sync the vault now instead of waiting for the next import, then show status. Run as the
-# admin user, it switches to agent through the root-owned copy, since agent can't read pi's.
+# Run as the admin user, sync, import, and status switch to agent through the root-owned
+# copy, since agent can't read pi's.
+switch_to_agent() {
+    local step="${1}"
+    if [[ "$(id -un)" == "${ADMIN_USER}" ]]; then
+        exec sudo -iu "${AGENT_USER}" "${BIN_DIR}/ph-agent-setup" "${step}"
+    fi
+}
+
+# Sync the vault now instead of waiting for the next import, then show status.
 step_sync() {
     require_linux
-    if [[ "$(id -un)" == "${ADMIN_USER}" ]]; then
-        exec sudo -iu "${AGENT_USER}" "${BIN_DIR}/ph-agent-setup" sync
-    fi
+    switch_to_agent sync
     require_user "${AGENT_USER}" sync
     use_local_bin
     umask 077
@@ -543,6 +550,7 @@ step_sync() {
 }
 
 step_status() {
+    switch_to_agent status
     use_local_bin
     printf 'user      %s\n' "$(id -un)"
     printf 'node      %s\n' "$(node -v 2>/dev/null || echo missing)"

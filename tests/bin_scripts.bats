@@ -3070,9 +3070,9 @@ run_agent_setup() {
     assert_failure
     assert_output --partial "run 'user' as the admin user"
     agent_setup_sandbox pi
-    run_agent_setup import
+    run_agent_setup schedule
     assert_failure
-    assert_output --partial "run 'import' as agent"
+    assert_output --partial "run 'schedule' as agent"
 }
 
 # Runs authorize with the contents of file ${1} on stdin.
@@ -3284,6 +3284,18 @@ MOCK
     assert_success
     run cat "${TEST_TMPDIR}/calls"
     assert_output "sudo -iu agent /usr/local/bin/ph-agent-setup sync"
+}
+
+@test "ph-agent-setup import and status as pi switch to agent through the installed copy" {
+    local step
+    for step in import status; do
+        agent_setup_sandbox pi
+        rm -f "${TEST_TMPDIR}/calls"
+        run_agent_setup "${step}"
+        assert_success
+        run cat "${TEST_TMPDIR}/calls"
+        assert_output "sudo -iu agent /usr/local/bin/ph-agent-setup ${step}"
+    done
 }
 
 @test "ph-agent-setup sync refuses while an import holds the lock" {
