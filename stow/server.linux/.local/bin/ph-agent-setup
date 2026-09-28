@@ -328,6 +328,8 @@ step_link() {
         ssh-keyscan -H localhost >> "${HOME}/.ssh/known_hosts" 2>/dev/null
         git clone --quiet --depth 1 --filter=blob:none --sparse "vault-ro:${VAULT_REPO}" "${TOOLS_DIR}"
         git -C "${TOOLS_DIR}" sparse-checkout set .scripts
+    else
+        update_tools || log "could not update vault-lint; using the current copy"
     fi
     [[ -x "${BIN_DIR}/vault-lint" ]] || die "no ${BIN_DIR}/vault-lint; run 'ph-agent-setup user' as ${ADMIN_USER}"
 
@@ -352,6 +354,13 @@ step_schedule() {
 }
 
 # ---- lint and mv: the import's helpers, as agent -----------------------------
+
+# TOOLS_DIR is a depth-1 clone: a pull can't merge the next commit into it (no shared history),
+# so fetch the newest commit and move to it. Nothing in it is edited by hand.
+update_tools() {
+    git -C "${TOOLS_DIR}" fetch --quiet --depth 1 origin \
+        && git -C "${TOOLS_DIR}" reset --quiet --hard FETCH_HEAD
+}
 
 # vault-lint runs python3 from TOOLS_DIR, an agent-owned clone. The import must never be able
 # to write there (see the deny rules in write_claude_settings), or it could replace the linter
@@ -500,7 +509,7 @@ step_import() {
 
     log "$(date '+%F %T') sync down"
     ob sync --path "${VAULT_DIR}"
-    git -C "${TOOLS_DIR}" pull --quiet --depth 1 || log "could not update vault-lint; using the current copy"
+    update_tools || log "could not update vault-lint; using the current copy"
 
     local count
     count="$(pending_count)"

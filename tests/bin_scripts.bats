@@ -3233,6 +3233,35 @@ MOCK
     assert_output "0"
 }
 
+@test "ph-agent-setup import moves the depth-1 vault-lint clone to the newest commit" {
+    agent_setup_sandbox agent
+    rm "${BIN_SANDBOX}/git"
+    local origin="${TEST_TMPDIR}/origin" tools="${TEST_TMPDIR}/home/.local/share/blife-tools"
+    local g=(git -c user.name=t -c user.email=t@example.com -c init.defaultBranch=main)
+    mkdir -p "${origin}/.scripts" "${TEST_TMPDIR}/home/blife/_imports"
+    "${g[@]}" init --quiet "${origin}"
+    printf 'v1\n' > "${origin}/.scripts/vault-lint"
+    "${g[@]}" -C "${origin}" add . && "${g[@]}" -C "${origin}" commit --quiet -m one
+    "${g[@]}" clone --quiet --depth 1 "file://${origin}" "${tools}"
+    printf 'v2\n' > "${origin}/.scripts/vault-lint"
+    "${g[@]}" -C "${origin}" commit --quiet -am two
+    printf 'v3\n' > "${origin}/.scripts/vault-lint"
+    "${g[@]}" -C "${origin}" commit --quiet -am three
+    local tool
+    for tool in ob claude flock; do
+        cat > "${BIN_SANDBOX}/${tool}" <<MOCK
+#!/usr/bin/env bash
+printf '${tool} %s\n' "\$*" >> "${TEST_TMPDIR}/calls"
+MOCK
+        chmod +x "${BIN_SANDBOX}/${tool}"
+    done
+    run_agent_setup import
+    assert_success
+    refute_output --partial "could not update vault-lint"
+    run cat "${tools}/.scripts/vault-lint"
+    assert_output "v3"
+}
+
 @test "ph-agent-setup status counts hidden import files but not .gitkeep or .DS_Store" {
     agent_setup_sandbox agent
     mkdir -p "${TEST_TMPDIR}/home/blife/_imports/sub"
