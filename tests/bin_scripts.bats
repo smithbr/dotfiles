@@ -3178,6 +3178,47 @@ KEYS
     assert_output --partial 'exec /usr/local/bin/ph-agent-setup cp "$@"'
 }
 
+@test "ph-agent-setup user names the next setup step that hasn't run, or none" {
+    agent_setup_sandbox pi
+    export PH_AGENT_HOME="${TEST_TMPDIR}/agent-home" PH_AGENT_BIN_DIR="${TEST_TMPDIR}/rootbin"
+    mkdir -p "${PH_AGENT_HOME}"
+    # Run test and crontab for real against the sandbox; record and skip everything else.
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+case "${1}" in
+    test) shift; exec test "$@" ;;
+    crontab) cat "${TEST_TMPDIR}/agent-crontab" 2>/dev/null ;;
+    sshd) printf 'authorizedkeysfile /etc/ssh/authorized_keys/%%u\n' ;;
+    *) printf 'sudo %s\n' "$*" >> "${TEST_TMPDIR}/calls" ;;
+esac
+MOCK
+    printf 'ssh-ed25519 AAAApersonal bran@mac\n' > "${TEST_TMPDIR}/home/.ssh/authorized_keys"
+
+    run_agent_setup user
+    assert_success
+    assert_output --partial "Next, as agent: ph-agent-setup install"
+
+    mkdir -p "${PH_AGENT_HOME}/.local/bin"
+    printf '#!/bin/sh\n' > "${PH_AGENT_HOME}/.local/bin/claude"
+    chmod +x "${PH_AGENT_HOME}/.local/bin/claude"
+    run_agent_setup user
+    assert_output --partial "Next, as pi: ph-agent-setup authorize"
+
+    printf 'restrict,command="git upload-pack x" ssh-ed25519 AAAAro agent-vault-ro\n' >> "${TEST_TMPDIR}/home/.ssh/authorized_keys"
+    run_agent_setup user
+    assert_output --partial "Next, as agent: ph-agent-setup link"
+
+    mkdir -p "${PH_AGENT_HOME}/.local/share/blife-tools/.git"
+    run_agent_setup user
+    assert_output --partial "Next, as agent: ph-agent-setup schedule"
+
+    printf '0 7 * * * /usr/local/bin/ph-agent-setup import # ph-agent-setup import\n' > "${TEST_TMPDIR}/agent-crontab"
+    run_agent_setup user
+    assert_success
+    assert_output --partial "agent was already set up; nothing else to run"
+    refute_output --partial "Next,"
+}
+
 @test "ph-agent-setup user refuses to reinstall the installed copy over itself" {
     agent_setup_sandbox pi
     export PH_AGENT_BIN_DIR="${TEST_TMPDIR}/rootbin"

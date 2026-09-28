@@ -165,7 +165,28 @@ step_user() {
         "${AGENT_HOME}/.ssh" "${AGENT_HOME}/.local" "${AGENT_HOME}/.local/bin"
     install_agent_keys
     install_commands
-    log "done. Next, as ${AGENT_USER}: ph-agent-setup install (or, if set up before, ph-agent-setup schedule)"
+    local next
+    next="$(next_setup_step)"
+    if [[ -n "${next}" ]]; then
+        log "done. Next, ${next}"
+    else
+        log "done. ${AGENT_USER} was already set up; nothing else to run"
+    fi
+}
+
+# The first later step that hasn't run yet, as "as USER: ph-agent-setup STEP", or nothing
+# when all have. Each step leaves a marker; agent's home is closed to pi, so look with sudo.
+next_setup_step() {
+    local tools="${PH_AGENT_TOOLS_DIR:-${AGENT_HOME}/.local/share/blife-tools}"
+    if ! sudo test -x "${AGENT_HOME}/.local/bin/claude"; then
+        printf 'as %s: ph-agent-setup install\n' "${AGENT_USER}"
+    elif ! grep -qs 'agent-vault-ro$' "${HOME}/.ssh/authorized_keys"; then
+        printf 'as %s: ph-agent-setup authorize\n' "${ADMIN_USER}"
+    elif ! sudo test -d "${tools}/.git"; then
+        printf 'as %s: ph-agent-setup link\n' "${AGENT_USER}"
+    elif ! sudo crontab -u "${AGENT_USER}" -l 2>/dev/null | grep -qF "${CRON_TAG}"; then
+        printf 'as %s: ph-agent-setup schedule\n' "${AGENT_USER}"
+    fi
 }
 
 # ---- install: as agent -------------------------------------------------------
