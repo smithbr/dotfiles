@@ -20,10 +20,10 @@ setup() {
         printf 'managed\n' > "${TEST_SOURCE_DIR}/stow/common/${relative}"
         ln -s "${TEST_SOURCE_DIR}/stow/common/${relative}" "${HOME}/${relative}"
     done
-    mkdir -p "${HOME}/.config/agents/skills"
-    for relative in .agents/skills .claude/skills .cursor/skills; do
+    mkdir -p "${HOME}/.config/agents/skills" "${HOME}/.agents/skills"
+    for relative in .claude/skills .cursor/skills; do
         mkdir -p "$(dirname "${HOME}/${relative}")"
-        ln -s "${HOME}/.config/agents/skills" "${HOME}/${relative}"
+        ln -s "${HOME}/.agents/skills" "${HOME}/${relative}"
     done
     for relative in .claude/CLAUDE.md .codex/AGENTS.md .cursor/AGENTS.md; do
         mkdir -p "$(dirname "${HOME}/${relative}")"
