@@ -14,9 +14,11 @@ setup() {
 
     # Stands in for the private agents repo.
     AGENTS_FIXTURE="${TEST_TMPDIR}/agents-origin"
-    mkdir -p "${AGENTS_FIXTURE}/skills/demo" "${AGENTS_FIXTURE}/tools/claude"
+    mkdir -p "${AGENTS_FIXTURE}/skills/core/demo" "${AGENTS_FIXTURE}/skills/extra/other" \
+        "${AGENTS_FIXTURE}/tools/claude"
     printf 'rules\n' > "${AGENTS_FIXTURE}/AGENTS.md"
-    printf 'skill\n' > "${AGENTS_FIXTURE}/skills/demo/SKILL.md"
+    printf 'skill\n' > "${AGENTS_FIXTURE}/skills/core/demo/SKILL.md"
+    printf 'skill\n' > "${AGENTS_FIXTURE}/skills/extra/other/SKILL.md"
     printf '{}\n' > "${AGENTS_FIXTURE}/tools/claude/settings.json"
     git -C "${AGENTS_FIXTURE}" init -q
     git -C "${AGENTS_FIXTURE}" add -A
@@ -291,6 +293,34 @@ stat_mode() {
     [ "$(stat_mode "${DEST}/.claude")" = 700 ]
 }
 
+@test "stows only the core skill bundle into a real skills directory" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    run_link
+    assert_success
+    [ -d "${DEST}/.agents/skills" ] && [ ! -L "${DEST}/.agents/skills" ]
+    [ -L "${DEST}/.agents/skills/demo" ]
+    [ ! -e "${DEST}/.agents/skills/other" ]
+    [ "$(readlink "${DEST}/.claude/skills")" = "${DEST}/.agents/skills" ]
+    [ "$(readlink "${DEST}/.cursor/skills")" = "${DEST}/.agents/skills" ]
+}
+
+@test "replaces the old whole-library skills link and keeps imported bundles" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    run_link
+    assert_success
+    stow --dir "${DEST}/.config/agents/skills" --target "${DEST}/.agents/skills" extra
+    run_link
+    assert_success
+    [ -L "${DEST}/.agents/skills/other" ]
+
+    rm -rf "${DEST}/.agents/skills"
+    ln -s "${DEST}/.config/agents/skills" "${DEST}/.agents/skills"
+    run_link
+    assert_success
+    [ ! -L "${DEST}/.agents/skills" ]
+    [ -L "${DEST}/.agents/skills/demo" ]
+}
+
 @test "moves real agent config aside and leaves unmanaged agent state alone" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     mkdir -p "${DEST}/.claude/skills/mine" "${DEST}/.claude/projects/sess"
@@ -359,6 +389,8 @@ stat_mode() {
     assert_line "${DEST}/Library/Application Support/Code/User/settings.json"
     assert_line "${DEST}/.config/gh/hosts.yml"
     assert_line "${DEST}/.claude/settings.json"
+    assert_line "${DEST}/.claude/skills"
+    assert_line "${DEST}/.agents/skills"
     assert_line "${DEST}/.config/agents"
     refute_line "${DEST}/.config/Code/User/settings.json"
 }
@@ -371,7 +403,7 @@ stat_mode() {
     rm "${DEST}/.bashrc"
     rm "${DEST}/.zshenv" && printf 'saved by an editor\n' > "${DEST}/.zshenv"
     rm "${DEST}/.config/git/ignore" && ln -s /somewhere/else "${DEST}/.config/git/ignore"
-    rm -rf "${DEST}/.config/agents/skills"
+    rm -rf "${DEST}/.agents/skills"
     local editor="${DEST}/Library/Application Support/Code/User"
     rm "${editor}/settings.json" && printf '{}\n' > "${editor}/settings.json"
     rm "${editor}/keybindings.json"
@@ -384,6 +416,7 @@ stat_mode() {
     assert_line "missing ${DEST}/.bashrc"
     assert_line "replaced ${DEST}/.zshenv"
     assert_line "foreign ${DEST}/.config/git/ignore"
+    assert_line "missing ${DEST}/.agents/skills"
     assert_line "broken ${DEST}/.claude/skills"
     refute_line --partial ".config/git/config"
 }

@@ -14,6 +14,9 @@
 #                           editor's user directory listed in editor_dirs.
 #   AGENT_LINKS             symlinks into the private agents checkout, which is
 #                           cloned into ~/.config/agents and refreshed weekly.
+#   SKILL_LINKS             link to ~/.agents/skills, a real directory that Stow
+#                           fills from the agents repo's skills/ bundles. Only
+#                           core is stowed here; skill-import adds more locally.
 #
 # A real file where a link belongs is replaced only when its content matches
 # the repo. Anything else is moved to ~/.local/state/dotfiles/clobbered/ first,
@@ -42,14 +45,15 @@ AGENTS_REFRESH_DAYS=7
 
 # destination|target inside ~/.config/agents
 AGENT_LINKS=(
-    ".agents/skills|skills"
     ".claude/CLAUDE.md|AGENTS.md"
     ".claude/settings.json|tools/claude/settings.json"
-    ".claude/skills|skills"
     ".codex/AGENTS.md|AGENTS.md"
     ".cursor/AGENTS.md|AGENTS.md"
-    ".cursor/skills|skills"
 )
+
+# Enabled skills live in SKILLS_DIR (relative to $HOME); these link to it.
+SKILLS_DIR=".agents/skills"
+SKILL_LINKS=(.claude/skills .cursor/skills)
 
 # destination directory|directory under editors/, one line per editor. Every
 # file in the editors/ directory is linked into the destination directory.
@@ -597,6 +601,35 @@ link_agents() {
     done
 }
 
+# ~/.agents/skills is machine-local: Stow links the core bundle into it, and
+# skill-import links more. The old layout linked it to the whole library.
+link_skills() {
+    local skills="${DEST}/${SKILLS_DIR}" bundles="${DEST}/.config/agents/skills"
+    local relative target
+
+    [[ -d "${bundles}/core" ]] || return 0
+    if [[ "${DRY_RUN}" -eq 1 ]]; then
+        printf 'Would stow skill bundle core into %s\n' "${skills}"
+        return 0
+    fi
+
+    [[ -L "${skills}" ]] && rm "${skills}"
+    mkdir -p "${skills}"
+    if ! stow --dir "${bundles}" --target "${skills}" --restow --ignore '\.DS_Store' core; then
+        log_warn "Could not stow the core skills into ${skills}; resolve the conflict above and rerun"
+    fi
+
+    for relative in "${SKILL_LINKS[@]}"; do
+        target="${DEST}/${relative}"
+        [[ -L "${target}" && "$(readlink "${target}")" == "${skills}" ]] && continue
+        if [[ -e "${target}" && ! -L "${target}" ]]; then
+            backup_path "${target}"
+        fi
+        mkdir -p "$(dirname "${target}")"
+        ln -sfn "${skills}" "${target}"
+    done
+}
+
 # destination|source for every shared editor file on this platform.
 editor_links() {
     local entry dir name relative
@@ -684,9 +717,10 @@ print_managed() {
         printf '%s/%s\n' "${DEST}" "${entry%%|*}"
     done < <(editor_links)
     [[ "${PERSONA_AGENTS}" == yes ]] || return 0
-    for entry in "${AGENT_LINKS[@]}"; do
+    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}"; do
         printf '%s/%s\n' "${DEST}" "${entry%%|*}"
     done
+    printf '%s/%s\n' "${DEST}" "${SKILLS_DIR}"
     printf '%s/.config/agents\n' "${DEST}"
 }
 
@@ -730,6 +764,28 @@ print_status() {
             printf 'missing %s\n' "${target}"
         fi
     done
+
+    if [[ "${PERSONA_AGENTS}" == yes ]]; then
+        target="${DEST}/${SKILLS_DIR}"
+        if [[ -L "${target}" || ( -e "${target}" && ! -d "${target}" ) ]]; then
+            printf 'replaced %s\n' "${target}"
+        elif [[ ! -d "${target}" ]]; then
+            printf 'missing %s\n' "${target}"
+        fi
+        for entry in "${SKILL_LINKS[@]}"; do
+            link_target="${DEST}/${SKILLS_DIR}"
+            target="${DEST}/${entry}"
+            if [[ -L "${target}" && "$(readlink "${target}")" == "${link_target}" ]]; then
+                [[ -e "${target}" ]] || printf 'broken %s\n' "${target}"
+            elif [[ -L "${target}" ]]; then
+                printf 'foreign %s\n' "${target}"
+            elif [[ -e "${target}" ]]; then
+                printf 'replaced %s\n' "${target}"
+            else
+                printf 'missing %s\n' "${target}"
+            fi
+        done
+    fi
 
     while IFS= read -r target; do
         printf 'stale %s\n' "${target}"
@@ -778,6 +834,7 @@ main() {
             if [[ "${PERSONA_AGENTS}" == yes ]]; then
                 sync_agents_repo
                 link_agents
+                link_skills
             fi
             copy_seeds
             secure_private_dirs
