@@ -3213,7 +3213,7 @@ MOCK
     done
     run_agent_setup import
     assert_success
-    assert_output --partial "inbox empty"
+    assert_output --partial "inbox and captures empty"
     run grep -c "^ob sync --path ${TEST_TMPDIR}/home/blife" "${TEST_TMPDIR}/calls"
     assert_output "1"
     run grep -c "^claude" "${TEST_TMPDIR}/calls"
@@ -3231,6 +3231,43 @@ MOCK
     run_agent_setup status
     assert_success
     assert_output --partial "inbox     2 file(s)"
+}
+
+@test "ph-agent-setup status counts captures separately from the inbox" {
+    agent_setup_sandbox agent
+    mkdir -p "${TEST_TMPDIR}/home/blife/_inbox" "${TEST_TMPDIR}/home/blife/_captures/sweep-2026-09-27-2000"
+    touch "${TEST_TMPDIR}/home/blife/_inbox/scan.pdf" \
+        "${TEST_TMPDIR}/home/blife/_captures/.gitkeep" \
+        "${TEST_TMPDIR}/home/blife/_captures/sweep-2026-09-27-2000/pay-the-bill.md" \
+        "${TEST_TMPDIR}/home/blife/_captures/sweep-2026-09-27-2000/bill.pdf"
+    run_agent_setup status
+    assert_success
+    assert_output --partial "inbox     1 file(s)"
+    assert_output --partial "captures  2 file(s)"
+}
+
+@test "ph-agent-setup import starts Claude when only _captures/ has files" {
+    agent_setup_sandbox agent
+    mkdir -p "${TEST_TMPDIR}/home/blife/_inbox" "${TEST_TMPDIR}/home/blife/_captures" "${TEST_TMPDIR}/rootbin"
+    touch "${TEST_TMPDIR}/home/blife/_inbox/.gitkeep" "${TEST_TMPDIR}/home/blife/_captures/note.md"
+    export PH_AGENT_BIN_DIR="${TEST_TMPDIR}/rootbin"
+    local tool
+    for tool in vault-lint vault-mv vault-cp; do
+        printf '#!/usr/bin/env bash\n' > "${PH_AGENT_BIN_DIR}/${tool}"
+        chmod +x "${PH_AGENT_BIN_DIR}/${tool}"
+    done
+    for tool in ob claude flock; do
+        cat > "${BIN_SANDBOX}/${tool}" <<MOCK
+#!/usr/bin/env bash
+printf '${tool} %s\n' "\$*" >> "${TEST_TMPDIR}/calls"
+MOCK
+        chmod +x "${BIN_SANDBOX}/${tool}"
+    done
+    run_agent_setup import
+    assert_success
+    assert_output --partial "importing 1 file(s)"
+    run grep -c "^claude" "${TEST_TMPDIR}/calls"
+    assert_output "1"
 }
 
 @test "ph-agent-setup import gives Claude a vault-scoped allowlist without find, cp, or mv" {
