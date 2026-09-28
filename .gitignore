@@ -9,3 +9,6 @@ stow/*/.codex/config.toml
 
 # Machine-local overrides
 stow/**/*?.local
+
+# Claude Code project-local settings
+.claude/
