@@ -3259,6 +3259,44 @@ MOCK
     assert_output --partial "captures  2 file(s)"
 }
 
+@test "ph-agent-setup sync syncs the vault and shows status as agent" {
+    agent_setup_sandbox agent
+    mkdir -p "${TEST_TMPDIR}/home/blife/_imports"
+    touch "${TEST_TMPDIR}/home/blife/_imports/scan.pdf"
+    local tool
+    for tool in ob flock; do
+        cat > "${BIN_SANDBOX}/${tool}" <<MOCK
+#!/usr/bin/env bash
+printf '${tool} %s\n' "\$*" >> "${TEST_TMPDIR}/calls"
+MOCK
+        chmod +x "${BIN_SANDBOX}/${tool}"
+    done
+    run_agent_setup sync
+    assert_success
+    assert_output --partial "imports   1 file(s)"
+    run grep -c "^ob sync --path ${TEST_TMPDIR}/home/blife$" "${TEST_TMPDIR}/calls"
+    assert_output "1"
+}
+
+@test "ph-agent-setup sync as pi switches to agent through the installed copy" {
+    agent_setup_sandbox pi
+    run_agent_setup sync
+    assert_success
+    run cat "${TEST_TMPDIR}/calls"
+    assert_output "sudo -iu agent /usr/local/bin/ph-agent-setup sync"
+}
+
+@test "ph-agent-setup sync refuses while an import holds the lock" {
+    agent_setup_sandbox agent
+    printf '#!/usr/bin/env bash\nexit 1\n' > "${BIN_SANDBOX}/flock"
+    printf '#!/usr/bin/env bash\nprintf "ob %%s\\n" "$*" >> "%s/calls"\n' "${TEST_TMPDIR}" > "${BIN_SANDBOX}/ob"
+    chmod +x "${BIN_SANDBOX}/flock" "${BIN_SANDBOX}/ob"
+    run_agent_setup sync
+    assert_failure
+    assert_output --partial "an import is running"
+    [ ! -e "${TEST_TMPDIR}/calls" ]
+}
+
 @test "ph-agent-setup import starts Claude when only _captures/ has files" {
     agent_setup_sandbox agent
     mkdir -p "${TEST_TMPDIR}/home/blife/_imports" "${TEST_TMPDIR}/home/blife/_captures" "${TEST_TMPDIR}/rootbin"
