@@ -21,22 +21,24 @@ setup() {
         ln -s "${TEST_SOURCE_DIR}/stow/common/${relative}" "${HOME}/${relative}"
     done
     mkdir -p "${HOME}/.config/agents/skills" "${HOME}/.agents/skills"
-    for relative in .claude/skills .cursor/skills; do
+    for relative in .cursor/skills; do
         mkdir -p "$(dirname "${HOME}/${relative}")"
         ln -s "${HOME}/.agents/skills" "${HOME}/${relative}"
     done
-    for relative in .claude/CLAUDE.md .codex/AGENTS.md .cursor/AGENTS.md; do
+    for relative in .codex/AGENTS.md .cursor/AGENTS.md; do
         mkdir -p "$(dirname "${HOME}/${relative}")"
         ln -s "${HOME}/.config/agents/AGENTS.md" "${HOME}/${relative}"
     done
     mkdir -p "${HOME}/.config/agents/agents"
-    ln -s "${HOME}/.config/agents/agents" "${HOME}/.claude/agents"
+    ln -s "${HOME}/.config/agents/agents" "${HOME}/.cursor/agents"
     printf 'agents\n' > "${HOME}/.config/agents/AGENTS.md"
     rm "${HOME}/.config/agents/tools"
-    mkdir -p "${HOME}/.config/agents/tools/claude"
-    printf '{}\n' > "${HOME}/.config/agents/tools/claude/settings.json"
-    # A real file, merged from the managed settings by link.sh.
-    printf '{}\n' > "${HOME}/.claude/settings.json"
+    mkdir -p "${HOME}/.config/agents/tools/cursor"
+    printf '{}\n' > "${HOME}/.config/agents/tools/cursor/cli-config.json"
+    printf '{"version":1,"hooks":{}}\n' > "${HOME}/.config/agents/tools/cursor/hooks.json"
+    # Real files, merged from the managed settings by link.sh.
+    printf '{}\n' > "${HOME}/.cursor/cli-config.json"
+    printf '{"version":1,"hooks":{}}\n' > "${HOME}/.cursor/hooks.json"
     printf 'tool cache\n' > "${HOME}/.config/agents/tools/cache"
 
     export PATH="/usr/bin:/bin"
@@ -74,16 +76,16 @@ teardown() {
     assert_output --partial "action: diff the local file against the repo"
 }
 
-@test "file review explains drifted Claude settings" {
+@test "file review explains drifted Cursor config" {
     command -v jq >/dev/null 2>&1 || skip "jq not installed"
-    printf '{"theme":"auto"}\n' > "${HOME}/.config/agents/tools/claude/settings.json"
+    printf '{"approvalMode":"allowlist"}\n' > "${HOME}/.config/agents/tools/cursor/cli-config.json"
 
     run "${PROJECT_ROOT}/scripts/file-review.sh" --source "${TEST_SOURCE_DIR}"
     assert_success
     # shellcheck disable=SC2088
-    assert_output --partial "$(printf '%s' '~/.claude/settings.json')"
+    assert_output --partial "$(printf '%s' '~/.cursor/cli-config.json')"
     assert_output --partial "status: a managed setting was changed or removed here"
-    [[ "$(cat "${HOME}/.claude/settings.json")" == '{}' ]]
+    [[ "$(cat "${HOME}/.cursor/cli-config.json")" == '{}' ]]
 }
 
 @test "file review finds home leftovers, broken links, and saved backups without changing them" {

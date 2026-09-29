@@ -17,10 +17,12 @@
 #   SKILL_LINKS             link to ~/.agents/skills, a real directory that Stow
 #                           fills from the agents repo's skills/ bundles. Only
 #                           core is stowed here; skill-import adds more locally.
-#   CLAUDE_SETTINGS         a real file, not a link: Claude Code and other apps
-#                           rewrite it. The agents repo's tools/claude/settings
-#                           files are merged into it, and what the last merge
-#                           applied is kept so dropped entries are removed too.
+#   CURSOR_CLI_CONFIG       a real file, not a link: Cursor rewrites it. The
+#                           agents repo's tools/cursor/cli-config.json is merged
+#                           into it, and what the last merge applied is kept
+#                           so dropped entries are removed too.
+#   CURSOR_HOOKS            same for ~/.cursor/hooks.json and
+#                           tools/cursor/hooks.json.
 #
 # A persona without agents gets none of these: its agent links are removed as
 # stale, the merged settings are taken back out, and a leftover checkout is
@@ -57,16 +59,17 @@ AGENTS_REFRESH_DAYS=7
 
 # destination|target inside ~/.config/agents
 AGENT_LINKS=(
-    ".claude/CLAUDE.md|AGENTS.md"
-    ".claude/agents|agents"
-    ".codex/AGENTS.md|AGENTS.md"
     ".cursor/AGENTS.md|AGENTS.md"
+    ".cursor/agents|agents"
+    ".codex/AGENTS.md|AGENTS.md"
 )
 
-# Relative to $HOME. The managed settings are tools/claude/settings.json in the
-# agents checkout.
-CLAUDE_SETTINGS=".claude/settings.json"
-CLAUDE_SETTINGS_STATE=".local/state/dotfiles/claude-settings.json"
+# Relative to $HOME. Managed Cursor config lives in tools/cursor/ in the agents
+# checkout.
+CURSOR_CLI_CONFIG=".cursor/cli-config.json"
+CURSOR_CLI_CONFIG_STATE=".local/state/dotfiles/cursor-cli-config.json"
+CURSOR_HOOKS=".cursor/hooks.json"
+CURSOR_HOOKS_STATE=".local/state/dotfiles/cursor-hooks.json"
 
 # sync(live; new; prev) applies the managed settings `new` to `live`, where
 # `prev` is what the last run applied. Managed scalars win; arrays keep their
@@ -106,7 +109,7 @@ def sync($live; $new; $prev):
 
 # Enabled skills live in SKILLS_DIR (relative to $HOME); these link to it.
 SKILLS_DIR=".agents/skills"
-SKILL_LINKS=(.claude/skills .cursor/skills)
+SKILL_LINKS=(.cursor/skills)
 
 # destination directory|directory under editors/, one line per editor. Every
 # file in the editors/ directory is linked into the destination directory.
@@ -127,7 +130,7 @@ editor_dirs() {
 }
 
 # Directories that hold credentials or private agent state.
-PRIVATE_DIRS=(.ssh .claude .config/glow)
+PRIVATE_DIRS=(.ssh .cursor .config/glow)
 
 usage() {
     cat <<'EOF'
@@ -533,7 +536,8 @@ is_agent_link() {
 # links in ~/.agents/skills when this persona has no agents.
 agent_link_candidates() {
     local entry dir
-    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}" "${CLAUDE_SETTINGS}"; do
+    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}" \
+        "${CURSOR_CLI_CONFIG}" "${CURSOR_HOOKS}"; do
         dirname "${entry%%|*}"
     done | LC_ALL=C sort -u | while IFS= read -r dir; do
         [[ -d "${DEST}/${dir}" && ! -L "${DEST}/${dir}" ]] || continue
@@ -755,9 +759,9 @@ link_skills() {
     done
 }
 
-# The managed Claude settings.
-wanted_claude_settings() {
-    jq . "${DEST}/.config/agents/tools/claude/settings.json"
+# Managed Cursor config files in the agents checkout.
+wanted_cursor_file() {
+    jq . "${DEST}/.config/agents/tools/cursor/$1"
 }
 
 # Print live settings with `new` applied and `prev` retired. live and prev are
@@ -782,27 +786,29 @@ write_private_file() {
     mv "${tmp}" "${target}"
 }
 
-# Merge the managed settings into the real ~/.claude/settings.json. Keys apps
-# add (plugins, their own hooks) survive; managed values are restored. The old
-# link into the checkout is already gone by now: prune_stale_links removed it.
-apply_claude_settings() {
-    local target="${DEST}/${CLAUDE_SETTINGS}" state="${DEST}/${CLAUDE_SETTINGS_STATE}"
-    local live=/dev/null prev=/dev/null wanted merged
+# Merge one managed Cursor JSON file into the real destination. Keys apps add
+# survive; managed values are restored. The old link into the checkout is
+# already gone by now: prune_stale_links removed it.
+merge_cursor_file() {
+    local relative="$1" managed_name="$2" state_rel="$3" label="$4"
+    local target="${DEST}/${relative}" state="${DEST}/${state_rel}"
+    local live=/dev/null prev=/dev/null wanted merged source
 
-    [[ -f "${DEST}/.config/agents/tools/claude/settings.json" ]] || return 0
+    source="${DEST}/.config/agents/tools/cursor/${managed_name}"
+    [[ -f "${source}" ]] || return 0
     if ! command -v jq >/dev/null 2>&1; then
         log_warn "jq is not installed; skipping ${target}"
         return 0
     fi
-    if ! wanted="$(wanted_claude_settings)"; then
-        log_warn "Could not read the Claude settings in ${DEST}/.config/agents/tools/claude; skipping ${target}"
+    if ! wanted="$(wanted_cursor_file "${managed_name}")"; then
+        log_warn "Could not read ${source}; skipping ${target}"
         return 0
     fi
     [[ -f "${state}" ]] && prev="${state}"
 
     if [[ -L "${target}" ]]; then
         if [[ "${DRY_RUN}" -eq 1 ]]; then
-            is_agent_link "${target}" || printf 'Would back up %s before writing settings\n' "${target}"
+            is_agent_link "${target}" || printf 'Would back up %s before writing %s\n' "${target}" "${label}"
         else
             backup_path "${target}"
         fi
@@ -810,7 +816,7 @@ apply_claude_settings() {
         if jq empty "${target}" 2>/dev/null; then
             live="${target}"
         elif [[ "${DRY_RUN}" -eq 1 ]]; then
-            printf 'Would back up %s (not valid JSON) before writing settings\n' "${target}"
+            printf 'Would back up %s (not valid JSON) before writing %s\n' "${target}" "${label}"
         else
             log_warn "${target} is not valid JSON; moving it aside"
             backup_path "${target}"
@@ -823,38 +829,49 @@ apply_claude_settings() {
         return 0
     fi
     if [[ "${DRY_RUN}" -eq 1 ]]; then
-        printf 'Would merge the managed Claude settings into %s\n' "${target}"
+        printf 'Would merge the managed Cursor %s into %s\n' "${label}" "${target}"
         return 0
     fi
     [[ "${live}" != /dev/null ]] && backup_path "${target}"
     write_private_file "${target}" "${merged}"
     write_private_file "${state}" "${wanted}"
-    printf 'Merged the managed Claude settings into %s\n' "${target}"
+    printf 'Merged the managed Cursor %s into %s\n' "${label}" "${target}"
 }
 
-# A persona without agents: take back out what apply_claude_settings merged
-# in, leaving what apps wrote.
-remove_claude_settings() {
-    local target="${DEST}/${CLAUDE_SETTINGS}" state="${DEST}/${CLAUDE_SETTINGS_STATE}" merged
+apply_cursor_config() {
+    merge_cursor_file "${CURSOR_CLI_CONFIG}" cli-config.json "${CURSOR_CLI_CONFIG_STATE}" cli-config
+    merge_cursor_file "${CURSOR_HOOKS}" hooks.json "${CURSOR_HOOKS_STATE}" hooks
+}
+
+# A persona without agents: take back out what apply_cursor_config merged in,
+# leaving what apps wrote.
+unmerge_cursor_file() {
+    local relative="$1" state_rel="$2" label="$3"
+    local target="${DEST}/${relative}" state="${DEST}/${state_rel}" merged
 
     [[ -f "${state}" ]] || return 0
     if ! command -v jq >/dev/null 2>&1; then
-        log_warn "jq is not installed; leaving the managed settings in ${target}"
+        log_warn "jq is not installed; leaving the managed ${label} in ${target}"
         return 0
     fi
     if [[ -f "${target}" && ! -L "${target}" ]] && jq empty "${target}" 2>/dev/null; then
         merged="$(sync_settings "${target}" null "${state}")"
         if ! same_json "${target}" "${merged}"; then
             if [[ "${DRY_RUN}" -eq 1 ]]; then
-                printf 'Would remove the managed Claude settings from %s\n' "${target}"
+                printf 'Would remove the managed Cursor %s from %s\n' "${label}" "${target}"
                 return 0
             fi
             backup_path "${target}"
             write_private_file "${target}" "${merged}"
-            printf 'Removed the managed Claude settings from %s\n' "${target}"
+            printf 'Removed the managed Cursor %s from %s\n' "${label}" "${target}"
         fi
     fi
     [[ "${DRY_RUN}" -eq 1 ]] || rm -f "${state}"
+}
+
+remove_cursor_config() {
+    unmerge_cursor_file "${CURSOR_CLI_CONFIG}" "${CURSOR_CLI_CONFIG_STATE}" cli-config
+    unmerge_cursor_file "${CURSOR_HOOKS}" "${CURSOR_HOOKS_STATE}" hooks
 }
 
 warn_unused_agents_checkout() {
@@ -949,7 +966,8 @@ print_managed() {
         printf '%s/%s\n' "${DEST}" "${entry%%|*}"
     done < <(editor_links)
     [[ "${PERSONA_AGENTS}" == yes ]] || return 0
-    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}" "${CLAUDE_SETTINGS}"; do
+    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}" \
+        "${CURSOR_CLI_CONFIG}" "${CURSOR_HOOKS}"; do
         printf '%s/%s\n' "${DEST}" "${entry%%|*}"
     done
     printf '%s/%s\n' "${DEST}" "${SKILLS_DIR}"
@@ -1017,7 +1035,7 @@ print_status() {
                 printf 'missing %s\n' "${target}"
             fi
         done
-        print_claude_settings_state
+        print_cursor_config_state
     elif [[ -e "${DEST}/.config/agents" ]]; then
         printf 'unused %s\n' "${DEST}/.config/agents"
     fi
@@ -1030,10 +1048,10 @@ print_status() {
 # missing, foreign (a link other than the old one into the checkout, which is
 # reported as stale), or drifted (the next run would change it). Needs jq and
 # the checkout to say anything.
-print_claude_settings_state() {
-    local target="${DEST}/${CLAUDE_SETTINGS}" state="${DEST}/${CLAUDE_SETTINGS_STATE}"
-    local prev=/dev/null wanted
-    [[ -f "${DEST}/.config/agents/tools/claude/settings.json" ]] || return 0
+print_cursor_managed_state() {
+    local relative="$1" managed_name="$2" state_rel="$3"
+    local target="${DEST}/${relative}" state="${DEST}/${state_rel}" prev=/dev/null wanted
+    [[ -f "${DEST}/.config/agents/tools/cursor/${managed_name}" ]] || return 0
     command -v jq >/dev/null 2>&1 || return 0
     if [[ -L "${target}" ]]; then
         is_agent_link "${target}" || printf 'foreign %s\n' "${target}"
@@ -1044,10 +1062,15 @@ print_claude_settings_state() {
     fi
     [[ -f "${state}" ]] && prev="${state}"
     if ! jq empty "${target}" 2>/dev/null \
-        || ! wanted="$(wanted_claude_settings 2>/dev/null)" \
+        || ! wanted="$(wanted_cursor_file "${managed_name}" 2>/dev/null)" \
         || ! same_json "${target}" "$(sync_settings "${target}" "${wanted}" "${prev}")"; then
         printf 'drifted %s\n' "${target}"
     fi
+}
+
+print_cursor_config_state() {
+    print_cursor_managed_state "${CURSOR_CLI_CONFIG}" cli-config.json "${CURSOR_CLI_CONFIG_STATE}"
+    print_cursor_managed_state "${CURSOR_HOOKS}" hooks.json "${CURSOR_HOOKS_STATE}"
 }
 
 # ---------------------------------------------------------------------------
@@ -1072,7 +1095,8 @@ add_refusal() {
             return 0
             ;;
     esac
-    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}" "${CLAUDE_SETTINGS}"; do
+    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}" \
+        "${CURSOR_CLI_CONFIG}" "${CURSOR_HOOKS}"; do
         if [[ "${relative}" == "${entry%%|*}" || "${relative}" == "${entry%%|*}/"* ]]; then
             printf 'belongs to the private agents repo\n'
             return 0
@@ -1282,9 +1306,9 @@ main() {
                 sync_agents_repo
                 link_agents
                 link_skills
-                apply_claude_settings
+                apply_cursor_config
             else
-                remove_claude_settings
+                remove_cursor_config
                 warn_unused_agents_checkout
             fi
             copy_seeds
