@@ -2288,7 +2288,7 @@ MOCK
 }
 
 @test "ts-test displays help" {
-    run bash "${PROJECT_ROOT}/stow/server.linux/.local/bin/ts-test" --help
+    run bash "${PROJECT_ROOT}/stow/tools/.local/bin/ts-test" --help
     assert_success
     assert_output --partial "Usage:"
     assert_output --partial "ts-test run"
@@ -2337,7 +2337,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/tailscale" "${BIN_SANDBOX}/dig" "${BIN_SANDBOX}/systemctl"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        bash "${PROJECT_ROOT}/stow/server.linux/.local/bin/ts-test"
+        bash "${PROJECT_ROOT}/stow/tools/.local/bin/ts-test"
     assert_success
     assert_output --partial "Platform: Linux"
     assert_output --partial "Backend: Running"
