@@ -17,6 +17,7 @@ brew "go"
 brew "jq"
 brew "lazygit"
 brew "llmfit"
+brew "markdownlint-cli2"
 brew "node"
 brew "nvm"
 brew "pnpm"
@@ -26,7 +27,7 @@ brew "shellcheck"
 brew "skills"
 brew "stow"
 brew "uv"
-brew "xdg-ninja", args:["--HEAD"]
+brew "xdg-ninja"
 cask "1password-cli"
 
 # Shell Enhancements
