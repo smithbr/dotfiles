@@ -73,6 +73,7 @@ This is process-level isolation, not a real container or VM.
 - Validates `scripts/bootstrap/linux/apt-packages.txt`
 - Verifies Linux bootstrap guard clauses for missing `apt-get`
 - Verifies idempotency guards for `docker` and `tailscale`
+- Verifies the macOS iTerm2 step enables the Python API, makes the repo profile the default, and rewrites nothing on a second run
 - Verifies that the Linux optional installs follow the persona (`DOTFILES_LINUX_OPTIONAL`), including Claude Code through the shared `scripts/bootstrap/claude-code.sh`, and keep Docker and Tailscale when run on their own
 - Checks shell script shebangs, strict mode, `common.sh` sourcing, and `BASEDIR` conventions
 

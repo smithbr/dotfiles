@@ -483,6 +483,7 @@ MOCK
         export TEST_LOG="${TEST_ROOT}/bootstrap.log"
         export PATH="${TEST_BIN}:/usr/bin:/bin"
         export OSTYPE="darwin24"
+        export ITERM_APP="${TEST_ROOT}/no-iTerm.app"
 
         mkdir -p "${TEST_BIN}"
         : > "${TEST_LOG}"
@@ -546,6 +547,47 @@ MOCK
     assert_success
     assert_output --partial "Installing Xcode Command Line Tools"
     assert_output --partial "Installing Rosetta 2..."
+    assert_output --partial "iTerm2 not installed; skipping its settings"
+}
+
+# Runs iterm2.sh against a fake app and a `defaults` mock whose store is
+# ${TEST_ROOT}/store/<key>; writes are logged to ${TEST_ROOT}/defaults.log.
+_run_iterm2_script() {
+    local root="${TEST_TMPDIR}/iterm2"
+    mkdir -p "${root}/bin" "${root}/store" "${root}/iTerm.app"
+    : > "${root}/defaults.log"
+    cat > "${root}/bin/defaults" <<'MOCK'
+#!/usr/bin/env bash
+case "$1" in
+    read) cat "${TEST_ROOT}/store/$3" 2>/dev/null || exit 1 ;;
+    write)
+        printf '%s\n' "$*" >> "${TEST_ROOT}/defaults.log"
+        [[ "$4" == "-bool" ]] && echo 1 > "${TEST_ROOT}/store/$3" || echo "$5" > "${TEST_ROOT}/store/$3"
+        ;;
+esac
+MOCK
+    chmod +x "${root}/bin/defaults"
+    TEST_ROOT="${root}" ITERM_APP="${root}/iTerm.app" PATH="${root}/bin:/usr/bin:/bin" \
+        run "${PROJECT_ROOT}/scripts/bootstrap/macos/iterm2.sh"
+}
+
+@test "iterm2.sh enables the Python API and makes the repo profile the default" {
+    _run_iterm2_script
+    assert_success
+    local guid
+    guid="$(jq -r '.Profiles[0].Guid' "${PROJECT_ROOT}/stow/desktop.darwin/Library/Application Support/iTerm2/DynamicProfiles/dotfiles.json")"
+    run cat "${TEST_TMPDIR}/iterm2/defaults.log"
+    assert_line "write com.googlecode.iterm2 EnableAPIServer -bool true"
+    assert_line "write com.googlecode.iterm2 Default Bookmark Guid -string ${guid}"
+}
+
+@test "iterm2.sh writes nothing when the settings are already in place" {
+    _run_iterm2_script
+    _run_iterm2_script
+    assert_success
+    assert_output --partial "EnableAPIServer already set"
+    run wc -l < "${TEST_TMPDIR}/iterm2/defaults.log"
+    assert_output --regexp '^ *0$'
 }
 
 # ---------------------------------------------------------------------------
