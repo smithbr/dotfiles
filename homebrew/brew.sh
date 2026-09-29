@@ -695,7 +695,7 @@ prompt_optional_brewfile() {
             return
             ;;
         gum)
-            log_info "Optional Homebrew packages available. Use space to select, enter to continue, or esc to skip."
+            log_info "Optional Homebrew packages available. Use tab or x to select, enter to continue, or esc to skip."
 
             local height="${pending_count}"
             if [[ "${height}" -gt 15 ]]; then

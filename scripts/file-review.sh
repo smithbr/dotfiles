@@ -564,7 +564,7 @@ choose_with_gum() {
         index=$((index + 1))
     done
 
-    log_info "Archive candidates: unmanaged does not necessarily mean unused. Use space to select, ctrl+a for all, enter to continue, or esc to skip."
+    log_info "Archive candidates: unmanaged does not necessarily mean unused. Use tab or x to select, ctrl+a for all, enter to continue, or esc to skip."
     tmp_output="$(mktemp "${TMPDIR:-/tmp}/file-review.XXXXXX")"
     if ! gum_choose_multiselect "Select paths to archive" "${height}" \
         --label-delimiter=$'\t' "${options[@]}" > "${tmp_output}"; then
