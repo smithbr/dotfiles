@@ -15,6 +15,6 @@ fi
 
 printf 'pre-commit: running check-drift\n'
 if ! "${CHECK_DRIFT}"; then
-    printf 'pre-commit: check-drift failed; see ~/.config/agents/rules/09-maintenance.md\n' >&2
+    printf 'pre-commit: check-drift failed; see ~/.config/agents/MAINTENANCE.md\n' >&2
     exit 1
 fi
