@@ -10,6 +10,9 @@
 #   prompt = "/role do the thing"  first message (optional: blank starts idle)
 #   dir, command, args             override the team's for this agent (optional)
 #
+# st TEAM opens every agent; st AGENT opens just that one, with its team's
+# settings (st TEAM/AGENT when two teams share the agent name).
+#
 # Try a change with: st <team> --dry-run
 
 [blife]
