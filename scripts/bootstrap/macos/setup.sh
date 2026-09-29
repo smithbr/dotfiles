@@ -31,3 +31,5 @@ if [[ "$(uname -m)" == "arm64" ]]; then
         log_info "Rosetta 2 already installed"
     fi
 fi
+
+"${BASEDIR}/scripts/bootstrap/macos/iterm2.sh"
