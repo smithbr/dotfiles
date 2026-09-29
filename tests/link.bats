@@ -375,13 +375,9 @@ stat_mode() {
 # Claude settings
 # ---------------------------------------------------------------------------
 
-# Commits new managed Claude settings to the agents fixture: $1 is the shared
-# file, $2 (optional) the darwin file.
+# Commits new managed Claude settings to the agents fixture.
 set_agent_settings() {
     printf '%s\n' "$1" > "${AGENTS_FIXTURE}/tools/claude/settings.json"
-    if [[ -n "${2:-}" ]]; then
-        printf '%s\n' "$2" > "${AGENTS_FIXTURE}/tools/claude/settings.darwin.json"
-    fi
     git -C "${AGENTS_FIXTURE}" add -A
     git -C "${AGENTS_FIXTURE}" -c user.name=test -c user.email=test@example.com commit -q -m settings
 }
@@ -390,25 +386,18 @@ live_settings() {
     jq -c "$1" "${DEST}/.claude/settings.json"
 }
 
-@test "merges the shared and platform Claude settings into a real file" {
+@test "merges the managed Claude settings into a real file" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     command -v jq >/dev/null 2>&1 || skip "jq not installed"
-    set_agent_settings '{"theme":"auto","hooks":{"Stop":[{"c":"vault"}]},"permissions":{"deny":["a"]}}' \
-        '{"teammateMode":"iterm2","hooks":{"Stop":[{"c":"iterm"}]},"permissions":{"deny":["mac"]}}'
+    set_agent_settings '{"theme":"auto","hooks":{"Stop":[{"c":"vault"}]},"permissions":{"deny":["a"]}}'
 
     run_link
     assert_success
     [ ! -L "${DEST}/.claude/settings.json" ]
     [ "$(stat_mode "${DEST}/.claude/settings.json")" = 600 ]
-    [ "$(live_settings .hooks.Stop)" = '[{"c":"vault"},{"c":"iterm"}]' ]
-    [ "$(live_settings .permissions.deny)" = '["a","mac"]' ]
-    [ "$(live_settings .teammateMode)" = '"iterm2"' ]
-
-    DOTFILES_OS=linux run_link --persona server
-    assert_success
     [ "$(live_settings .hooks.Stop)" = '[{"c":"vault"}]' ]
     [ "$(live_settings .permissions.deny)" = '["a"]' ]
-    [ "$(live_settings .teammateMode)" = null ]
+    [ "$(live_settings .theme)" = '"auto"' ]
 }
 
 @test "keeps what apps add to Claude settings and restores managed values" {
