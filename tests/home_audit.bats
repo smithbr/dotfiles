@@ -30,13 +30,15 @@ setup() {
         { "path": "$HOME/.movetool", "movable": true,
           "help": "Export the following environment variables:\n\n```bash\nexport MOVETOOL_HOME=\"$XDG_DATA_HOME\"/movetool\n```\n" },
         { "path": "$HOME/.stuckapp", "movable": false, "help": "Currently unsupported." },
+        { "path": "$HOME/.npmlike", "movable": true,
+          "help": "You need to put the following into your npmrc:\n\n```dosini\nprefix=${XDG_DATA_HOME}/npm\n```\n" },
         { "path": "$HOME/.config/movetool", "movable": true, "help": "nested paths are ignored" }
     ]
 }
 JSON
 
     touch "${SANDBOX_HOME}/.DS_Store" "${SANDBOX_HOME}/.settings.json.backup" "${SANDBOX_HOME}/.managed"
-    mkdir -p "${SANDBOX_HOME}/.partly" "${SANDBOX_HOME}/.movetool" "${SANDBOX_HOME}/.stuckapp" \
+    mkdir -p "${SANDBOX_HOME}/.partly" "${SANDBOX_HOME}/.movetool" "${SANDBOX_HOME}/.npmlike" "${SANDBOX_HOME}/.stuckapp" \
         "${SANDBOX_HOME}/.ownedtool" "${SANDBOX_HOME}/.zzactive" "${SANDBOX_HOME}/.zzorphan/sub" "${SANDBOX_HOME}/.ownedstale"
     touch "${SANDBOX_HOME}/.zzorphan/sub/data" "${SANDBOX_HOME}/.ownedstale/data"
     make_stale "${SANDBOX_HOME}/.zzorphan" "${SANDBOX_HOME}/.ownedstale"
@@ -189,4 +191,11 @@ bucket_of() {
     assert_success
     assert_output --partial "XDG checks skipped"
     [ "$(bucket_of .DS_Store)" = JUNK ]
+}
+
+@test "home-audit handles a movable entry that sets no variables" {
+    run_audit --all
+    assert_success
+    refute_output --partial "invalid variable name"
+    [ "$(bucket_of .npmlike)" = MOVE ]
 }
