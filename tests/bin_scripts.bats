@@ -3696,3 +3696,89 @@ run_df_deploy() {
     assert_failure
     assert_output --partial "cannot find scripts/link.sh"
 }
+
+# st only imports iterm2 when it talks to iTerm2, so --list and
+# --dry-run run under plain python3 without its uv dependencies.
+_st() {
+    python3 "${PROJECT_ROOT}/stow/desktop.darwin/.local/bin/st" "$@"
+}
+
+_write_teams() {
+    export START_TEAM_CONFIG="${TEST_TMPDIR}/teams.toml"
+    cat > "${START_TEAM_CONFIG}" <<'TOML'
+[crew]
+dir = "/work/crew"
+args = ["--model", "opus"]
+
+[[crew.agents]]
+name = "lead"
+prompt = "/lead plan it"
+
+[[crew.agents]]
+name = "helper"
+dir = "/work/other dir"
+command = "codex"
+TOML
+}
+
+@test "st lists teams and dry-runs one tab per agent" {
+    _write_teams
+    run _st --list
+    assert_success
+    assert_output --partial "crew"
+    assert_output --partial "lead, helper"
+
+    run _st crew --dry-run
+    assert_success
+    assert_line "[lead] cd /work/crew && claude --model opus '/lead plan it'"
+    assert_line "[helper] cd '/work/other dir' && codex --model opus"
+}
+
+@test "st rejects an unknown team and a missing teams file" {
+    _write_teams
+    run _st nope --dry-run
+    assert_failure
+    assert_output --partial "no team or directory 'nope'"
+
+    START_TEAM_CONFIG="${TEST_TMPDIR}/missing.toml" run _st --list
+    assert_failure
+    assert_output --partial "no teams file"
+}
+
+@test "st runs each tab's command as the tab's program, not typed text" {
+    run python3 - "${PROJECT_ROOT}/stow/desktop.darwin/.local/bin/st" <<'PY'
+import importlib.machinery, importlib.util, os, sys
+sys.dont_write_bytecode = True
+loader = importlib.machinery.SourceFileLoader("st", sys.argv[1])
+mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("st", loader))
+loader.exec_module(mod)
+os.environ["SHELL"] = "/bin/zsh"
+print(mod.tab_command("cd /work && claude"))
+PY
+    assert_success
+    assert_output "/bin/zsh -lic 'cd /work && claude; exec /bin/zsh -il'"
+}
+
+@test "st opens Claude Code in a directory, even without a teams file" {
+    mkdir -p "${TEST_TMPDIR}/my project"
+    START_TEAM_CONFIG="${TEST_TMPDIR}/missing.toml" run _st "${TEST_TMPDIR}/my project/" --dry-run
+    assert_success
+    assert_output "[my project] cd '$(cd "${TEST_TMPDIR}/my project" && pwd -P)' && claude"
+}
+
+@test "st prefers a team over a directory of the same name" {
+    _write_teams
+    mkdir -p "${TEST_TMPDIR}/crew"
+    cd "${TEST_TMPDIR}"
+    run _st crew --dry-run
+    assert_success
+    assert_line --partial "[lead] cd /work/crew"
+}
+
+@test "st with no arguments opens Claude Code in the current directory" {
+    mkdir -p "${TEST_TMPDIR}/here"
+    cd "${TEST_TMPDIR}/here"
+    START_TEAM_CONFIG="${TEST_TMPDIR}/missing.toml" run _st --dry-run
+    assert_success
+    assert_output "[here] cd $(pwd -P) && claude"
+}

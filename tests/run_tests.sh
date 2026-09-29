@@ -77,6 +77,10 @@ run_shellcheck() {
     local -a shellcheck_files=()
 
     while IFS= read -r file; do
+        # Bin scripts may be written in another language (start-team is Python).
+        if [[ "${file}" == stow/*/.local/bin/* ]] && ! head -n 1 "${file}" | grep -Eq '^#!.*[/ ](ba)?sh$'; then
+            continue
+        fi
         shellcheck_files+=("${file}")
     done < <(git ls-files -- '*.sh' '*.bash' 'stow/*/.local/bin/*')
 
