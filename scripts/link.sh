@@ -63,8 +63,8 @@ AGENT_LINKS=(
     ".cursor/AGENTS.md|AGENTS.md"
 )
 
-# Relative to $HOME. The managed settings are tools/claude/settings.json plus
-# this platform's tools/claude/settings.<os>.json in the agents checkout.
+# Relative to $HOME. The managed settings are tools/claude/settings.json in the
+# agents checkout.
 CLAUDE_SETTINGS=".claude/settings.json"
 CLAUDE_SETTINGS_STATE=".local/state/dotfiles/claude-settings.json"
 
@@ -755,18 +755,9 @@ link_skills() {
     done
 }
 
-# The managed Claude settings: the shared file with this platform's file merged
-# over it.
+# The managed Claude settings.
 wanted_claude_settings() {
-    local base="${DEST}/.config/agents/tools/claude/settings.json"
-    local overlay
-    overlay="${DEST}/.config/agents/tools/claude/settings.$(platform).json"
-    if [[ -f "${overlay}" ]]; then
-        jq -n --slurpfile base "${base}" --slurpfile overlay "${overlay}" \
-            "${SETTINGS_SYNC_JQ} sync(\$base[0]; \$overlay[0]; {})"
-    else
-        jq . "${base}"
-    fi
+    jq . "${DEST}/.config/agents/tools/claude/settings.json"
 }
 
 # Print live settings with `new` applied and `prev` retired. live and prev are
