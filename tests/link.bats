@@ -539,12 +539,12 @@ live_hooks() {
     mv "${TEST_TMPDIR}/new-hooks.json" "${DEST}/.cursor/hooks.json"
     printf 'transcript\n' > "${DEST}/.cursor/ide_state.json"
 
-    run_link --persona work status
+    run_link --persona sandbox status
     assert_line "stale ${DEST}/.cursor/AGENTS.md"
     assert_line "stale ${DEST}/.agents/skills/other"
     assert_line "unused ${DEST}/.config/agents"
 
-    run_link --persona work
+    run_link --persona sandbox
     assert_success
     assert_output --partial "this persona does not use"
     for link in .cursor/AGENTS.md .cursor/agents .cursor/skills .codex/AGENTS.md \
@@ -559,11 +559,11 @@ live_hooks() {
     [ -d "${DEST}/.config/agents/.git" ]
     [ "$(cat "${DEST}/.cursor/ide_state.json")" = transcript ]
 
-    run_link --persona work status
+    run_link --persona sandbox status
     assert_success
     refute_line --partial "stale"
     assert_line "unused ${DEST}/.config/agents"
-    run_link --persona work managed
+    run_link --persona sandbox managed
     refute_line --partial ".cursor/AGENTS.md"
 }
 

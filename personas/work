@@ -1,7 +1,7 @@
-# Work Mac: like home, without the private agents repo.
+# Work Mac: like home, plus work-only files and Brewfile.work.
 os=darwin
 layers=common tools desktop work
-agents=no
+agents=yes
 editors=yes
 brew=core work
 brew_optional=macos
