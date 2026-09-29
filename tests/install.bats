@@ -562,7 +562,8 @@ MOCK
             cat "${TEST_LOG}"
             exit 1
         }
-        [[ "$(readlink "${HOME}/.claude/settings.json")" == "${HOME}/.config/agents/tools/claude/settings.json" ]] || { echo "missing agent link"; exit 1; }
+        [[ "$(readlink "${HOME}/.claude/CLAUDE.md")" == "${HOME}/.config/agents/AGENTS.md" ]] || { echo "missing agent link"; exit 1; }
+        [[ ! -L "${HOME}/.claude/settings.json" ]] || { echo "settings.json is a link, not a merged file"; exit 1; }
     '
     assert_success
     assert_output --partial "Installing GNU Stow with Homebrew"
