@@ -19,8 +19,9 @@ Options:
   -d, --debug        Verbose output plus shell command tracing (set -x)
   -h, --help         Show this help message and exit
       --persona NAME Set this machine up as NAME (home, work, server, sandbox;
-                     see personas/). Saved for later runs; without it, a saved
-                     choice is used, a terminal asks, or the OS default applies
+                     see personas/). Saved for later runs; without it, a terminal
+                     asks (the saved choice preselected), otherwise the saved
+                     choice or the OS default applies
       --skip-system  Skip the OS bootstrap (scripts/bootstrap/<os>/setup.sh)
       --skip-brew    Skip the Homebrew install/update/bundle step
       --skip-shell   Skip adding zsh to /etc/shells and chsh
@@ -418,9 +419,10 @@ select_files_to_archive() {
     fi
 }
 
-# Ask which persona this machine is, when a terminal is available and nothing
-# chose one yet. Unboxed, before the steps, so the picker can draw. A closed
-# stdin, EOF or an empty answer keeps the OS default.
+# Ask which persona this machine is, when a terminal is available and neither
+# --persona nor DOTFILES_PERSONA chose one. Unboxed, before the steps, so the
+# picker can draw. A closed stdin, EOF or an empty answer keeps the default
+# (the saved choice, else the OS default).
 prompt_persona() {
     local default="$1" name description reply="" choice=""
     local -a names=() items=()
@@ -474,7 +476,8 @@ resolve_persona() {
     fi
     resolved="$(bash "${LINK_SCRIPT}" persona)" || exit 2
     read -r name source <<< "${resolved}"
-    if [[ "${source}" == default && -t 0 && -t 1 ]]; then
+    # Ask on a terminal unless --persona or DOTFILES_PERSONA chose; a saved choice is only the preselection.
+    if [[ ( "${source}" == default || "${source}" == saved ) && -t 0 && -t 1 ]]; then
         name="$(prompt_persona "${name}")"
         export DOTFILES_PERSONA="${name}"
     fi
