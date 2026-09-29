@@ -1,0 +1,117 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["iterm2"]
+# ///
+"""Open Claude Code in a new iTerm2 window: a whole team, or one directory.
+
+  st TEAM             one tab per agent in TEAM
+  st DIR              Claude Code in DIR
+  st                  Claude Code in the current directory
+  st --list           list the teams
+  st TEAM --dry-run   print what would run, open nothing
+
+Teams live in $START_TEAM_CONFIG (default ~/.config/start-team/teams.toml).
+A team name wins over a directory of the same name.
+"""
+
+import argparse
+import os
+import shlex
+import sys
+import tomllib
+from pathlib import Path
+
+CONFIG = Path(
+    os.environ.get("START_TEAM_CONFIG", "~/.config/start-team/teams.toml")
+).expanduser()
+
+def die(message):
+    sys.exit(f"st: {message}")
+
+
+def load_teams():
+    if not CONFIG.exists():
+        die(f"no teams file at {CONFIG}")
+    with CONFIG.open("rb") as f:
+        return tomllib.load(f)
+
+
+def agent_commands(team_name, team):
+    """Yield (tab title, shell command) for each agent in the team."""
+    agents = team.get("agents") or die(f"team {team_name!r} has no agents")
+    team_dir = team.get("dir", os.getcwd())
+    for agent in agents:
+        name = agent.get("name") or die(f"an agent in {team_name!r} has no name")
+        work_dir = Path(agent.get("dir", team_dir)).expanduser()
+        argv = [agent.get("command", team.get("command", "claude"))]
+        argv += agent.get("args", team.get("args", []))
+        if agent.get("prompt"):
+            argv.append(agent["prompt"])
+        yield name, f"cd {shlex.quote(str(work_dir))} && {shlex.join(argv)}"
+
+
+def tab_command(command):
+    """Run command in a login shell as the tab's own program, then stay in a shell.
+
+    Typing it into a fresh tab races the shell's startup and garbles the text.
+    """
+    shell = os.environ.get("SHELL", "/bin/zsh")
+    return shlex.join([shell, "-lic", f"{command}; exec {shlex.quote(shell)} -il"])
+
+
+async def open_team(connection, commands):
+    import iterm2
+
+    await iterm2.async_get_app(connection)  # tab creation needs the app loaded
+    window = None
+    for title, command in commands:
+        if window is None:
+            window = await iterm2.Window.async_create(
+                connection, command=tab_command(command)
+            )
+            tab = window.current_tab
+        else:
+            tab = await window.async_create_tab(command=tab_command(command))
+        await tab.async_set_title(title)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="st",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--list", action="store_true", help="list the teams")
+    parser.add_argument("--dry-run", action="store_true", help="print, don't open")
+    parser.add_argument("target", nargs="?", default=".", help="a team or a directory")
+    args = parser.parse_args()
+
+    if args.list:
+        for name, team in load_teams().items():
+            agents = ", ".join(a.get("name", "?") for a in team.get("agents", []))
+            print(f"{name:<14} {team.get('dir', '.'):<20} {agents}")
+        return
+
+    teams = load_teams() if CONFIG.exists() else {}
+    if args.target in teams:
+        commands = list(agent_commands(args.target, teams[args.target]))
+    elif Path(args.target).expanduser().is_dir():
+        # A directory is a team of one: Claude Code there, in its own tab.
+        work_dir = Path(args.target).expanduser().resolve()
+        commands = [(work_dir.name, f"cd {shlex.quote(str(work_dir))} && claude")]
+    else:
+        die(f"no team or directory {args.target!r} (teams: {', '.join(teams) or 'none'})")
+
+    if args.dry_run:
+        for title, command in commands:
+            print(f"[{title}] {command}")
+        return
+
+    import iterm2
+
+    iterm2.run_until_complete(lambda connection: open_team(connection, commands))
+
+
+if __name__ == "__main__":
+    main()
