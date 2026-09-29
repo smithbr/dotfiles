@@ -6,13 +6,15 @@
 """Open Claude Code in a new iTerm2 window: a whole team, or one directory.
 
   st TEAM             one tab per agent in TEAM
+  st AGENT            one agent from any team, in its own window
+  st TEAM/AGENT       the same, when two teams have an agent of that name
   st DIR              Claude Code in DIR
   st                  Claude Code in the current directory
   st --list           list the teams
   st TEAM --dry-run   print what would run, open nothing
 
 Teams live in $START_TEAM_CONFIG (default ~/.config/start-team/teams.toml).
-A team name wins over a directory of the same name.
+A team name wins over an agent name, and both win over a directory.
 """
 
 import argparse
@@ -37,18 +39,39 @@ def load_teams():
         return tomllib.load(f)
 
 
-def agent_commands(team_name, team):
-    """Yield (tab title, shell command) for each agent in the team."""
+def agent_commands(team_name, team, only=None):
+    """Yield (tab title, shell command) for each agent in the team, or just `only`."""
     agents = team.get("agents") or die(f"team {team_name!r} has no agents")
     team_dir = team.get("dir", os.getcwd())
     for agent in agents:
         name = agent.get("name") or die(f"an agent in {team_name!r} has no name")
+        if only is not None and name != only:
+            continue
         work_dir = Path(agent.get("dir", team_dir)).expanduser()
         argv = [agent.get("command", team.get("command", "claude"))]
         argv += agent.get("args", team.get("args", []))
         if agent.get("prompt"):
             argv.append(agent["prompt"])
         yield name, f"cd {shlex.quote(str(work_dir))} && {shlex.join(argv)}"
+
+
+def find_agent(teams, target):
+    """Return (team name, agent name) for AGENT or TEAM/AGENT, or None."""
+    team_name, _, agent_name = target.rpartition("/")
+    if team_name:
+        agents = teams.get(team_name, {}).get("agents", [])
+        if any(a.get("name") == agent_name for a in agents):
+            return team_name, agent_name
+        return None
+    owners = [
+        name
+        for name, team in teams.items()
+        if any(a.get("name") == target for a in team.get("agents", []))
+    ]
+    if len(owners) > 1:
+        choices = ", ".join(f"{owner}/{target}" for owner in owners)
+        die(f"agent {target!r} is in more than one team; pick one: {choices}")
+    return (owners[0], target) if owners else None
 
 
 def tab_command(command):
@@ -84,7 +107,9 @@ def main():
     )
     parser.add_argument("--list", action="store_true", help="list the teams")
     parser.add_argument("--dry-run", action="store_true", help="print, don't open")
-    parser.add_argument("target", nargs="?", default=".", help="a team or a directory")
+    parser.add_argument(
+        "target", nargs="?", default=".", help="a team, an agent, or a directory"
+    )
     args = parser.parse_args()
 
     if args.list:
@@ -96,12 +121,15 @@ def main():
     teams = load_teams() if CONFIG.exists() else {}
     if args.target in teams:
         commands = list(agent_commands(args.target, teams[args.target]))
+    elif found := find_agent(teams, args.target):
+        team_name, agent_name = found
+        commands = list(agent_commands(team_name, teams[team_name], agent_name))
     elif Path(args.target).expanduser().is_dir():
         # A directory is a team of one: Claude Code there, in its own tab.
         work_dir = Path(args.target).expanduser().resolve()
         commands = [(work_dir.name, f"cd {shlex.quote(str(work_dir))} && claude")]
     else:
-        die(f"no team or directory {args.target!r} (teams: {', '.join(teams) or 'none'})")
+        die(f"no team, agent, or directory {args.target!r} (teams: {', '.join(teams) or 'none'})")
 
     if args.dry_run:
         for title, command in commands:

@@ -3738,11 +3738,54 @@ TOML
     _write_teams
     run _st nope --dry-run
     assert_failure
-    assert_output --partial "no team or directory 'nope'"
+    assert_output --partial "no team, agent, or directory 'nope'"
 
     START_TEAM_CONFIG="${TEST_TMPDIR}/missing.toml" run _st --list
     assert_failure
     assert_output --partial "no teams file"
+}
+
+@test "st opens one agent by name, with its team's settings" {
+    _write_teams
+    run _st helper --dry-run
+    assert_success
+    assert_output "[helper] cd '/work/other dir' && codex --model opus"
+
+    run _st crew/lead --dry-run
+    assert_success
+    assert_output "[lead] cd /work/crew && claude --model opus '/lead plan it'"
+
+    run _st crew/nope --dry-run
+    assert_failure
+    assert_output --partial "no team, agent, or directory 'crew/nope'"
+}
+
+@test "st asks for TEAM/AGENT when an agent name is in two teams" {
+    _write_teams
+    cat >> "${START_TEAM_CONFIG}" <<'TOML'
+
+[other]
+dir = "/work/other"
+
+[[other.agents]]
+name = "lead"
+TOML
+    run _st lead --dry-run
+    assert_failure
+    assert_output --partial "pick one: crew/lead, other/lead"
+
+    run _st other/lead --dry-run
+    assert_success
+    assert_output "[lead] cd /work/other && claude"
+}
+
+@test "st prefers an agent over a directory of the same name" {
+    _write_teams
+    mkdir -p "${TEST_TMPDIR}/helper"
+    cd "${TEST_TMPDIR}"
+    run _st helper --dry-run
+    assert_success
+    assert_output --partial "[helper] cd '/work/other dir'"
 }
 
 @test "st runs each tab's command as the tab's program, not typed text" {
