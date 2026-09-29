@@ -157,7 +157,7 @@ prompt_optional_linux_bootstraps() {
 
         # gum hides its own help here, and Enter alone confirms an empty
         # selection, so say how to pick, as brew.sh's picker does.
-        log_info "Optional Linux installs available. Use space to select, enter to continue, or esc to skip."
+        log_info "Optional Linux installs available. Use tab or x to select, enter to continue, or esc to skip."
         gum_choose_multiselect \
             "Select optional packages to install" \
             "${height}" \
