@@ -30,6 +30,8 @@ setup() {
         ln -s "${HOME}/.config/agents/AGENTS.md" "${HOME}/${relative}"
     done
     ln -s "${HOME}/.config/agents/tools/claude/settings.json" "${HOME}/.claude/settings.json"
+    mkdir -p "${HOME}/.config/agents/agents"
+    ln -s "${HOME}/.config/agents/agents" "${HOME}/.claude/agents"
     printf 'agents\n' > "${HOME}/.config/agents/AGENTS.md"
     rm "${HOME}/.config/agents/tools"
     mkdir -p "${HOME}/.config/agents/tools/claude"

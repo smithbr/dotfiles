@@ -50,6 +50,7 @@ AGENTS_REFRESH_DAYS=7
 # destination|target inside ~/.config/agents
 AGENT_LINKS=(
     ".claude/CLAUDE.md|AGENTS.md"
+    ".claude/agents|agents"
     ".claude/settings.json|tools/claude/settings.json"
     ".codex/AGENTS.md|AGENTS.md"
     ".cursor/AGENTS.md|AGENTS.md"

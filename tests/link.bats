@@ -15,8 +15,9 @@ setup() {
     # Stands in for the private agents repo.
     AGENTS_FIXTURE="${TEST_TMPDIR}/agents-origin"
     mkdir -p "${AGENTS_FIXTURE}/skills/core/demo" "${AGENTS_FIXTURE}/skills/extra/other" \
-        "${AGENTS_FIXTURE}/tools/claude"
+        "${AGENTS_FIXTURE}/tools/claude" "${AGENTS_FIXTURE}/agents"
     printf 'rules\n' > "${AGENTS_FIXTURE}/AGENTS.md"
+    printf 'agent\n' > "${AGENTS_FIXTURE}/agents/demo.md"
     printf 'skill\n' > "${AGENTS_FIXTURE}/skills/core/demo/SKILL.md"
     printf 'skill\n' > "${AGENTS_FIXTURE}/skills/extra/other/SKILL.md"
     printf '{}\n' > "${AGENTS_FIXTURE}/tools/claude/settings.json"
@@ -302,6 +303,19 @@ stat_mode() {
     [ ! -e "${DEST}/.agents/skills/other" ]
     [ "$(readlink "${DEST}/.claude/skills")" = "${DEST}/.agents/skills" ]
     [ "$(readlink "${DEST}/.cursor/skills")" = "${DEST}/.agents/skills" ]
+}
+
+@test "links the Claude agents directory and keeps hand-made agents" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    mkdir -p "${DEST}/.claude/agents"
+    printf 'mine\n' > "${DEST}/.claude/agents/mine.md"
+
+    run_link
+    assert_success
+    [ "$(readlink "${DEST}/.claude/agents")" = "${DEST}/.config/agents/agents" ]
+    [ "$(cat "${DEST}/.claude/agents/demo.md")" = agent ]
+    run cat "$(backup_of .claude/agents/mine.md)"
+    assert_output 'mine'
 }
 
 @test "replaces the old whole-library skills link and keeps imported bundles" {
