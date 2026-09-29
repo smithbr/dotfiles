@@ -17,6 +17,14 @@
 #   SKILL_LINKS             link to ~/.agents/skills, a real directory that Stow
 #                           fills from the agents repo's skills/ bundles. Only
 #                           core is stowed here; skill-import adds more locally.
+#   CLAUDE_SETTINGS         a real file, not a link: Claude Code and other apps
+#                           rewrite it. The agents repo's tools/claude/settings
+#                           files are merged into it, and what the last merge
+#                           applied is kept so dropped entries are removed too.
+#
+# A persona without agents gets none of these: its agent links are removed as
+# stale, the merged settings are taken back out, and a leftover checkout is
+# reported but never deleted.
 #
 # A real file where a link belongs is replaced only when its content matches
 # the repo. Anything else is moved to ~/.local/state/dotfiles/clobbered/ first,
@@ -51,10 +59,50 @@ AGENTS_REFRESH_DAYS=7
 AGENT_LINKS=(
     ".claude/CLAUDE.md|AGENTS.md"
     ".claude/agents|agents"
-    ".claude/settings.json|tools/claude/settings.json"
     ".codex/AGENTS.md|AGENTS.md"
     ".cursor/AGENTS.md|AGENTS.md"
 )
+
+# Relative to $HOME. The managed settings are tools/claude/settings.json plus
+# this platform's tools/claude/settings.<os>.json in the agents checkout.
+CLAUDE_SETTINGS=".claude/settings.json"
+CLAUDE_SETTINGS_STATE=".local/state/dotfiles/claude-settings.json"
+
+# sync(live; new; prev) applies the managed settings `new` to `live`, where
+# `prev` is what the last run applied. Managed scalars win; arrays keep their
+# live entries and gain the managed ones; whatever `prev` managed and `new` no
+# longer does is removed, unless the live value has changed since. A null
+# `new` takes everything `prev` applied back out.
+# shellcheck disable=SC2016
+SETTINGS_SYNC_JQ='
+def sync($live; $new; $prev):
+    if $new == null then
+        if ($live | type) == "object" and ($prev | type) == "object" then
+            reduce ($live | keys_unsorted[]) as $k ({};
+                if ($prev | has($k)) then
+                    sync($live[$k]; null; $prev[$k]) as $v
+                    | if $v == null then . else .[$k] = $v end
+                else .[$k] = $live[$k] end)
+            | if . == {} then null else . end
+        elif ($live | type) == "array" and ($prev | type) == "array" then
+            ($live - $prev) | if . == [] then null else . end
+        elif $live == $prev then null
+        else $live end
+    elif ($new | type) == "object" then
+        ($live | if type == "object" then . else {} end) as $l
+        | ($prev | if type == "object" then . else {} end) as $p
+        | reduce (($l + $new + $p) | keys_unsorted[]) as $k ({};
+            if ($new | has($k)) then .[$k] = sync($l[$k]; $new[$k]; $p[$k])
+            elif ($l | has($k)) then
+                sync($l[$k]; null; $p[$k]) as $v
+                | if $v == null then . else .[$k] = $v end
+            else . end)
+    elif ($new | type) == "array" then
+        ($live | if type == "array" then . else [] end) as $l
+        | ($prev | if type == "array" then . else [] end) as $p
+        | ($l - ($p - $new)) + ($new - $l)
+    else $new end;
+'
 
 # Enabled skills live in SKILLS_DIR (relative to $HOME); these link to it.
 SKILLS_DIR=".agents/skills"
@@ -467,6 +515,49 @@ stale_links() {
         grep -Fxq -- "${relative}" <<< "${managed}" && continue
         printf '%s\n' "${target}"
     done < <(stale_candidates | LC_ALL=C sort -u)
+    stale_agent_links
+}
+
+# True when a link points into the agents checkout or at the skills directory,
+# existing or not.
+is_agent_link() {
+    local destination home
+    [[ -L "$1" ]] || return 1
+    destination="$(link_destination "$1")" || return 1
+    home="$(cd -P "${DEST}" && pwd)" || return 1
+    [[ "${destination}" == "${home}/.config/agents" || "${destination}" == "${home}/.config/agents/"* \
+        || "${destination}" == "${home}/${SKILLS_DIR}" ]]
+}
+
+# Links directly inside the directories agent links live in, plus the skill
+# links in ~/.agents/skills when this persona has no agents.
+agent_link_candidates() {
+    local entry dir
+    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}" "${CLAUDE_SETTINGS}"; do
+        dirname "${entry%%|*}"
+    done | LC_ALL=C sort -u | while IFS= read -r dir; do
+        [[ -d "${DEST}/${dir}" && ! -L "${DEST}/${dir}" ]] || continue
+        find "${DEST}/${dir}" -mindepth 1 -maxdepth 1 -type l
+    done
+    if [[ "${PERSONA_AGENTS}" != yes && -d "${DEST}/${SKILLS_DIR}" && ! -L "${DEST}/${SKILLS_DIR}" ]]; then
+        find "${DEST}/${SKILLS_DIR}" -mindepth 1 -maxdepth 1 -type l
+    fi
+}
+
+# Absolute paths of agent links this persona does not want: every one when it
+# has no agents, otherwise those no longer in AGENT_LINKS or SKILL_LINKS.
+stale_agent_links() {
+    local target wanted=""
+    if [[ "${PERSONA_AGENTS}" == yes ]]; then
+        wanted="$(printf '%s\n' "${AGENT_LINKS[@]%%|*}" "${SKILL_LINKS[@]}")"
+    fi
+    while IFS= read -r target; do
+        is_agent_link "${target}" || continue
+        if [[ -n "${wanted}" ]] && grep -Fxq -- "${target#"${DEST}"/}" <<< "${wanted}"; then
+            continue
+        fi
+        printf '%s\n' "${target}"
+    done < <(agent_link_candidates | LC_ALL=C sort)
 }
 
 prune_stale_links() {
@@ -664,6 +755,122 @@ link_skills() {
     done
 }
 
+# The managed Claude settings: the shared file with this platform's file merged
+# over it.
+wanted_claude_settings() {
+    local base="${DEST}/.config/agents/tools/claude/settings.json"
+    local overlay
+    overlay="${DEST}/.config/agents/tools/claude/settings.$(platform).json"
+    if [[ -f "${overlay}" ]]; then
+        jq -n --slurpfile base "${base}" --slurpfile overlay "${overlay}" \
+            "${SETTINGS_SYNC_JQ} sync(\$base[0]; \$overlay[0]; {})"
+    else
+        jq . "${base}"
+    fi
+}
+
+# Print live settings with `new` applied and `prev` retired. live and prev are
+# files (/dev/null when absent); new is JSON text, or null to retire it all.
+sync_settings() {
+    local live="$1" new="$2" prev="$3"
+    jq -n --indent 4 --slurpfile live "${live}" --argjson new "${new}" --slurpfile prev "${prev}" \
+        "${SETTINGS_SYNC_JQ} sync(\$live[0]; \$new; \$prev[0]) // {}"
+}
+
+same_json() {
+    [[ "$(jq -S . "$1")" == "$(jq -S . <<< "$2")" ]]
+}
+
+# Replace a file's content in one rename, keeping it private.
+write_private_file() {
+    local target="$1" content="$2" tmp
+    mkdir -p "$(dirname "${target}")"
+    tmp="$(mktemp "${target}.XXXXXX")"
+    printf '%s\n' "${content}" > "${tmp}"
+    chmod 600 "${tmp}"
+    mv "${tmp}" "${target}"
+}
+
+# Merge the managed settings into the real ~/.claude/settings.json. Keys apps
+# add (plugins, their own hooks) survive; managed values are restored. The old
+# link into the checkout is already gone by now: prune_stale_links removed it.
+apply_claude_settings() {
+    local target="${DEST}/${CLAUDE_SETTINGS}" state="${DEST}/${CLAUDE_SETTINGS_STATE}"
+    local live=/dev/null prev=/dev/null wanted merged
+
+    [[ -f "${DEST}/.config/agents/tools/claude/settings.json" ]] || return 0
+    if ! command -v jq >/dev/null 2>&1; then
+        log_warn "jq is not installed; skipping ${target}"
+        return 0
+    fi
+    if ! wanted="$(wanted_claude_settings)"; then
+        log_warn "Could not read the Claude settings in ${DEST}/.config/agents/tools/claude; skipping ${target}"
+        return 0
+    fi
+    [[ -f "${state}" ]] && prev="${state}"
+
+    if [[ -L "${target}" ]]; then
+        if [[ "${DRY_RUN}" -eq 1 ]]; then
+            is_agent_link "${target}" || printf 'Would back up %s before writing settings\n' "${target}"
+        else
+            backup_path "${target}"
+        fi
+    elif [[ -f "${target}" ]]; then
+        if jq empty "${target}" 2>/dev/null; then
+            live="${target}"
+        elif [[ "${DRY_RUN}" -eq 1 ]]; then
+            printf 'Would back up %s (not valid JSON) before writing settings\n' "${target}"
+        else
+            log_warn "${target} is not valid JSON; moving it aside"
+            backup_path "${target}"
+        fi
+    fi
+
+    merged="$(sync_settings "${live}" "${wanted}" "${prev}")"
+    if [[ "${live}" != /dev/null ]] && same_json "${live}" "${merged}"; then
+        [[ "${DRY_RUN}" -eq 1 ]] || write_private_file "${state}" "${wanted}"
+        return 0
+    fi
+    if [[ "${DRY_RUN}" -eq 1 ]]; then
+        printf 'Would merge the managed Claude settings into %s\n' "${target}"
+        return 0
+    fi
+    [[ "${live}" != /dev/null ]] && backup_path "${target}"
+    write_private_file "${target}" "${merged}"
+    write_private_file "${state}" "${wanted}"
+    printf 'Merged the managed Claude settings into %s\n' "${target}"
+}
+
+# A persona without agents: take back out what apply_claude_settings merged
+# in, leaving what apps wrote.
+remove_claude_settings() {
+    local target="${DEST}/${CLAUDE_SETTINGS}" state="${DEST}/${CLAUDE_SETTINGS_STATE}" merged
+
+    [[ -f "${state}" ]] || return 0
+    if ! command -v jq >/dev/null 2>&1; then
+        log_warn "jq is not installed; leaving the managed settings in ${target}"
+        return 0
+    fi
+    if [[ -f "${target}" && ! -L "${target}" ]] && jq empty "${target}" 2>/dev/null; then
+        merged="$(sync_settings "${target}" null "${state}")"
+        if ! same_json "${target}" "${merged}"; then
+            if [[ "${DRY_RUN}" -eq 1 ]]; then
+                printf 'Would remove the managed Claude settings from %s\n' "${target}"
+                return 0
+            fi
+            backup_path "${target}"
+            write_private_file "${target}" "${merged}"
+            printf 'Removed the managed Claude settings from %s\n' "${target}"
+        fi
+    fi
+    [[ "${DRY_RUN}" -eq 1 ]] || rm -f "${state}"
+}
+
+warn_unused_agents_checkout() {
+    [[ -e "${DEST}/.config/agents" ]] || return 0
+    log_warn "${DEST}/.config/agents holds the private agents repo, which this persona does not use. It is left in place; delete it yourself if this machine should not keep it."
+}
+
 # destination|source for every shared editor file on this platform.
 editor_links() {
     local entry dir name relative
@@ -751,7 +958,7 @@ print_managed() {
         printf '%s/%s\n' "${DEST}" "${entry%%|*}"
     done < <(editor_links)
     [[ "${PERSONA_AGENTS}" == yes ]] || return 0
-    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}"; do
+    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}" "${CLAUDE_SETTINGS}"; do
         printf '%s/%s\n' "${DEST}" "${entry%%|*}"
     done
     printf '%s/%s\n' "${DEST}" "${SKILLS_DIR}"
@@ -819,11 +1026,37 @@ print_status() {
                 printf 'missing %s\n' "${target}"
             fi
         done
+        print_claude_settings_state
+    elif [[ -e "${DEST}/.config/agents" ]]; then
+        printf 'unused %s\n' "${DEST}/.config/agents"
     fi
 
     while IFS= read -r target; do
         printf 'stale %s\n' "${target}"
     done < <(stale_links)
+}
+
+# missing, foreign (a link other than the old one into the checkout, which is
+# reported as stale), or drifted (the next run would change it). Needs jq and
+# the checkout to say anything.
+print_claude_settings_state() {
+    local target="${DEST}/${CLAUDE_SETTINGS}" state="${DEST}/${CLAUDE_SETTINGS_STATE}"
+    local prev=/dev/null wanted
+    [[ -f "${DEST}/.config/agents/tools/claude/settings.json" ]] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    if [[ -L "${target}" ]]; then
+        is_agent_link "${target}" || printf 'foreign %s\n' "${target}"
+        return 0
+    elif [[ ! -e "${target}" ]]; then
+        printf 'missing %s\n' "${target}"
+        return 0
+    fi
+    [[ -f "${state}" ]] && prev="${state}"
+    if ! jq empty "${target}" 2>/dev/null \
+        || ! wanted="$(wanted_claude_settings 2>/dev/null)" \
+        || ! same_json "${target}" "$(sync_settings "${target}" "${wanted}" "${prev}")"; then
+        printf 'drifted %s\n' "${target}"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -848,7 +1081,7 @@ add_refusal() {
             return 0
             ;;
     esac
-    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}"; do
+    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}" "${CLAUDE_SETTINGS}"; do
         if [[ "${relative}" == "${entry%%|*}" || "${relative}" == "${entry%%|*}/"* ]]; then
             printf 'belongs to the private agents repo\n'
             return 0
@@ -1058,6 +1291,10 @@ main() {
                 sync_agents_repo
                 link_agents
                 link_skills
+                apply_claude_settings
+            else
+                remove_claude_settings
+                warn_unused_agents_checkout
             fi
             copy_seeds
             secure_private_dirs

@@ -29,13 +29,14 @@ setup() {
         mkdir -p "$(dirname "${HOME}/${relative}")"
         ln -s "${HOME}/.config/agents/AGENTS.md" "${HOME}/${relative}"
     done
-    ln -s "${HOME}/.config/agents/tools/claude/settings.json" "${HOME}/.claude/settings.json"
     mkdir -p "${HOME}/.config/agents/agents"
     ln -s "${HOME}/.config/agents/agents" "${HOME}/.claude/agents"
     printf 'agents\n' > "${HOME}/.config/agents/AGENTS.md"
     rm "${HOME}/.config/agents/tools"
     mkdir -p "${HOME}/.config/agents/tools/claude"
     printf '{}\n' > "${HOME}/.config/agents/tools/claude/settings.json"
+    # A real file, merged from the managed settings by link.sh.
+    printf '{}\n' > "${HOME}/.claude/settings.json"
     printf 'tool cache\n' > "${HOME}/.config/agents/tools/cache"
 
     export PATH="/usr/bin:/bin"
@@ -71,6 +72,18 @@ teardown() {
     # shellcheck disable=SC2088
     assert_output --partial "$(printf '%s' '~/.local/bin/ph-padd')"
     assert_output --partial "action: diff the local file against the repo"
+}
+
+@test "file review explains drifted Claude settings" {
+    command -v jq >/dev/null 2>&1 || skip "jq not installed"
+    printf '{"theme":"auto"}\n' > "${HOME}/.config/agents/tools/claude/settings.json"
+
+    run "${PROJECT_ROOT}/scripts/file-review.sh" --source "${TEST_SOURCE_DIR}"
+    assert_success
+    # shellcheck disable=SC2088
+    assert_output --partial "$(printf '%s' '~/.claude/settings.json')"
+    assert_output --partial "status: a managed setting was changed or removed here"
+    [[ "$(cat "${HOME}/.claude/settings.json")" == '{}' ]]
 }
 
 @test "file review finds home leftovers, broken links, and saved backups without changing them" {

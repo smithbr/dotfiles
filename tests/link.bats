@@ -288,7 +288,7 @@ stat_mode() {
     run_link
     assert_success
     [ -d "${DEST}/.config/agents/.git" ]
-    [ "$(readlink "${DEST}/.claude/settings.json")" = "${DEST}/.config/agents/tools/claude/settings.json" ]
+    [ -f "${DEST}/.claude/settings.json" ] && [ ! -L "${DEST}/.claude/settings.json" ]
     [ "$(cat "${DEST}/.codex/AGENTS.md")" = rules ]
     [ -f "${DEST}/.agents/skills/demo/SKILL.md" ]
     [ "$(stat_mode "${DEST}/.claude")" = 700 ]
@@ -338,17 +338,13 @@ stat_mode() {
 @test "moves real agent config aside and leaves unmanaged agent state alone" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     mkdir -p "${DEST}/.claude/skills/mine" "${DEST}/.claude/projects/sess"
-    printf '{"iWroteThis":true}\n' > "${DEST}/.claude/settings.json"
     printf 'skill\n' > "${DEST}/.claude/skills/mine/SKILL.md"
     printf 'transcript\n' > "${DEST}/.claude/projects/sess/x.jsonl"
     printf 'overrides\n' > "${DEST}/.claude/settings.local.json"
 
     run_link
     assert_success
-    [ -L "${DEST}/.claude/settings.json" ]
     [ -L "${DEST}/.claude/skills" ]
-    run cat "$(backup_of .claude/settings.json)"
-    assert_output '{"iWroteThis":true}'
     run cat "$(backup_of .claude/skills/mine/SKILL.md)"
     assert_output 'skill'
     [ "$(cat "${DEST}/.claude/projects/sess/x.jsonl")" = transcript ]
@@ -361,7 +357,7 @@ stat_mode() {
     assert_success
     assert_output --partial "Could not clone"
     [ -L "${DEST}/.zshenv" ]
-    [ -L "${DEST}/.claude/settings.json" ]
+    [ ! -e "${DEST}/.claude/settings.json" ]
 }
 
 @test "leaves a non-git agents directory alone" {
@@ -373,6 +369,207 @@ stat_mode() {
     assert_success
     assert_output --partial "is not a git checkout"
     [ "$(cat "${DEST}/.config/agents/AGENTS.md")" = 'hand made' ]
+}
+
+# ---------------------------------------------------------------------------
+# Claude settings
+# ---------------------------------------------------------------------------
+
+# Commits new managed Claude settings to the agents fixture: $1 is the shared
+# file, $2 (optional) the darwin file.
+set_agent_settings() {
+    printf '%s\n' "$1" > "${AGENTS_FIXTURE}/tools/claude/settings.json"
+    if [[ -n "${2:-}" ]]; then
+        printf '%s\n' "$2" > "${AGENTS_FIXTURE}/tools/claude/settings.darwin.json"
+    fi
+    git -C "${AGENTS_FIXTURE}" add -A
+    git -C "${AGENTS_FIXTURE}" -c user.name=test -c user.email=test@example.com commit -q -m settings
+}
+
+live_settings() {
+    jq -c "$1" "${DEST}/.claude/settings.json"
+}
+
+@test "merges the shared and platform Claude settings into a real file" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    command -v jq >/dev/null 2>&1 || skip "jq not installed"
+    set_agent_settings '{"theme":"auto","hooks":{"Stop":[{"c":"vault"}]},"permissions":{"deny":["a"]}}' \
+        '{"teammateMode":"iterm2","hooks":{"Stop":[{"c":"iterm"}]},"permissions":{"deny":["mac"]}}'
+
+    run_link
+    assert_success
+    [ ! -L "${DEST}/.claude/settings.json" ]
+    [ "$(stat_mode "${DEST}/.claude/settings.json")" = 600 ]
+    [ "$(live_settings .hooks.Stop)" = '[{"c":"vault"},{"c":"iterm"}]' ]
+    [ "$(live_settings .permissions.deny)" = '["a","mac"]' ]
+    [ "$(live_settings .teammateMode)" = '"iterm2"' ]
+
+    DOTFILES_OS=linux run_link --persona server
+    assert_success
+    [ "$(live_settings .hooks.Stop)" = '[{"c":"vault"}]' ]
+    [ "$(live_settings .permissions.deny)" = '["a"]' ]
+    [ "$(live_settings .teammateMode)" = null ]
+}
+
+@test "keeps what apps add to Claude settings and restores managed values" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    command -v jq >/dev/null 2>&1 || skip "jq not installed"
+    set_agent_settings '{"theme":"auto","enabledPlugins":{},"hooks":{"Stop":[{"c":"vault"}]},"permissions":{"deny":["a","b"]}}'
+    run_link
+    assert_success
+
+    # A plugin install, an app's own hook, a dropped deny rule, a changed theme,
+    # saved the way apps save: a new file over the old one.
+    jq '.enabledPlugins.p = true | .hooks.Stop += [{"c":"app"}] | .permissions.deny = ["a"] | .theme = "dark"' \
+        "${DEST}/.claude/settings.json" > "${TEST_TMPDIR}/new.json"
+    mv "${TEST_TMPDIR}/new.json" "${DEST}/.claude/settings.json"
+    run_link status
+    assert_line "drifted ${DEST}/.claude/settings.json"
+
+    run_link --dry-run
+    assert_success
+    assert_output --partial "Would merge the managed Claude settings"
+    [ "$(live_settings .theme)" = '"dark"' ]
+
+    run_link
+    assert_success
+    [ "$(live_settings .enabledPlugins)" = '{"p":true}' ]
+    [ "$(live_settings .hooks.Stop)" = '[{"c":"vault"},{"c":"app"}]' ]
+    [ "$(live_settings .permissions.deny)" = '["a","b"]' ]
+    [ "$(live_settings .theme)" = '"auto"' ]
+    run jq -c .theme "$(backup_of .claude/settings.json)"
+    assert_output '"dark"'
+    run_link status
+    refute_output --partial ".claude/settings.json"
+}
+
+@test "drops Claude settings the agents repo stops managing" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    command -v jq >/dev/null 2>&1 || skip "jq not installed"
+    set_agent_settings '{"old":1,"permissions":{"deny":["a","b"]}}'
+    run_link
+    assert_success
+    jq '.permissions.deny += ["mine"]' "${DEST}/.claude/settings.json" > "${TEST_TMPDIR}/new.json"
+    mv "${TEST_TMPDIR}/new.json" "${DEST}/.claude/settings.json"
+
+    set_agent_settings '{"permissions":{"deny":["a"]}}'
+    run_link --refresh
+    assert_success
+    [ "$(live_settings .)" = '{"permissions":{"deny":["a","mine"]}}' ]
+}
+
+@test "replaces the old Claude settings link with a merged real file" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    command -v jq >/dev/null 2>&1 || skip "jq not installed"
+    set_agent_settings '{"theme":"auto"}'
+    run_link
+    assert_success
+    rm "${DEST}/.claude/settings.json"
+    ln -s "${DEST}/.config/agents/tools/claude/settings.json" "${DEST}/.claude/settings.json"
+
+    run_link status
+    assert_line "stale ${DEST}/.claude/settings.json"
+    run_link
+    assert_success
+    assert_output --partial "Removed stale link ${DEST}/.claude/settings.json"
+    [ ! -L "${DEST}/.claude/settings.json" ]
+    [ "$(live_settings .theme)" = '"auto"' ]
+    [ -z "$(backup_of .claude/settings.json)" ]
+    [ "$(cat "${DEST}/.config/agents/tools/claude/settings.json")" = '{"theme":"auto"}' ]
+}
+
+@test "moves invalid Claude settings aside before merging" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    command -v jq >/dev/null 2>&1 || skip "jq not installed"
+    set_agent_settings '{"theme":"auto"}'
+    mkdir -p "${DEST}/.claude"
+    printf 'not json\n' > "${DEST}/.claude/settings.json"
+
+    run_link
+    assert_success
+    [ "$(live_settings .theme)" = '"auto"' ]
+    run cat "$(backup_of .claude/settings.json)"
+    assert_output 'not json'
+}
+
+@test "skips Claude settings without jq and still links the rest" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    local dir entry name
+    local -a dirs=()
+    local no_jq="${TEST_TMPDIR}/no-jq-bin"
+    mkdir -p "${no_jq}"
+    IFS=: read -r -a dirs <<< "${PATH}"
+    for dir in "${dirs[@]}"; do
+        for entry in "${dir}"/*; do
+            name="${entry##*/}"
+            [[ "${name}" == jq || -e "${no_jq}/${name}" || ! -x "${entry}" ]] && continue
+            ln -s "${entry}" "${no_jq}/${name}"
+        done
+    done
+
+    PATH="${no_jq}" run_link
+    assert_success
+    assert_output --partial "jq is not installed"
+    [ -L "${DEST}/.claude/CLAUDE.md" ]
+    [ ! -e "${DEST}/.claude/settings.json" ]
+}
+
+# ---------------------------------------------------------------------------
+# Personas without agents
+# ---------------------------------------------------------------------------
+
+@test "a persona without agents removes agent links and managed settings" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    command -v jq >/dev/null 2>&1 || skip "jq not installed"
+    set_agent_settings '{"theme":"auto","hooks":{"Stop":[{"c":"vault"}]}}'
+    run_link --persona home
+    assert_success
+    stow --dir "${DEST}/.config/agents/skills" --target "${DEST}/.agents/skills" extra
+    mkdir -p "${DEST}/.agents/skills/synced/mine"
+    jq '.enabledPlugins.p = true | .hooks.Stop += [{"c":"app"}]' \
+        "${DEST}/.claude/settings.json" > "${TEST_TMPDIR}/new.json"
+    mv "${TEST_TMPDIR}/new.json" "${DEST}/.claude/settings.json"
+    printf 'transcript\n' > "${DEST}/.claude/history.jsonl"
+
+    run_link --persona work status
+    assert_line "stale ${DEST}/.claude/CLAUDE.md"
+    assert_line "stale ${DEST}/.agents/skills/other"
+    assert_line "unused ${DEST}/.config/agents"
+
+    run_link --persona work
+    assert_success
+    assert_output --partial "this persona does not use"
+    for link in .claude/CLAUDE.md .claude/agents .claude/skills .codex/AGENTS.md \
+        .cursor/AGENTS.md .cursor/skills .agents/skills/demo .agents/skills/other; do
+        [ ! -e "${DEST}/${link}" ] && [ ! -L "${DEST}/${link}" ]
+    done
+    [ -d "${DEST}/.agents/skills/synced/mine" ]
+    [ "$(jq -cS . "${DEST}/.claude/settings.json")" = '{"enabledPlugins":{"p":true},"hooks":{"Stop":[{"c":"app"}]}}' ]
+    [ ! -e "${DEST}/.local/state/dotfiles/claude-settings.json" ]
+    [ -d "${DEST}/.config/agents/.git" ]
+    [ "$(cat "${DEST}/.claude/history.jsonl")" = transcript ]
+
+    run_link --persona work status
+    assert_success
+    refute_line --partial "stale"
+    assert_line "unused ${DEST}/.config/agents"
+    run_link --persona work managed
+    refute_line --partial ".claude"
+}
+
+@test "a persona with agents removes agent links it no longer lists" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    run_link
+    assert_success
+    mkdir -p "${DEST}/.codex"
+    ln -s "${DEST}/.config/agents/rules" "${DEST}/.codex/rules"
+    ln -s /somewhere/else "${DEST}/.codex/other"
+
+    run_link
+    assert_success
+    [ ! -L "${DEST}/.codex/rules" ]
+    [ -L "${DEST}/.codex/other" ]
+    [ -L "${DEST}/.codex/AGENTS.md" ]
 }
 
 # ---------------------------------------------------------------------------

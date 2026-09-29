@@ -263,6 +263,16 @@ print_status_section() {
                 printf '    status: link into the repo for a file that moved, was removed, or no longer applies here\n'
                 printf '    action: run ~/.dotfiles/scripts/link.sh to remove it\n'
                 ;;
+            drifted)
+                printf '  %s\n' "$(display_path "${path}")"
+                printf '    status: a managed setting was changed or removed here\n'
+                printf '    action: keep any wanted change in the agents repo'\''s tools/claude settings, then run link.sh (it backs up the file first)\n'
+                ;;
+            unused)
+                printf '  %s\n' "$(display_path "${path}")"
+                printf '    status: private agents checkout on a persona without agents\n'
+                printf '    action: delete it if this machine should not keep it; link.sh never does\n'
+                ;;
             *)
                 printf '  %s\n' "${line}"
                 ;;
