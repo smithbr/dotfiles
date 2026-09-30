@@ -1,7 +1,8 @@
-# Your own Mac: GUI apps, shared editor settings, and the private agents repo.
+# Your own Mac: GUI apps, shared editor settings, and the private agents repo for Claude Code.
 os=darwin
 layers=common tools desktop
 agents=yes
+agent_apps=claude codex
 editors=yes
 brew=core home
 brew_optional=macos

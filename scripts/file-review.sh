@@ -266,7 +266,7 @@ print_status_section() {
             drifted)
                 printf '  %s\n' "$(display_path "${path}")"
                 printf '    status: a managed setting was changed or removed here\n'
-                printf '    action: keep any wanted change in the agents repo'\''s tools/cursor config, then run link.sh (it backs up the file first)\n'
+                printf '    action: keep any wanted change in its managed copy under the agents repo'\''s tools/, then run link.sh (it backs up the file first)\n'
                 ;;
             unused)
                 printf '  %s\n' "$(display_path "${path}")"
