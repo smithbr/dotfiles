@@ -36,7 +36,7 @@ resolve_script_path() {
 # Other machines pull from origin, so commits this checkout hasn't pushed won't reach them.
 warn_unpushed() {
     local repo ahead
-    # The script lives at <repo>/stow/tools/.local/bin/df-deploy.
+    # The script lives at <repo>/stow/personal/.local/bin/df-deploy.
     repo="$(cd "$(dirname "$(resolve_script_path "${BASH_SOURCE[0]}")")/../../../.." && pwd)"
     git -C "${repo}" rev-parse --git-dir >/dev/null 2>&1 || return 0
     ahead="$(git -C "${repo}" rev-list --count '@{upstream}..HEAD' 2>/dev/null)" || return 0

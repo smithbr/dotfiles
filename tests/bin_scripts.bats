@@ -675,24 +675,24 @@ printf '%s\n' "$*" >> "${ACME_HOME}/calls.log"
 MOCK
     printf '#!/usr/bin/env bash\nexit 1\n' > "${BIN_SANDBOX}/crontab"
     chmod +x "${ACME_HOME}/acme.sh" "${BIN_SANDBOX}/crontab"
-    CF_CERT="${PROJECT_ROOT}/stow/tools/.local/bin/cf-cert"
+    CF_CERT="${PROJECT_ROOT}/stow/personal/.local/bin/cf-cert"
 }
 
 @test "cf-cert displays help" {
-    run "${PROJECT_ROOT}/stow/tools/.local/bin/cf-cert" --help
+    run "${PROJECT_ROOT}/stow/personal/.local/bin/cf-cert" --help
     assert_success
     assert_output --partial "Usage: cf-cert [options] DOMAIN"
     assert_output --partial "--pihole"
 }
 
 @test "cf-cert requires one domain and rejects unknown options" {
-    run "${PROJECT_ROOT}/stow/tools/.local/bin/cf-cert"
+    run "${PROJECT_ROOT}/stow/personal/.local/bin/cf-cert"
     assert_failure 2
-    run "${PROJECT_ROOT}/stow/tools/.local/bin/cf-cert" a.test b.test
+    run "${PROJECT_ROOT}/stow/personal/.local/bin/cf-cert" a.test b.test
     assert_failure 2
-    run "${PROJECT_ROOT}/stow/tools/.local/bin/cf-cert" --bogus a.test
+    run "${PROJECT_ROOT}/stow/personal/.local/bin/cf-cert" --bogus a.test
     assert_failure 2
-    run "${PROJECT_ROOT}/stow/tools/.local/bin/cf-cert" --reload
+    run "${PROJECT_ROOT}/stow/personal/.local/bin/cf-cert" --reload
     assert_failure 2
 }
 
@@ -2288,7 +2288,7 @@ MOCK
 }
 
 @test "ts-test displays help" {
-    run bash "${PROJECT_ROOT}/stow/tools/.local/bin/ts-test" --help
+    run bash "${PROJECT_ROOT}/stow/personal/.local/bin/ts-test" --help
     assert_success
     assert_output --partial "Usage:"
     assert_output --partial "ts-test run"
@@ -2337,7 +2337,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/tailscale" "${BIN_SANDBOX}/dig" "${BIN_SANDBOX}/systemctl"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        bash "${PROJECT_ROOT}/stow/tools/.local/bin/ts-test"
+        bash "${PROJECT_ROOT}/stow/personal/.local/bin/ts-test"
     assert_success
     assert_output --partial "Platform: Linux"
     assert_output --partial "Backend: Running"
@@ -3608,7 +3608,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/ssh"
     # Outside any git checkout, so the unpushed-commit check stays quiet.
     mkdir -p "${TEST_TMPDIR}/tools"
-    cp "${PROJECT_ROOT}/stow/tools/.local/bin/df-deploy" "${TEST_TMPDIR}/tools/"
+    cp "${PROJECT_ROOT}/stow/personal/.local/bin/df-deploy" "${TEST_TMPDIR}/tools/"
     DF_DEPLOY="${TEST_TMPDIR}/tools/df-deploy"
 }
 
@@ -3682,9 +3682,9 @@ run_df_deploy() {
     local g=(git -c user.name=t -c user.email=t@example.com) mac="${TEST_TMPDIR}/mac"
     "${g[@]}" clone --quiet "${DF_ORIGIN}" "${mac}"
     "${g[@]}" -C "${mac}" commit --quiet --allow-empty -m unpushed
-    mkdir -p "${mac}/stow/tools/.local/bin"
-    cp "${PROJECT_ROOT}/stow/tools/.local/bin/df-deploy" "${mac}/stow/tools/.local/bin/"
-    DF_DEPLOY="${mac}/stow/tools/.local/bin/df-deploy" run_df_deploy box
+    mkdir -p "${mac}/stow/personal/.local/bin"
+    cp "${PROJECT_ROOT}/stow/personal/.local/bin/df-deploy" "${mac}/stow/personal/.local/bin/"
+    DF_DEPLOY="${mac}/stow/personal/.local/bin/df-deploy" run_df_deploy box
     assert_success
     assert_output --partial "1 commit(s) here are not pushed"
 }

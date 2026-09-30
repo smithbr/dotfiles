@@ -1141,7 +1141,19 @@ persona_state() {
     assert_success
     [ -L "${DEST}/.config/ghostty/config" ]
     [ -L "${DEST}/.local/bin/sshkey" ]
+    [ -L "${DEST}/.local/bin/df-deploy" ]
+    [ -L "${DEST}/.config/restic/b2.env.example" ]
     [ ! -e "${DEST}/.local/bin/ph-update" ]
+
+    # A work Mac gets the shared tools but nothing personal or Pi-hole.
+    DEST="${TEST_TMPDIR}/work-home"
+    run_link --persona work
+    assert_success
+    [ -L "${DEST}/.local/bin/sshkey" ]
+    for path in .local/bin/cf-cert .local/bin/df-deploy .local/bin/ts-test \
+        .config/restic .local/bin/ph-update .local/bin/ph-padd; do
+        [ ! -e "${DEST}/${path}" ]
+    done
 
     DEST="${TEST_TMPDIR}/pi-home"
     DOTFILES_OS=linux run_link --persona server
@@ -1149,6 +1161,8 @@ persona_state() {
     [ -L "${DEST}/.local/bin/ph-update" ]
     [ -L "${DEST}/.local/bin/ph-agent-setup" ]
     [ -L "${DEST}/.local/bin/sshkey" ]
+    [ -L "${DEST}/.local/bin/cf-cert" ]
+    [ -L "${DEST}/.local/bin/ts-test" ]
     [ ! -e "${DEST}/.config/ghostty" ]
     [ ! -e "${DEST}/.config/1Password" ]
 
