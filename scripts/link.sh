@@ -3,7 +3,8 @@
 #
 #   personas/<name>         which layers, editors, agents and installs a machine
 #                           gets: key=value lines for os, layers, agents,
-#                           editors, brew, brew_optional, linux_optional.
+#                           agent_apps, editors, brew, brew_optional,
+#                           linux_optional.
 #   stow/<layer>, stow/<layer>.<os>
 #                           mirror $HOME; every file becomes a symlink into the
 #                           repo, so editing the live file edits the repo.
@@ -17,12 +18,10 @@
 #   SKILL_LINKS             link to ~/.agents/skills, a real directory that Stow
 #                           fills from the agents repo's skills/ bundles. Only
 #                           core is stowed here; skill-import adds more locally.
-#   CURSOR_CLI_CONFIG       a real file, not a link: Cursor rewrites it. The
-#                           agents repo's tools/cursor/cli-config.json is merged
-#                           into it, and what the last merge applied is kept
-#                           so dropped entries are removed too.
-#   CURSOR_HOOKS            same for ~/.cursor/hooks.json and
-#                           tools/cursor/hooks.json.
+#   MANAGED_JSON            real files, not links: the apps rewrite them. Each
+#                           one's managed copy in the agents repo's tools/ is
+#                           merged into it, and what the last merge applied is
+#                           kept so dropped entries are removed too.
 #
 # A persona without agents gets none of these: its agent links are removed as
 # stale, the merged settings are taken back out, and a leftover checkout is
@@ -59,17 +58,26 @@ AGENTS_REFRESH_DAYS=7
 
 # destination|target inside ~/.config/agents
 AGENT_LINKS=(
+    ".claude/CLAUDE.md|AGENTS.md"
+    ".claude/agents|agents"
+    ".codex/AGENTS.md|AGENTS.md"
     ".cursor/AGENTS.md|AGENTS.md"
     ".cursor/agents|agents"
-    ".codex/AGENTS.md|AGENTS.md"
 )
 
-# Relative to $HOME. Managed Cursor config lives in tools/cursor/ in the agents
-# checkout.
-CURSOR_CLI_CONFIG=".cursor/cli-config.json"
-CURSOR_CLI_CONFIG_STATE=".local/state/dotfiles/cursor-cli-config.json"
-CURSOR_HOOKS=".cursor/hooks.json"
-CURSOR_HOOKS_STATE=".local/state/dotfiles/cursor-hooks.json"
+# destination|managed copy inside ~/.config/agents|state file with what the
+# last merge applied. Destination and state are relative to $HOME. A file whose
+# managed copy is missing from the checkout is left alone.
+# Agent apps a persona can pick with agent_apps. An entry above or in
+# SKILL_LINKS belongs to the app named by its first path component (.claude is
+# claude); a persona links only its apps' entries.
+AGENT_APPS="claude codex cursor"
+
+MANAGED_JSON=(
+    ".claude/settings.json|tools/claude/settings.json|.local/state/dotfiles/claude-settings.json"
+    ".cursor/cli-config.json|tools/cursor/cli-config.json|.local/state/dotfiles/cursor-cli-config.json"
+    ".cursor/hooks.json|tools/cursor/hooks.json|.local/state/dotfiles/cursor-hooks.json"
+)
 
 # sync(live; new; prev) applies the managed settings `new` to `live`, where
 # `prev` is what the last run applied. Managed scalars win; arrays keep their
@@ -109,7 +117,7 @@ def sync($live; $new; $prev):
 
 # Enabled skills live in SKILLS_DIR (relative to $HOME); these link to it.
 SKILLS_DIR=".agents/skills"
-SKILL_LINKS=(.cursor/skills)
+SKILL_LINKS=(.claude/skills .cursor/skills)
 
 # destination directory|directory under editors/, one line per editor. Every
 # file in the editors/ directory is linked into the destination directory.
@@ -130,7 +138,7 @@ editor_dirs() {
 }
 
 # Directories that hold credentials or private agent state.
-PRIVATE_DIRS=(.ssh .cursor .config/glow)
+PRIVATE_DIRS=(.ssh .claude .cursor .config/glow)
 
 usage() {
     cat <<'EOF'
@@ -251,6 +259,7 @@ PERSONA_SOURCE=""
 PERSONA_LAYERS=""
 PERSONA_AGENTS=yes
 PERSONA_EDITORS=yes
+PERSONA_AGENT_APPS="${AGENT_APPS}"
 # Installs, for install.sh: Brewfiles installed in full, Brewfiles offered in
 # the macOS picker, and the Linux bootstrap's optional installs.
 PERSONA_BREW=core
@@ -302,9 +311,10 @@ list_personas() {
 }
 
 load_persona() {
-    local name="" source file setting key value saved
+    local name="" source file setting key value saved app
     if [[ ! -d "${REPO}/personas" ]]; then
         PERSONA_LAYERS="common $(platform)"
+        select_agent_apps
         return 0
     fi
 
@@ -348,6 +358,15 @@ load_persona() {
             brew) PERSONA_BREW="${value}" ;;
             brew_optional) PERSONA_BREW_OPTIONAL="${value}" ;;
             linux_optional) PERSONA_LINUX_OPTIONAL="${value}" ;;
+            agent_apps)
+                for app in ${value}; do
+                    if [[ " ${AGENT_APPS} " != *" ${app} "* ]]; then
+                        log_error "${file}: agent_apps takes ${AGENT_APPS// /, }, not '${app}'"
+                        exit 2
+                    fi
+                done
+                PERSONA_AGENT_APPS="${value}"
+                ;;
             agents|editors)
                 if [[ "${value}" != yes && "${value}" != no ]]; then
                     log_error "${file}: ${key} must be yes or no, not '${value}'"
@@ -361,6 +380,30 @@ load_persona() {
                 ;;
         esac
     done < <(persona_settings "${file}")
+    select_agent_apps
+}
+
+# True when an agent entry (relative to $HOME) belongs to one of the persona's
+# agent apps.
+app_wanted() {
+    local app="${1%%/*}"
+    [[ " ${PERSONA_AGENT_APPS} " == *" ${app#.} "* ]]
+}
+
+# The persona's share of AGENT_LINKS, SKILL_LINKS and MANAGED_JSON.
+select_agent_apps() {
+    local entry
+    WANTED_AGENT_LINKS=() WANTED_SKILL_LINKS=() WANTED_MANAGED_JSON=()
+    for entry in "${AGENT_LINKS[@]}"; do
+        app_wanted "${entry}" && WANTED_AGENT_LINKS+=("${entry}")
+    done
+    for entry in "${SKILL_LINKS[@]}"; do
+        app_wanted "${entry}" && WANTED_SKILL_LINKS+=("${entry}")
+    done
+    for entry in "${MANAGED_JSON[@]}"; do
+        app_wanted "${entry}" && WANTED_MANAGED_JSON+=("${entry}")
+    done
+    return 0
 }
 
 # Remember an explicitly chosen persona for later runs. The state directory is
@@ -536,8 +579,7 @@ is_agent_link() {
 # links in ~/.agents/skills when this persona has no agents.
 agent_link_candidates() {
     local entry dir
-    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}" \
-        "${CURSOR_CLI_CONFIG}" "${CURSOR_HOOKS}"; do
+    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}" "${MANAGED_JSON[@]}"; do
         dirname "${entry%%|*}"
     done | LC_ALL=C sort -u | while IFS= read -r dir; do
         [[ -d "${DEST}/${dir}" && ! -L "${DEST}/${dir}" ]] || continue
@@ -553,7 +595,8 @@ agent_link_candidates() {
 stale_agent_links() {
     local target wanted=""
     if [[ "${PERSONA_AGENTS}" == yes ]]; then
-        wanted="$(printf '%s\n' "${AGENT_LINKS[@]%%|*}" "${SKILL_LINKS[@]}")"
+        wanted="$(printf '%s\n' ${WANTED_AGENT_LINKS[@]+"${WANTED_AGENT_LINKS[@]%%|*}"} \
+            ${WANTED_SKILL_LINKS[@]+"${WANTED_SKILL_LINKS[@]}"})"
     fi
     while IFS= read -r target; do
         is_agent_link "${target}" || continue
@@ -704,7 +747,7 @@ sync_agents_repo() {
 
 link_agents() {
     local entry relative target link_target
-    for entry in "${AGENT_LINKS[@]}"; do
+    for entry in ${WANTED_AGENT_LINKS[@]+"${WANTED_AGENT_LINKS[@]}"}; do
         relative="${entry%%|*}"
         target="${DEST}/${relative}"
         link_target="${DEST}/.config/agents/${entry#*|}"
@@ -748,7 +791,7 @@ link_skills() {
         log_warn "Could not stow the core skills into ${skills}; resolve the conflict above and rerun"
     fi
 
-    for relative in "${SKILL_LINKS[@]}"; do
+    for relative in ${WANTED_SKILL_LINKS[@]+"${WANTED_SKILL_LINKS[@]}"}; do
         target="${DEST}/${relative}"
         [[ -L "${target}" && "$(readlink "${target}")" == "${skills}" ]] && continue
         if [[ -e "${target}" && ! -L "${target}" ]]; then
@@ -759,9 +802,12 @@ link_skills() {
     done
 }
 
-# Managed Cursor config files in the agents checkout.
-wanted_cursor_file() {
-    jq . "${DEST}/.config/agents/tools/cursor/$1"
+# Fields of a MANAGED_JSON entry: the destination, the managed copy and the
+# state file, as absolute paths.
+managed_json_paths() {
+    local entry="$1" rest
+    rest="${entry#*|}"
+    printf '%s\n' "${DEST}/${entry%%|*}" "${DEST}/.config/agents/${rest%%|*}" "${DEST}/${rest#*|}"
 }
 
 # Print live settings with `new` applied and `prev` retired. live and prev are
@@ -786,21 +832,20 @@ write_private_file() {
     mv "${tmp}" "${target}"
 }
 
-# Merge one managed Cursor JSON file into the real destination. Keys apps add
-# survive; managed values are restored. The old link into the checkout is
-# already gone by now: prune_stale_links removed it.
-merge_cursor_file() {
-    local relative="$1" managed_name="$2" state_rel="$3" label="$4"
-    local target="${DEST}/${relative}" state="${DEST}/${state_rel}"
-    local live=/dev/null prev=/dev/null wanted merged source
+# Merge one MANAGED_JSON entry's managed copy into the real destination. Keys
+# apps add (plugins, their own hooks) survive; managed values are restored. The
+# old link into the checkout is already gone by now: prune_stale_links removed
+# it.
+merge_managed_json() {
+    local target source state live=/dev/null prev=/dev/null wanted merged
+    { read -r target; read -r source; read -r state; } < <(managed_json_paths "$1")
 
-    source="${DEST}/.config/agents/tools/cursor/${managed_name}"
     [[ -f "${source}" ]] || return 0
     if ! command -v jq >/dev/null 2>&1; then
         log_warn "jq is not installed; skipping ${target}"
         return 0
     fi
-    if ! wanted="$(wanted_cursor_file "${managed_name}")"; then
+    if ! wanted="$(jq . "${source}")"; then
         log_warn "Could not read ${source}; skipping ${target}"
         return 0
     fi
@@ -808,7 +853,7 @@ merge_cursor_file() {
 
     if [[ -L "${target}" ]]; then
         if [[ "${DRY_RUN}" -eq 1 ]]; then
-            is_agent_link "${target}" || printf 'Would back up %s before writing %s\n' "${target}" "${label}"
+            is_agent_link "${target}" || printf 'Would back up %s before merging into it\n' "${target}"
         else
             backup_path "${target}"
         fi
@@ -816,7 +861,7 @@ merge_cursor_file() {
         if jq empty "${target}" 2>/dev/null; then
             live="${target}"
         elif [[ "${DRY_RUN}" -eq 1 ]]; then
-            printf 'Would back up %s (not valid JSON) before writing %s\n' "${target}" "${label}"
+            printf 'Would back up %s (not valid JSON) before merging into it\n' "${target}"
         else
             log_warn "${target} is not valid JSON; moving it aside"
             backup_path "${target}"
@@ -829,49 +874,39 @@ merge_cursor_file() {
         return 0
     fi
     if [[ "${DRY_RUN}" -eq 1 ]]; then
-        printf 'Would merge the managed Cursor %s into %s\n' "${label}" "${target}"
+        printf 'Would merge the managed %s into %s\n' "${source#"${DEST}/.config/agents/"}" "${target}"
         return 0
     fi
     [[ "${live}" != /dev/null ]] && backup_path "${target}"
     write_private_file "${target}" "${merged}"
     write_private_file "${state}" "${wanted}"
-    printf 'Merged the managed Cursor %s into %s\n' "${label}" "${target}"
+    printf 'Merged the managed %s into %s\n' "${source#"${DEST}/.config/agents/"}" "${target}"
 }
 
-apply_cursor_config() {
-    merge_cursor_file "${CURSOR_CLI_CONFIG}" cli-config.json "${CURSOR_CLI_CONFIG_STATE}" cli-config
-    merge_cursor_file "${CURSOR_HOOKS}" hooks.json "${CURSOR_HOOKS_STATE}" hooks
-}
-
-# A persona without agents: take back out what apply_cursor_config merged in,
+# A persona without agents: take back out what merge_managed_json merged in,
 # leaving what apps wrote.
-unmerge_cursor_file() {
-    local relative="$1" state_rel="$2" label="$3"
-    local target="${DEST}/${relative}" state="${DEST}/${state_rel}" merged
+unmerge_managed_json() {
+    local target source state merged
+    { read -r target; read -r source; read -r state; } < <(managed_json_paths "$1")
 
     [[ -f "${state}" ]] || return 0
     if ! command -v jq >/dev/null 2>&1; then
-        log_warn "jq is not installed; leaving the managed ${label} in ${target}"
+        log_warn "jq is not installed; leaving the managed settings in ${target}"
         return 0
     fi
     if [[ -f "${target}" && ! -L "${target}" ]] && jq empty "${target}" 2>/dev/null; then
         merged="$(sync_settings "${target}" null "${state}")"
         if ! same_json "${target}" "${merged}"; then
             if [[ "${DRY_RUN}" -eq 1 ]]; then
-                printf 'Would remove the managed Cursor %s from %s\n' "${label}" "${target}"
+                printf 'Would remove the managed settings from %s\n' "${target}"
                 return 0
             fi
             backup_path "${target}"
             write_private_file "${target}" "${merged}"
-            printf 'Removed the managed Cursor %s from %s\n' "${label}" "${target}"
+            printf 'Removed the managed settings from %s\n' "${target}"
         fi
     fi
     [[ "${DRY_RUN}" -eq 1 ]] || rm -f "${state}"
-}
-
-remove_cursor_config() {
-    unmerge_cursor_file "${CURSOR_CLI_CONFIG}" "${CURSOR_CLI_CONFIG_STATE}" cli-config
-    unmerge_cursor_file "${CURSOR_HOOKS}" "${CURSOR_HOOKS_STATE}" hooks
 }
 
 warn_unused_agents_checkout() {
@@ -966,8 +1001,8 @@ print_managed() {
         printf '%s/%s\n' "${DEST}" "${entry%%|*}"
     done < <(editor_links)
     [[ "${PERSONA_AGENTS}" == yes ]] || return 0
-    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}" \
-        "${CURSOR_CLI_CONFIG}" "${CURSOR_HOOKS}"; do
+    for entry in ${WANTED_AGENT_LINKS[@]+"${WANTED_AGENT_LINKS[@]}"} ${WANTED_SKILL_LINKS[@]+"${WANTED_SKILL_LINKS[@]}"} \
+        ${WANTED_MANAGED_JSON[@]+"${WANTED_MANAGED_JSON[@]}"}; do
         printf '%s/%s\n' "${DEST}" "${entry%%|*}"
     done
     printf '%s/%s\n' "${DEST}" "${SKILLS_DIR}"
@@ -1000,7 +1035,7 @@ print_status() {
         print_link_state "${DEST}/${entry%%|*}" "${entry#*|}"
     done < <(editor_links)
 
-    for entry in "${AGENT_LINKS[@]}"; do
+    for entry in ${WANTED_AGENT_LINKS[@]+"${WANTED_AGENT_LINKS[@]}"}; do
         [[ "${PERSONA_AGENTS}" == yes ]] || break
         target="${DEST}/${entry%%|*}"
         link_target="${DEST}/.config/agents/${entry#*|}"
@@ -1022,7 +1057,7 @@ print_status() {
         elif [[ ! -d "${target}" ]]; then
             printf 'missing %s\n' "${target}"
         fi
-        for entry in "${SKILL_LINKS[@]}"; do
+        for entry in ${WANTED_SKILL_LINKS[@]+"${WANTED_SKILL_LINKS[@]}"}; do
             link_target="${DEST}/${SKILLS_DIR}"
             target="${DEST}/${entry}"
             if [[ -L "${target}" && "$(readlink "${target}")" == "${link_target}" ]]; then
@@ -1035,7 +1070,9 @@ print_status() {
                 printf 'missing %s\n' "${target}"
             fi
         done
-        print_cursor_config_state
+        for entry in ${WANTED_MANAGED_JSON[@]+"${WANTED_MANAGED_JSON[@]}"}; do
+            print_managed_json_state "${entry}"
+        done
     elif [[ -e "${DEST}/.config/agents" ]]; then
         printf 'unused %s\n' "${DEST}/.config/agents"
     fi
@@ -1047,11 +1084,11 @@ print_status() {
 
 # missing, foreign (a link other than the old one into the checkout, which is
 # reported as stale), or drifted (the next run would change it). Needs jq and
-# the checkout to say anything.
-print_cursor_managed_state() {
-    local relative="$1" managed_name="$2" state_rel="$3"
-    local target="${DEST}/${relative}" state="${DEST}/${state_rel}" prev=/dev/null wanted
-    [[ -f "${DEST}/.config/agents/tools/cursor/${managed_name}" ]] || return 0
+# the managed copy to say anything.
+print_managed_json_state() {
+    local target source state prev=/dev/null wanted
+    { read -r target; read -r source; read -r state; } < <(managed_json_paths "$1")
+    [[ -f "${source}" ]] || return 0
     command -v jq >/dev/null 2>&1 || return 0
     if [[ -L "${target}" ]]; then
         is_agent_link "${target}" || printf 'foreign %s\n' "${target}"
@@ -1062,15 +1099,10 @@ print_cursor_managed_state() {
     fi
     [[ -f "${state}" ]] && prev="${state}"
     if ! jq empty "${target}" 2>/dev/null \
-        || ! wanted="$(wanted_cursor_file "${managed_name}" 2>/dev/null)" \
+        || ! wanted="$(jq . "${source}" 2>/dev/null)" \
         || ! same_json "${target}" "$(sync_settings "${target}" "${wanted}" "${prev}")"; then
         printf 'drifted %s\n' "${target}"
     fi
-}
-
-print_cursor_config_state() {
-    print_cursor_managed_state "${CURSOR_CLI_CONFIG}" cli-config.json "${CURSOR_CLI_CONFIG_STATE}"
-    print_cursor_managed_state "${CURSOR_HOOKS}" hooks.json "${CURSOR_HOOKS_STATE}"
 }
 
 # ---------------------------------------------------------------------------
@@ -1095,8 +1127,7 @@ add_refusal() {
             return 0
             ;;
     esac
-    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}" \
-        "${CURSOR_CLI_CONFIG}" "${CURSOR_HOOKS}"; do
+    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}" "${MANAGED_JSON[@]}"; do
         if [[ "${relative}" == "${entry%%|*}" || "${relative}" == "${entry%%|*}/"* ]]; then
             printf 'belongs to the private agents repo\n'
             return 0
@@ -1263,6 +1294,7 @@ add_files() {
 }
 
 main() {
+    local entry
     parse_args "$@"
 
     if [[ ! -d "${REPO}/stow" ]]; then
@@ -1306,9 +1338,19 @@ main() {
                 sync_agents_repo
                 link_agents
                 link_skills
-                apply_cursor_config
+                # Another app's settings are taken back out, as for a persona
+                # without agents.
+                for entry in "${MANAGED_JSON[@]}"; do
+                    if app_wanted "${entry}"; then
+                        merge_managed_json "${entry}"
+                    else
+                        unmerge_managed_json "${entry}"
+                    fi
+                done
             else
-                remove_cursor_config
+                for entry in "${MANAGED_JSON[@]}"; do
+                    unmerge_managed_json "${entry}"
+                done
                 warn_unused_agents_checkout
             fi
             copy_seeds

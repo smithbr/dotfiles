@@ -2,6 +2,7 @@
 os=darwin,linux
 layers=common
 agents=no
+agent_apps=
 editors=no
 brew=
 brew_optional=

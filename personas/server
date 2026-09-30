@@ -2,6 +2,7 @@
 os=darwin,linux
 layers=common tools server
 agents=yes
+agent_apps=claude codex
 editors=no
 brew=core
 brew_optional=macos

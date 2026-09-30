@@ -21,22 +21,25 @@ setup() {
         ln -s "${TEST_SOURCE_DIR}/stow/common/${relative}" "${HOME}/${relative}"
     done
     mkdir -p "${HOME}/.config/agents/skills" "${HOME}/.agents/skills"
-    for relative in .cursor/skills; do
+    for relative in .claude/skills .cursor/skills; do
         mkdir -p "$(dirname "${HOME}/${relative}")"
         ln -s "${HOME}/.agents/skills" "${HOME}/${relative}"
     done
-    for relative in .codex/AGENTS.md .cursor/AGENTS.md; do
+    for relative in .claude/CLAUDE.md .codex/AGENTS.md .cursor/AGENTS.md; do
         mkdir -p "$(dirname "${HOME}/${relative}")"
         ln -s "${HOME}/.config/agents/AGENTS.md" "${HOME}/${relative}"
     done
     mkdir -p "${HOME}/.config/agents/agents"
+    ln -s "${HOME}/.config/agents/agents" "${HOME}/.claude/agents"
     ln -s "${HOME}/.config/agents/agents" "${HOME}/.cursor/agents"
     printf 'agents\n' > "${HOME}/.config/agents/AGENTS.md"
     rm "${HOME}/.config/agents/tools"
-    mkdir -p "${HOME}/.config/agents/tools/cursor"
+    mkdir -p "${HOME}/.config/agents/tools/claude" "${HOME}/.config/agents/tools/cursor"
+    printf '{}\n' > "${HOME}/.config/agents/tools/claude/settings.json"
     printf '{}\n' > "${HOME}/.config/agents/tools/cursor/cli-config.json"
     printf '{"version":1,"hooks":{}}\n' > "${HOME}/.config/agents/tools/cursor/hooks.json"
     # Real files, merged from the managed settings by link.sh.
+    printf '{}\n' > "${HOME}/.claude/settings.json"
     printf '{}\n' > "${HOME}/.cursor/cli-config.json"
     printf '{"version":1,"hooks":{}}\n' > "${HOME}/.cursor/hooks.json"
     printf 'tool cache\n' > "${HOME}/.config/agents/tools/cache"
