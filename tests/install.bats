@@ -107,6 +107,20 @@ run_parser() {
     assert_output "dry=0 system=1 brew=0 shell=1 verbose=0 args=--skip-system --adopt"
 }
 
+@test "install.sh always refreshes the agents checkout when linking" {
+    printf '#!/usr/bin/env bash\nprintf "link.sh %%s\\n" "$*"\n' > "${TEST_TMPDIR}/link.sh"
+    run bash -c "
+        log_info() { :; }
+        log_pending_link_changes() { :; }
+        stow() { :; }
+        LINK_SCRIPT='${TEST_TMPDIR}/link.sh' dry_run=0 link_args=(--adopt)
+        $(sed -n '/^apply_dotfiles() {$/,/^}$/p' "${PROJECT_ROOT}/install.sh")
+        apply_dotfiles
+    "
+    assert_success
+    assert_output "link.sh --refresh -- --adopt"
+}
+
 @test "install.sh takes --persona NAME without passing it to stow" {
     run bash -c "
         usage() { :; }

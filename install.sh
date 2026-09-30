@@ -363,7 +363,9 @@ log_pending_link_changes() {
 }
 
 apply_dotfiles() {
-    local -a link_cmd=(bash "${LINK_SCRIPT}")
+    # An install always pulls the agents checkout; link.sh on its own only
+    # does weekly.
+    local -a link_cmd=(bash "${LINK_SCRIPT}" --refresh)
 
     if ! command -v stow >/dev/null 2>&1 && [[ "${dry_run}" -eq 0 ]]; then
         log_error "GNU Stow is not installed; cannot link dotfiles"

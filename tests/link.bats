@@ -402,6 +402,35 @@ stat_mode() {
     [ "$(cat "${DEST}/.cursor/mcp.json")" = overrides ]
 }
 
+@test "names skill folders left from the old flat layout and keeps them" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    run_link
+    assert_success
+    refute_output --partial "does not track"
+
+    mkdir -p "${DEST}/.config/agents/skills/old-skill"
+    printf 'finder\n' > "${DEST}/.config/agents/skills/old-skill/.DS_Store"
+    run_link
+    assert_success
+    assert_output --partial "does not track, likely left from the old flat layout: old-skill."
+    [ -f "${DEST}/.config/agents/skills/old-skill/.DS_Store" ]
+}
+
+@test "a recent checkout is pulled only with --refresh" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    run_link
+    assert_success
+    printf 'new rules\n' > "${AGENTS_FIXTURE}/AGENTS.md"
+    git -C "${AGENTS_FIXTURE}" -c user.name=test -c user.email=test@example.com commit -qam rules
+
+    run_link
+    assert_success
+    [ "$(cat "${DEST}/.config/agents/AGENTS.md")" = rules ]
+    run_link --refresh
+    assert_success
+    [ "$(cat "${DEST}/.config/agents/AGENTS.md")" = 'new rules' ]
+}
+
 @test "an unreachable agents repo does not stop the rest of the install" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     AGENTS_REPO_URL="file://${TEST_TMPDIR}/missing" run_link

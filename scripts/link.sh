@@ -773,6 +773,24 @@ link_agents() {
     done
 }
 
+# Skills used to sit directly in the agents repo's skills/. A pull that moved
+# them into bundles leaves behind any folder still holding untracked files
+# (.DS_Store, caches), so skills/ looks flat again. Name them; never delete.
+warn_flat_skill_leftovers() {
+    local checkout="${DEST}/.config/agents" dir
+    local -a leftovers=()
+    [[ -d "${checkout}/.git" ]] && command -v git >/dev/null 2>&1 || return 0
+    for dir in "${checkout}/skills/"*/; do
+        dir="${dir%/}"
+        [[ -d "${dir}" ]] || continue
+        if [[ -z "$(git -C "${checkout}" ls-files -- "skills/${dir##*/}" 2>/dev/null | head -n 1)" ]]; then
+            leftovers+=("${dir##*/}")
+        fi
+    done
+    [[ "${#leftovers[@]}" -gt 0 ]] || return 0
+    log_warn "${checkout}/skills has folders the agents repo does not track, likely left from the old flat layout: ${leftovers[*]}. Move them out once nothing in them is yours."
+}
+
 # ~/.agents/skills is machine-local: Stow links the core bundle into it, and
 # skill-import links more. The old layout linked it to the whole library.
 link_skills() {
@@ -780,6 +798,7 @@ link_skills() {
     local relative target
 
     [[ -d "${bundles}/core" ]] || return 0
+    warn_flat_skill_leftovers
     if [[ "${DRY_RUN}" -eq 1 ]]; then
         printf 'Would stow skill bundle core into %s\n' "${skills}"
         return 0
