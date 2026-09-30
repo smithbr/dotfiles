@@ -79,7 +79,7 @@ This is process-level isolation, not a real container or VM.
 
 [`bin_scripts.bats`](/Users/bran/.dotfiles/tests/bin_scripts.bats)
 
-- Covers scripts in [`stow/tools/.local/bin`](/Users/bran/.dotfiles/stow/tools/.local/bin) and [`stow/server.linux/.local/bin`](/Users/bran/.dotfiles/stow/server.linux/.local/bin)
+- Covers scripts in [`stow/tools/.local/bin`](/Users/bran/.dotfiles/stow/tools/.local/bin), [`stow/personal/.local/bin`](/Users/bran/.dotfiles/stow/personal/.local/bin), and [`stow/server.linux/.local/bin`](/Users/bran/.dotfiles/stow/server.linux/.local/bin)
 - Runs `st` (in `stow/desktop.darwin/.local/bin`) under plain Python: team listing and dry runs, a directory or the current directory as a one-tab team, a team winning over a same-named directory, and each tab running its command as the tab's program
 - Verifies help output and startup probing for `ph-padd`
 - Runs `cf-cert` against a mocked acme.sh: argument checks, issue-only runs, the combined-pem install and chained reload command, stopping on a failed issue, a missing token on closed stdin, and `--pihole` refusing to run without root
