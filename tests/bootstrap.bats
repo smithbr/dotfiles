@@ -578,6 +578,7 @@ MOCK
     guid="$(jq -r '.Profiles[0].Guid' "${PROJECT_ROOT}/stow/desktop.darwin/Library/Application Support/iTerm2/DynamicProfiles/dotfiles.json")"
     run cat "${TEST_TMPDIR}/iterm2/defaults.log"
     assert_line "write com.googlecode.iterm2 EnableAPIServer -bool true"
+    assert_line "write com.googlecode.iterm2 shortLivedSessionDuration -float 0"
     assert_line "write com.googlecode.iterm2 Default Bookmark Guid -string ${guid}"
 }
 
