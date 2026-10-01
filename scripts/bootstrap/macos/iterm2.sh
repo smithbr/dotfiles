@@ -32,4 +32,7 @@ set_default() {
 
 # Claude Code's iTerm2 split-pane teammates drive iTerm2 through its Python API.
 set_default EnableAPIServer -bool true 1
+# Split panes run under throwaway profiles, so a per-profile "don't warn again"
+# never sticks; 0 turns off the "session ended very soon" warning everywhere.
+set_default shortLivedSessionDuration -float 0 0
 set_default "Default Bookmark Guid" -string "${PROFILE_GUID}" "${PROFILE_GUID}"
