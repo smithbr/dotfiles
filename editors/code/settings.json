@@ -31,5 +31,7 @@
     "datadog.connection.notification.suppressUnauthorizedAccessWarning": true,
     "window.autoDetectColorScheme": true,
     "diffEditor.ignoreTrimWhitespace": true,
-    "editor.unicodeHighlight.nonBasicASCII": false
+    "editor.unicodeHighlight.nonBasicASCII": false,
+    "diffEditor.maxComputationTime": 0,
+    "workbench.statusBar.visible": false
 }
