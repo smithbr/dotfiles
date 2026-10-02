@@ -28,6 +28,7 @@ brew "skills"
 brew "stow"
 brew "uv"
 brew "xdg-ninja"
+cask "iterm2"
 cask "1password-cli"
 
 # Shell Enhancements
