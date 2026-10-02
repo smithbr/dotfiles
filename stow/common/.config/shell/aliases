@@ -15,8 +15,8 @@ alias ddf="cd ~/.dotfiles"
 alias ff="fastfetch -c all"
 alias fish="asciiquarium"
 alias rl="exec ${SHELL} -l"
-alias skill-drop="~/.config/agents/scripts/skill-import -D"
-alias skill-import="~/.config/agents/scripts/skill-import"
+alias skill-drop="~/.config/agents/scripts/skills-add -D"
+alias skills-add="~/.config/agents/scripts/skills-add"
 
 # system
 alias df="df -HT"
