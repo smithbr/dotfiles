@@ -36,3 +36,19 @@ set_default EnableAPIServer -bool true 1
 # never sticks; 0 turns off the "session ended very soon" warning everywhere.
 set_default shortLivedSessionDuration -float 0 0
 set_default "Default Bookmark Guid" -string "${PROFILE_GUID}" "${PROFILE_GUID}"
+
+# The Catppuccin presets show in Color Presets once they are in "Custom Color
+# Presets". Read from the repo so this works before linking; other presets are
+# left alone, and a preset is written only when missing or different.
+for preset in "${BASEDIR}/stow/desktop.darwin/.config/iterm2/"*.itermcolors; do
+    name="$(basename "${preset}" .itermcolors)"
+    want="$(plutil -convert xml1 -o - "${preset}")"
+    have="$(defaults export "${ITERM_DOMAIN}" - 2>/dev/null |
+        plutil -extract "Custom Color Presets.${name}" xml1 -o - - 2>/dev/null || true)"
+    if [[ "${have}" == "${want}" ]]; then
+        log_info "iTerm2 color preset ${name} already set"
+        continue
+    fi
+    defaults write "${ITERM_DOMAIN}" "Custom Color Presets" -dict-add "${name}" "${want}"
+    log_info "Set iTerm2 color preset ${name}"
+done

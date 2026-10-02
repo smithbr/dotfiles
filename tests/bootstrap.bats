@@ -552,15 +552,26 @@ MOCK
 
 # Runs iterm2.sh against a fake app and a `defaults` mock whose store is
 # ${TEST_ROOT}/store/<key>; writes are logged to ${TEST_ROOT}/defaults.log.
+# Dictionary adds and exports go through the real plist ${TEST_ROOT}/domain.plist.
 _run_iterm2_script() {
+    command -v plutil >/dev/null || skip "plutil is macOS-only"
     local root="${TEST_TMPDIR}/iterm2"
     mkdir -p "${root}/bin" "${root}/store" "${root}/iTerm.app"
     : > "${root}/defaults.log"
     cat > "${root}/bin/defaults" <<'MOCK'
 #!/usr/bin/env bash
+plist="${TEST_ROOT}/domain.plist"
 case "$1" in
     read) cat "${TEST_ROOT}/store/$3" 2>/dev/null || exit 1 ;;
+    export) [[ -f "${plist}" ]] && cat "${plist}" || exit 1 ;;
     write)
+        if [[ "$4" == "-dict-add" ]]; then
+            printf '%s\n' "${*:1:5}" >> "${TEST_ROOT}/defaults.log"
+            [[ -f "${plist}" ]] || plutil -create xml1 "${plist}"
+            plutil -extract "$3" raw "${plist}" >/dev/null 2>&1 || plutil -insert "$3" -dictionary "${plist}"
+            plutil -replace "$3.$5" -xml "$6" "${plist}"
+            exit 0
+        fi
         printf '%s\n' "$*" >> "${TEST_ROOT}/defaults.log"
         [[ "$4" == "-bool" ]] && echo 1 > "${TEST_ROOT}/store/$3" || echo "$5" > "${TEST_ROOT}/store/$3"
         ;;
@@ -589,6 +600,29 @@ MOCK
     assert_output --partial "EnableAPIServer already set"
     run wc -l < "${TEST_TMPDIR}/iterm2/defaults.log"
     assert_output --regexp '^ *0$'
+}
+
+@test "iterm2.sh adds the Catppuccin color presets, fixes a stale one, and keeps the user's" {
+    command -v plutil >/dev/null || skip "plutil is macOS-only"
+    local root="${TEST_TMPDIR}/iterm2" presets="${PROJECT_ROOT}/stow/desktop.darwin/.config/iterm2"
+    mkdir -p "${root}"
+    plutil -create xml1 "${root}/domain.plist"
+    plutil -insert "Custom Color Presets" -dictionary "${root}/domain.plist"
+    plutil -insert "Custom Color Presets.Mine" -xml '<dict><key>a</key><integer>1</integer></dict>' "${root}/domain.plist"
+    plutil -insert "Custom Color Presets.Catppuccin Mocha" -xml '<dict/>' "${root}/domain.plist"
+
+    _run_iterm2_script
+    assert_success
+    assert_output --partial "Set iTerm2 color preset Catppuccin Mocha"
+
+    run plutil -extract "Custom Color Presets.Mine.a" raw "${root}/domain.plist"
+    assert_output "1"
+    local name
+    for name in Frappe Latte Macchiato Mocha; do
+        [[ "$(plutil -extract "Custom Color Presets.Catppuccin ${name}" xml1 -o - "${root}/domain.plist")" == \
+            "$(plutil -convert xml1 -o - "${presets}/Catppuccin ${name}.itermcolors")" ]] ||
+            fail "Catppuccin ${name} differs from the repo file"
+    done
 }
 
 # ---------------------------------------------------------------------------
