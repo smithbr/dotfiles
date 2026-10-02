@@ -33,5 +33,7 @@
     "diffEditor.ignoreTrimWhitespace": true,
     "editor.unicodeHighlight.nonBasicASCII": false,
     "diffEditor.maxComputationTime": 0,
-    "workbench.statusBar.visible": false
+    "[tsv]": {
+        "editor.inlayHints.maximumLength": 0
+    }
 }
