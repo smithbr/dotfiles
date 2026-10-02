@@ -77,7 +77,7 @@ run_shellcheck() {
     local -a shellcheck_files=()
 
     while IFS= read -r file; do
-        # Bin scripts may be written in another language (start-team is Python).
+        # Bin scripts may be written in another language (st is Python).
         if [[ "${file}" == stow/*/.local/bin/* ]] && ! head -n 1 "${file}" | grep -Eq '^#!.*[/ ](ba)?sh$'; then
             continue
         fi

@@ -11,9 +11,12 @@
   st DIR              Claude Code in DIR
   st                  Claude Code in the current directory
   st --list           list the teams
+  st who              list the agents configured for the current directory
+  st conf             open the teams file in VS Code
   st TEAM --dry-run   print what would run, open nothing
 
-Teams live in $START_TEAM_CONFIG (default ~/.config/start-team/teams.toml).
+Teams live in $CLAUDE_TEAM_CONFIG (default ~/.config/claude-team/teams.toml),
+a local file: copy ~/.config/claude-team/teams.toml.example to start one.
 A team name wins over an agent name, and both win over a directory.
 """
 
@@ -25,33 +28,41 @@ import tomllib
 from pathlib import Path
 
 CONFIG = Path(
-    os.environ.get("START_TEAM_CONFIG", "~/.config/start-team/teams.toml")
+    os.environ.get("CLAUDE_TEAM_CONFIG", "~/.config/claude-team/teams.toml")
 ).expanduser()
 
 def die(message):
     sys.exit(f"st: {message}")
 
 
+def no_teams_file():
+    die(f"no teams file at {CONFIG}; copy ~/.config/claude-team/teams.toml.example there")
+
+
 def load_teams():
     if not CONFIG.exists():
-        die(f"no teams file at {CONFIG}")
+        no_teams_file()
     with CONFIG.open("rb") as f:
         return tomllib.load(f)
 
 
+def team_agents(team_name, team):
+    """Return {agent name: settings}: the team's sub-tables, or the team itself as one agent."""
+    return {k: v for k, v in team.items() if isinstance(v, dict)} or {team_name: {}}
+
+
 def agent_commands(team_name, team, only=None):
     """Yield (tab title, shell command) for each agent in the team, or just `only`."""
-    agents = team.get("agents") or die(f"team {team_name!r} has no agents")
     team_dir = team.get("dir", os.getcwd())
-    for agent in agents:
-        name = agent.get("name") or die(f"an agent in {team_name!r} has no name")
+    for name, agent in team_agents(team_name, team).items():
         if only is not None and name != only:
             continue
         work_dir = Path(agent.get("dir", team_dir)).expanduser()
         argv = [agent.get("command", team.get("command", "claude"))]
         argv += agent.get("args", team.get("args", []))
-        if agent.get("prompt"):
-            argv.append(agent["prompt"])
+        prompt = agent.get("prompt", team.get("prompt"))
+        if prompt:
+            argv.append(prompt)
         yield name, f"cd {shlex.quote(str(work_dir))} && {shlex.join(argv)}"
 
 
@@ -59,14 +70,13 @@ def find_agent(teams, target):
     """Return (team name, agent name) for AGENT or TEAM/AGENT, or None."""
     team_name, _, agent_name = target.rpartition("/")
     if team_name:
-        agents = teams.get(team_name, {}).get("agents", [])
-        if any(a.get("name") == agent_name for a in agents):
+        if team_name in teams and agent_name in team_agents(team_name, teams[team_name]):
             return team_name, agent_name
         return None
     owners = [
         name
         for name, team in teams.items()
-        if any(a.get("name") == target for a in team.get("agents", []))
+        if target in team_agents(name, team)
     ]
     if len(owners) > 1:
         choices = ", ".join(f"{owner}/{target}" for owner in owners)
@@ -114,11 +124,23 @@ def main():
 
     if args.list:
         for name, team in load_teams().items():
-            agents = ", ".join(a.get("name", "?") for a in team.get("agents", []))
+            agents = ", ".join(team_agents(name, team))
             print(f"{name:<14} {team.get('dir', '.'):<20} {agents}")
         return
 
+    if args.target == "conf":
+        os.execvp("code", ["code", str(CONFIG)])
+
     teams = load_teams() if CONFIG.exists() else {}
+    if args.target == "who":
+        cwd = Path.cwd().resolve()
+        for team_name, team in teams.items():
+            for name, agent in team_agents(team_name, team).items():
+                agent_dir = Path(agent.get("dir", team.get("dir", "."))).expanduser()
+                if agent_dir.resolve() == cwd:
+                    [(_, command)] = agent_commands(team_name, team, name)
+                    print(f"{team_name}/{name:<8} {command.partition(' && ')[2]}")
+        return
     if args.target in teams:
         commands = list(agent_commands(args.target, teams[args.target]))
     elif found := find_agent(teams, args.target):
@@ -128,6 +150,8 @@ def main():
         # A directory is a team of one: Claude Code there, in its own tab.
         work_dir = Path(args.target).expanduser().resolve()
         commands = [(work_dir.name, f"cd {shlex.quote(str(work_dir))} && claude")]
+    elif not CONFIG.exists():
+        no_teams_file()
     else:
         die(f"no team, agent, or directory {args.target!r} (teams: {', '.join(teams) or 'none'})")
 

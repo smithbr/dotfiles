@@ -3704,18 +3704,16 @@ _st() {
 }
 
 _write_teams() {
-    export START_TEAM_CONFIG="${TEST_TMPDIR}/teams.toml"
-    cat > "${START_TEAM_CONFIG}" <<'TOML'
+    export CLAUDE_TEAM_CONFIG="${TEST_TMPDIR}/teams.toml"
+    cat > "${CLAUDE_TEAM_CONFIG}" <<'TOML'
 [crew]
 dir = "/work/crew"
 args = ["--model", "opus"]
 
-[[crew.agents]]
-name = "lead"
+[crew.lead]
 prompt = "/lead plan it"
 
-[[crew.agents]]
-name = "helper"
+[crew.helper]
 dir = "/work/other dir"
 command = "codex"
 TOML
@@ -3734,15 +3732,67 @@ TOML
     assert_line "[helper] cd '/work/other dir' && codex --model opus"
 }
 
+@test "st treats a team without agents as one agent named after it" {
+    _write_teams
+    cat >> "${CLAUDE_TEAM_CONFIG}" <<'TOML'
+
+[solo]
+dir = "/work/solo"
+TOML
+    run _st --list
+    assert_success
+    assert_line --regexp '^solo +/work/solo +solo$'
+
+    run _st solo --dry-run
+    assert_success
+    assert_output "[solo] cd /work/solo && claude"
+}
+
 @test "st rejects an unknown team and a missing teams file" {
     _write_teams
     run _st nope --dry-run
     assert_failure
     assert_output --partial "no team, agent, or directory 'nope'"
 
-    START_TEAM_CONFIG="${TEST_TMPDIR}/missing.toml" run _st --list
+    CLAUDE_TEAM_CONFIG="${TEST_TMPDIR}/missing.toml" run _st --list
     assert_failure
     assert_output --partial "no teams file"
+    assert_output --partial "copy ~/.config/claude-team/teams.toml.example there"
+
+    CLAUDE_TEAM_CONFIG="${TEST_TMPDIR}/missing.toml" run _st crew --dry-run
+    assert_failure
+    assert_output --partial "copy ~/.config/claude-team/teams.toml.example there"
+}
+
+@test "st dry-runs every team in the tracked teams.toml.example" {
+    export CLAUDE_TEAM_CONFIG="${PROJECT_ROOT}/stow/desktop.darwin/.config/claude-team/teams.toml.example"
+    run _st --list
+    assert_success
+    local team
+    for team in $(awk '{print $1}' <<< "${output}"); do
+        run _st "${team}" --dry-run
+        assert_success
+        assert_output --partial "] cd "
+    done
+}
+
+@test "st agents inherit the team's prompt" {
+    export CLAUDE_TEAM_CONFIG="${TEST_TMPDIR}/teams.toml"
+    cat > "${CLAUDE_TEAM_CONFIG}" <<'TOML'
+[pair]
+prompt = "be the lead"
+
+[pair.a]
+dir = "/work/a"
+
+[pair.b]
+dir = "/work/b"
+prompt = "be b"
+TOML
+    run _st pair --dry-run
+    assert_success
+    assert_line "[a] cd /work/a && claude 'be the lead'"
+    assert_line "[b] cd /work/b && claude 'be b'"
 }
 
 @test "st opens one agent by name, with its team's settings" {
@@ -3758,17 +3808,20 @@ TOML
     run _st crew/nope --dry-run
     assert_failure
     assert_output --partial "no team, agent, or directory 'crew/nope'"
+
+    run _st nope/nope --dry-run
+    assert_failure
+    assert_output --partial "no team, agent, or directory 'nope/nope'"
 }
 
 @test "st asks for TEAM/AGENT when an agent name is in two teams" {
     _write_teams
-    cat >> "${START_TEAM_CONFIG}" <<'TOML'
+    cat >> "${CLAUDE_TEAM_CONFIG}" <<'TOML'
 
 [other]
 dir = "/work/other"
 
-[[other.agents]]
-name = "lead"
+[other.lead]
 TOML
     run _st lead --dry-run
     assert_failure
@@ -3804,7 +3857,7 @@ PY
 
 @test "st opens Claude Code in a directory, even without a teams file" {
     mkdir -p "${TEST_TMPDIR}/my project"
-    START_TEAM_CONFIG="${TEST_TMPDIR}/missing.toml" run _st "${TEST_TMPDIR}/my project/" --dry-run
+    CLAUDE_TEAM_CONFIG="${TEST_TMPDIR}/missing.toml" run _st "${TEST_TMPDIR}/my project/" --dry-run
     assert_success
     assert_output "[my project] cd '$(cd "${TEST_TMPDIR}/my project" && pwd -P)' && claude"
 }
@@ -3821,7 +3874,7 @@ PY
 @test "st with no arguments opens Claude Code in the current directory" {
     mkdir -p "${TEST_TMPDIR}/here"
     cd "${TEST_TMPDIR}/here"
-    START_TEAM_CONFIG="${TEST_TMPDIR}/missing.toml" run _st --dry-run
+    CLAUDE_TEAM_CONFIG="${TEST_TMPDIR}/missing.toml" run _st --dry-run
     assert_success
     assert_output "[here] cd $(pwd -P) && claude"
 }

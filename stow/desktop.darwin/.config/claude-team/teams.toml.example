@@ -1,0 +1,63 @@
+# Reference for ~/.config/claude-team/teams.toml, the local file st reads
+# (the dotfiles repo tracks only this example). Start yours with:
+#
+#   cp ~/.config/claude-team/teams.toml.example ~/.config/claude-team/teams.toml
+#
+# A team is a table and its agents are sub-tables, one iTerm2 tab each, in
+# order. A team with no agents is one agent named after the team. Names are
+# what you type, so keep them short.
+#
+# Team keys, inherited by every agent:
+#   dir     = "~/some/dir"          where agents start (default: current dir)
+#   command = "claude"              what each tab runs (default: "claude")
+#   args    = ["--model", "opus"]   arguments before the prompt (default: none)
+#   prompt  = "/role do the thing"  first message (default: none, starts idle)
+#
+# Agent keys ([team.agent]; the agent name is the tab title): the same four,
+# each replacing the team's value for this agent.
+#
+# args = ["--agent", "NAME"] starts Claude Code as subagent NAME, defined in
+# <dir>/.claude/agents/NAME.md or ~/.claude/agents/NAME.md. The global lead
+# (~/.config/agents/agents/lead.md) runs a session as the project's lead and
+# dispatches the rest of the team itself, so most projects need one tab.
+# Cursor's CLI (command = "cursor-agent") has no such flag, so give the role
+# in a prompt.
+#
+#   st TEAM             every agent in TEAM
+#   st AGENT            one agent, with its team's settings
+#   st TEAM/AGENT       the same, when two teams have an agent of that name
+#   st TEAM --dry-run   print the commands instead of opening iTerm2
+
+# st app: one tab, Claude Code as the lead.
+[app]
+dir = "~/Projects/my-app"
+args = ["--agent", "lead"]
+
+# st df: the lead and a plain session side by side; dev clears the team args.
+[df]
+dir = "~/.dotfiles"
+args = ["--agent", "lead"]
+
+[df.lead]
+
+[df.dev]
+args = []
+
+# A team on Cursor's CLI across two repos: the team's prompt makes every tab
+# the lead, the agents only pick the directory.
+[web]
+command = "cursor-agent"
+prompt = "Act as the agent defined in ~/.config/agents/agents/lead.md: read it first, then wait for instructions."
+
+[web.fe]
+dir = "~/Projects/my-web-frontend"
+
+[web.be]
+dir = "~/Projects/my-web-backend"
+
+# Per-agent overrides: ui runs Claude Code on opus with its own first prompt.
+[web.ui]
+dir = "~/Projects/my-web/ui"
+command = "claude"
+args = ["--model", "opus"]
+prompt = "Read the README and list the open TODOs"
