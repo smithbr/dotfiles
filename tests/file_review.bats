@@ -7,7 +7,7 @@ setup() {
 
     export HOME="${TEST_TMPDIR}/home"
     mkdir -p "${HOME}/.config/git" "${HOME}/.config/agents" "${HOME}/.local/bin" "${HOME}/Documents"
-    printf 'local override\n' > "${HOME}/.config/git/config.local"
+    printf '[user]\n    email = me@example.com\n' > "${HOME}/.config/git/config.local"
     printf 'tool cache\n' > "${HOME}/.config/agents/tools"
     printf 'extra binary\n' > "${HOME}/.local/bin/ph-extra"
     printf 'noise\n' > "${HOME}/Documents/todo.txt"
@@ -20,6 +20,7 @@ setup() {
         printf 'managed\n' > "${TEST_SOURCE_DIR}/stow/common/${relative}"
         ln -s "${TEST_SOURCE_DIR}/stow/common/${relative}" "${HOME}/${relative}"
     done
+    printf '[include]\n    path = ~/.config/git/config.local\n' > "${TEST_SOURCE_DIR}/stow/common/.config/git/config"
     mkdir -p "${HOME}/.config/agents/skills" "${HOME}/.agents/skills"
     for relative in .claude/skills .cursor/skills; do
         mkdir -p "$(dirname "${HOME}/${relative}")"
@@ -31,14 +32,10 @@ setup() {
     done
     mkdir -p "${HOME}/.config/agents/agents"
     ln -s "${HOME}/.config/agents/agents" "${HOME}/.claude/agents"
-    ln -s "${HOME}/.config/agents/agents" "${HOME}/.cursor/agents"
     printf 'agents\n' > "${HOME}/.config/agents/AGENTS.md"
     rm "${HOME}/.config/agents/tools"
-    mkdir -p "${HOME}/.config/agents/tools/claude" "${HOME}/.config/agents/tools/cursor"
-    printf '{}\n' > "${HOME}/.config/agents/tools/claude/settings.json"
-    printf '{}\n' > "${HOME}/.config/agents/tools/cursor/cli-config.json"
-    printf '{"version":1,"hooks":{}}\n' > "${HOME}/.config/agents/tools/cursor/hooks.json"
-    # Real files, merged from the managed settings by link.sh.
+    mkdir -p "${HOME}/.config/agents/tools"
+    # Settings each app writes for itself.
     printf '{}\n' > "${HOME}/.claude/settings.json"
     printf '{}\n' > "${HOME}/.cursor/cli-config.json"
     printf '{"version":1,"hooks":{}}\n' > "${HOME}/.cursor/hooks.json"
@@ -67,6 +64,19 @@ teardown() {
     refute_output --partial "todo.txt"
 }
 
+@test "file review keeps a local file whose .example the repo manages" {
+    mkdir -p "${TEST_SOURCE_DIR}/stow/common/.config/claude-team" "${HOME}/.config/claude-team"
+    printf 'example\n' > "${TEST_SOURCE_DIR}/stow/common/.config/claude-team/teams.toml.example"
+    ln -s "${TEST_SOURCE_DIR}/stow/common/.config/claude-team/teams.toml.example" "${HOME}/.config/claude-team/teams.toml.example"
+    printf 'mine\n' > "${HOME}/.config/claude-team/teams.toml"
+    printf 'stray\n' > "${HOME}/.config/claude-team/stray.toml"
+
+    run "${PROJECT_ROOT}/scripts/file-review.sh" --source "${TEST_SOURCE_DIR}"
+    assert_success
+    assert_output --partial "claude-team/stray.toml"
+    refute_output --partial "claude-team/teams.toml"$'\n'
+}
+
 @test "file review explains a real file where a link belongs" {
     rm "${HOME}/.local/bin/ph-padd"
     printf 'edited copy\n' > "${HOME}/.local/bin/ph-padd"
@@ -79,16 +89,14 @@ teardown() {
     assert_output --partial "action: diff the local file against the repo"
 }
 
-@test "file review explains drifted Cursor config" {
-    command -v jq >/dev/null 2>&1 || skip "jq not installed"
-    printf '{"approvalMode":"allowlist"}\n' > "${HOME}/.config/agents/tools/cursor/cli-config.json"
+@test "file review explains a ~/.gitconfig identity that overrides config.local" {
+    printf '[user]\n    email = old@example.com\n' > "${HOME}/.gitconfig"
 
     run "${PROJECT_ROOT}/scripts/file-review.sh" --source "${TEST_SOURCE_DIR}"
     assert_success
     # shellcheck disable=SC2088
-    assert_output --partial "$(printf '%s' '~/.cursor/cli-config.json')"
-    assert_output --partial "status: a managed setting was changed or removed here"
-    [[ "$(cat "${HOME}/.cursor/cli-config.json")" == '{}' ]]
+    assert_output --partial "$(printf '%s' '~/.gitconfig')"
+    assert_output --partial "status: sets [user], which overrides ~/.config/git/config.local"
 }
 
 @test "file review finds home leftovers, broken links, and saved backups without changing them" {

@@ -175,13 +175,8 @@ prime_managed_paths_cache() {
 
 is_expected_local_override() {
     local path="$1"
-    local example_path=""
+    local example_path="${path}.example"
 
-    if [[ "${path}" != *.local ]]; then
-        return 1
-    fi
-
-    example_path="${path}.example"
     prime_managed_paths_cache
 
     grep -Fqx -- "${example_path}" <<< "${MANAGED_PATHS_CACHE}"
@@ -263,10 +258,20 @@ print_status_section() {
                 printf '    status: link into the repo for a file that moved, was removed, or no longer applies here\n'
                 printf '    action: run ~/.dotfiles/scripts/link.sh to remove it\n'
                 ;;
-            drifted)
+            unlinked)
                 printf '  %s\n' "$(display_path "${path}")"
-                printf '    status: a managed setting was changed or removed here\n'
-                printf '    action: keep any wanted change in its managed copy under the agents repo'\''s tools/, then run link.sh (it backs up the file first)\n'
+                printf '    status: belongs to a layer this persona does not link; it may be left from another persona\n'
+                printf '    action: keep it if this machine still uses it, otherwise archive it with --cleanup\n'
+                ;;
+            shadowed)
+                printf '  %s\n' "$(display_path "${path}")"
+                printf '    status: sets [user], which overrides ~/.config/git/config.local\n'
+                printf '    action: move anything you need into config.local, then archive this file\n'
+                ;;
+            unset)
+                printf '  %s\n' "$(display_path "${path}")"
+                printf '    status: no git user.email; git will refuse to commit\n'
+                printf '    action: set name and email under [user] in this file\n'
                 ;;
             unused)
                 printf '  %s\n' "$(display_path "${path}")"

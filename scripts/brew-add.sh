@@ -29,7 +29,7 @@ Install each package and add it to a Brewfile in homebrew/, sorted among the
 entries of its kind. Names already in any Brewfile are skipped.
 
 Options:
-      --file NAME     Brewfile to add to: core, home, work, macos (asked on a
+      --file NAME     Brewfile to add to: core, home, personal, work, macos (asked on a
                       terminal when missing; offers the persona's Brewfiles)
       --section NAME  Section (the comment above a group of entries) to add
                       to, when the Brewfile has more than one

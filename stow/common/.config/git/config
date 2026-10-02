@@ -6,6 +6,7 @@
 [include]
     path = ~/.config/git/config.desktop
     path = ~/.config/git/config.server
+    path = ~/.config/git/config.personal
     path = ~/.config/git/config.local
 [init]
     defaultBranch = main
@@ -39,6 +40,3 @@
 	smudge = git-lfs smudge -- %f
 	process = git-lfs filter-process
 	required = true
-[user]
-	name = smithbr
-	email = 1495361+smithbr@users.noreply.github.com

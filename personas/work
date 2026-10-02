@@ -1,8 +1,9 @@
-# Work Mac: like home, but Cursor instead of Claude Code, plus work-only files and Brewfile.work.
+# Work Mac: like home, plus Cursor, work-only files and Brewfile.work.
 os=darwin
 layers=common tools desktop work
 agents=yes
-agent_apps=cursor codex
+agent_apps=claude cursor codex
+skills=core
 editors=yes
 brew=core work
 brew_optional=macos

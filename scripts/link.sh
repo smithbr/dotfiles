@@ -3,8 +3,8 @@
 #
 #   personas/<name>         which layers, editors, agents and installs a machine
 #                           gets: key=value lines for os, layers, agents,
-#                           agent_apps, editors, brew, brew_optional,
-#                           linux_optional.
+#                           agent_apps, skills, editors, brew,
+#                           brew_optional, linux_optional.
 #   stow/<layer>, stow/<layer>.<os>
 #                           mirror $HOME; every file becomes a symlink into the
 #                           repo, so editing the live file edits the repo.
@@ -16,16 +16,15 @@
 #   AGENT_LINKS             symlinks into the private agents checkout, which is
 #                           cloned into ~/.config/agents and refreshed weekly.
 #   SKILL_LINKS             link to ~/.agents/skills, a real directory that Stow
-#                           fills from the agents repo's skills/ bundles. Only
-#                           core is stowed here; skill-import adds more locally.
-#   MANAGED_JSON            real files, not links: the apps rewrite them. Each
-#                           one's managed copy in the agents repo's tools/ is
-#                           merged into it, and what the last merge applied is
-#                           kept so dropped entries are removed too.
+#                           fills from the agents repo's skills/ bundles: the
+#                           persona's skills list (core when unset). A bundle no
+#                           persona lists is left to skills-add; one another
+#                           persona lists is removed as stale.
 #
 # A persona without agents gets none of these: its agent links are removed as
-# stale, the merged settings are taken back out, and a leftover checkout is
-# reported but never deleted.
+# stale, and a leftover checkout is reported but never deleted. Each app's own
+# settings (~/.claude/settings.json, ~/.cursor/cli-config.json, ~/.codex/
+# config.toml) are left to the app.
 #
 # A real file where a link belongs is replaced only when its content matches
 # the repo. Anything else is moved to ~/.local/state/dotfiles/clobbered/ first,
@@ -62,58 +61,12 @@ AGENT_LINKS=(
     ".claude/agents|agents"
     ".codex/AGENTS.md|AGENTS.md"
     ".cursor/AGENTS.md|AGENTS.md"
-    ".cursor/agents|agents"
 )
 
-# destination|managed copy inside ~/.config/agents|state file with what the
-# last merge applied. Destination and state are relative to $HOME. A file whose
-# managed copy is missing from the checkout is left alone.
 # Agent apps a persona can pick with agent_apps. An entry above or in
 # SKILL_LINKS belongs to the app named by its first path component (.claude is
 # claude); a persona links only its apps' entries.
 AGENT_APPS="claude codex cursor"
-
-MANAGED_JSON=(
-    ".claude/settings.json|tools/claude/settings.json|.local/state/dotfiles/claude-settings.json"
-    ".cursor/cli-config.json|tools/cursor/cli-config.json|.local/state/dotfiles/cursor-cli-config.json"
-    ".cursor/hooks.json|tools/cursor/hooks.json|.local/state/dotfiles/cursor-hooks.json"
-)
-
-# sync(live; new; prev) applies the managed settings `new` to `live`, where
-# `prev` is what the last run applied. Managed scalars win; arrays keep their
-# live entries and gain the managed ones; whatever `prev` managed and `new` no
-# longer does is removed, unless the live value has changed since. A null
-# `new` takes everything `prev` applied back out.
-# shellcheck disable=SC2016
-SETTINGS_SYNC_JQ='
-def sync($live; $new; $prev):
-    if $new == null then
-        if ($live | type) == "object" and ($prev | type) == "object" then
-            reduce ($live | keys_unsorted[]) as $k ({};
-                if ($prev | has($k)) then
-                    sync($live[$k]; null; $prev[$k]) as $v
-                    | if $v == null then . else .[$k] = $v end
-                else .[$k] = $live[$k] end)
-            | if . == {} then null else . end
-        elif ($live | type) == "array" and ($prev | type) == "array" then
-            ($live - $prev) | if . == [] then null else . end
-        elif $live == $prev then null
-        else $live end
-    elif ($new | type) == "object" then
-        ($live | if type == "object" then . else {} end) as $l
-        | ($prev | if type == "object" then . else {} end) as $p
-        | reduce (($l + $new + $p) | keys_unsorted[]) as $k ({};
-            if ($new | has($k)) then .[$k] = sync($l[$k]; $new[$k]; $p[$k])
-            elif ($l | has($k)) then
-                sync($l[$k]; null; $p[$k]) as $v
-                | if $v == null then . else .[$k] = $v end
-            else . end)
-    elif ($new | type) == "array" then
-        ($live | if type == "array" then . else [] end) as $l
-        | ($prev | if type == "array" then . else [] end) as $p
-        | ($l - ($p - $new)) + ($new - $l)
-    else $new end;
-'
 
 # Enabled skills live in SKILLS_DIR (relative to $HOME); these link to it.
 SKILLS_DIR=".agents/skills"
@@ -260,6 +213,7 @@ PERSONA_LAYERS=""
 PERSONA_AGENTS=yes
 PERSONA_EDITORS=yes
 PERSONA_AGENT_APPS="${AGENT_APPS}"
+PERSONA_SKILLS=core
 # Installs, for install.sh: Brewfiles installed in full, Brewfiles offered in
 # the macOS picker, and the Linux bootstrap's optional installs.
 PERSONA_BREW=core
@@ -311,7 +265,7 @@ list_personas() {
 }
 
 load_persona() {
-    local name="" source file setting key value saved app
+    local name="" source file setting key value saved app bundle
     if [[ ! -d "${REPO}/personas" ]]; then
         PERSONA_LAYERS="common $(platform)"
         select_agent_apps
@@ -358,6 +312,15 @@ load_persona() {
             brew) PERSONA_BREW="${value}" ;;
             brew_optional) PERSONA_BREW_OPTIONAL="${value}" ;;
             linux_optional) PERSONA_LINUX_OPTIONAL="${value}" ;;
+            skills)
+                for bundle in ${value}; do
+                    if [[ ! "${bundle}" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+                        log_error "${file}: skills takes bundle names, not '${bundle}'"
+                        exit 2
+                    fi
+                done
+                PERSONA_SKILLS="${value}"
+                ;;
             agent_apps)
                 for app in ${value}; do
                     if [[ " ${AGENT_APPS} " != *" ${app} "* ]]; then
@@ -390,18 +353,15 @@ app_wanted() {
     [[ " ${PERSONA_AGENT_APPS} " == *" ${app#.} "* ]]
 }
 
-# The persona's share of AGENT_LINKS, SKILL_LINKS and MANAGED_JSON.
+# The persona's share of AGENT_LINKS and SKILL_LINKS.
 select_agent_apps() {
     local entry
-    WANTED_AGENT_LINKS=() WANTED_SKILL_LINKS=() WANTED_MANAGED_JSON=()
+    WANTED_AGENT_LINKS=() WANTED_SKILL_LINKS=()
     for entry in "${AGENT_LINKS[@]}"; do
         app_wanted "${entry}" && WANTED_AGENT_LINKS+=("${entry}")
     done
     for entry in "${SKILL_LINKS[@]}"; do
         app_wanted "${entry}" && WANTED_SKILL_LINKS+=("${entry}")
-    done
-    for entry in "${MANAGED_JSON[@]}"; do
-        app_wanted "${entry}" && WANTED_MANAGED_JSON+=("${entry}")
     done
     return 0
 }
@@ -562,6 +522,7 @@ stale_links() {
         printf '%s\n' "${target}"
     done < <(stale_candidates | LC_ALL=C sort -u)
     stale_agent_links
+    stale_skill_links
 }
 
 # True when a link points into the agents checkout or at the skills directory,
@@ -579,7 +540,7 @@ is_agent_link() {
 # links in ~/.agents/skills when this persona has no agents.
 agent_link_candidates() {
     local entry dir
-    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}" "${MANAGED_JSON[@]}"; do
+    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}"; do
         dirname "${entry%%|*}"
     done | LC_ALL=C sort -u | while IFS= read -r dir; do
         [[ -d "${DEST}/${dir}" && ! -L "${DEST}/${dir}" ]] || continue
@@ -605,6 +566,37 @@ stale_agent_links() {
         fi
         printf '%s\n' "${target}"
     done < <(agent_link_candidates | LC_ALL=C sort)
+}
+
+# Skill bundles some persona lists, one per line. The others belong to
+# skills-add, so links into them are never stale.
+persona_skill_bundles() {
+    local file
+    {
+        printf 'core\n'
+        for file in "${REPO}/personas"/*; do
+            [[ -f "${file}" ]] || continue
+            persona_settings "${file}" | sed -n 's/^skills=//p' | tr -s ' ' '\n'
+        done
+    } | sed '/^$/d' | LC_ALL=C sort -u
+}
+
+# Absolute paths of links in ~/.agents/skills into a bundle another persona
+# lists but this one does not.
+stale_skill_links() {
+    local skills="${DEST}/${SKILLS_DIR}" home bundles target bundle listed
+    [[ "${PERSONA_AGENTS}" == yes && -d "${skills}" && ! -L "${skills}" ]] || return 0
+    home="$(cd -P "${DEST}" && pwd)" || return 0
+    bundles="${home}/.config/agents/skills/"
+    listed="$(persona_skill_bundles)"
+    while IFS= read -r target; do
+        bundle="$(link_destination "${target}")" || continue
+        [[ "${bundle}" == "${bundles}"* ]] || continue
+        bundle="${bundle#"${bundles}"}"
+        bundle="${bundle%%/*}"
+        [[ " ${PERSONA_SKILLS} " == *" ${bundle} "* ]] && continue
+        grep -Fxq -- "${bundle}" <<< "${listed}" && printf '%s\n' "${target}"
+    done < <(find "${skills}" -mindepth 1 -maxdepth 1 -type l | LC_ALL=C sort)
 }
 
 prune_stale_links() {
@@ -791,23 +783,32 @@ warn_flat_skill_leftovers() {
     log_warn "${checkout}/skills has folders the agents repo does not track, likely left from the old flat layout: ${leftovers[*]}. Move them out once nothing in them is yours."
 }
 
-# ~/.agents/skills is machine-local: Stow links the core bundle into it, and
-# skill-import links more. The old layout linked it to the whole library.
+# ~/.agents/skills is machine-local: Stow links the persona's skill bundles
+# into it, and skills-add links more. The old layout linked it to the whole
+# library.
 link_skills() {
     local skills="${DEST}/${SKILLS_DIR}" bundles="${DEST}/.config/agents/skills"
-    local relative target
+    local relative target bundle
+    local -a wanted=()
 
     [[ -d "${bundles}/core" ]] || return 0
     warn_flat_skill_leftovers
+    for bundle in ${PERSONA_SKILLS}; do
+        if [[ -d "${bundles}/${bundle}" ]]; then
+            wanted+=("${bundle}")
+        else
+            log_warn "No skill bundle '${bundle}' in ${bundles}; skipping it"
+        fi
+    done
     if [[ "${DRY_RUN}" -eq 1 ]]; then
-        printf 'Would stow skill bundle core into %s\n' "${skills}"
+        printf 'Would stow skill bundles %s into %s\n' "${wanted[*]-none}" "${skills}"
         return 0
     fi
 
     [[ -L "${skills}" ]] && rm "${skills}"
     mkdir -p "${skills}"
-    if ! stow --dir "${bundles}" --target "${skills}" --restow --ignore '\.DS_Store' core; then
-        log_warn "Could not stow the core skills into ${skills}; resolve the conflict above and rerun"
+    if [[ "${#wanted[@]}" -gt 0 ]] && ! stow --dir "${bundles}" --target "${skills}" --restow --ignore '\.DS_Store' "${wanted[@]}"; then
+        log_warn "Could not stow the skill bundles ${wanted[*]} into ${skills}; resolve the conflict above and rerun"
     fi
 
     for relative in ${WANTED_SKILL_LINKS[@]+"${WANTED_SKILL_LINKS[@]}"}; do
@@ -819,113 +820,6 @@ link_skills() {
         mkdir -p "$(dirname "${target}")"
         ln -sfn "${skills}" "${target}"
     done
-}
-
-# Fields of a MANAGED_JSON entry: the destination, the managed copy and the
-# state file, as absolute paths.
-managed_json_paths() {
-    local entry="$1" rest
-    rest="${entry#*|}"
-    printf '%s\n' "${DEST}/${entry%%|*}" "${DEST}/.config/agents/${rest%%|*}" "${DEST}/${rest#*|}"
-}
-
-# Print live settings with `new` applied and `prev` retired. live and prev are
-# files (/dev/null when absent); new is JSON text, or null to retire it all.
-sync_settings() {
-    local live="$1" new="$2" prev="$3"
-    jq -n --indent 4 --slurpfile live "${live}" --argjson new "${new}" --slurpfile prev "${prev}" \
-        "${SETTINGS_SYNC_JQ} sync(\$live[0]; \$new; \$prev[0]) // {}"
-}
-
-same_json() {
-    [[ "$(jq -S . "$1")" == "$(jq -S . <<< "$2")" ]]
-}
-
-# Replace a file's content in one rename, keeping it private.
-write_private_file() {
-    local target="$1" content="$2" tmp
-    mkdir -p "$(dirname "${target}")"
-    tmp="$(mktemp "${target}.XXXXXX")"
-    printf '%s\n' "${content}" > "${tmp}"
-    chmod 600 "${tmp}"
-    mv "${tmp}" "${target}"
-}
-
-# Merge one MANAGED_JSON entry's managed copy into the real destination. Keys
-# apps add (plugins, their own hooks) survive; managed values are restored. The
-# old link into the checkout is already gone by now: prune_stale_links removed
-# it.
-merge_managed_json() {
-    local target source state live=/dev/null prev=/dev/null wanted merged
-    { read -r target; read -r source; read -r state; } < <(managed_json_paths "$1")
-
-    [[ -f "${source}" ]] || return 0
-    if ! command -v jq >/dev/null 2>&1; then
-        log_warn "jq is not installed; skipping ${target}"
-        return 0
-    fi
-    if ! wanted="$(jq . "${source}")"; then
-        log_warn "Could not read ${source}; skipping ${target}"
-        return 0
-    fi
-    [[ -f "${state}" ]] && prev="${state}"
-
-    if [[ -L "${target}" ]]; then
-        if [[ "${DRY_RUN}" -eq 1 ]]; then
-            is_agent_link "${target}" || printf 'Would back up %s before merging into it\n' "${target}"
-        else
-            backup_path "${target}"
-        fi
-    elif [[ -f "${target}" ]]; then
-        if jq empty "${target}" 2>/dev/null; then
-            live="${target}"
-        elif [[ "${DRY_RUN}" -eq 1 ]]; then
-            printf 'Would back up %s (not valid JSON) before merging into it\n' "${target}"
-        else
-            log_warn "${target} is not valid JSON; moving it aside"
-            backup_path "${target}"
-        fi
-    fi
-
-    merged="$(sync_settings "${live}" "${wanted}" "${prev}")"
-    if [[ "${live}" != /dev/null ]] && same_json "${live}" "${merged}"; then
-        [[ "${DRY_RUN}" -eq 1 ]] || write_private_file "${state}" "${wanted}"
-        return 0
-    fi
-    if [[ "${DRY_RUN}" -eq 1 ]]; then
-        printf 'Would merge the managed %s into %s\n' "${source#"${DEST}/.config/agents/"}" "${target}"
-        return 0
-    fi
-    [[ "${live}" != /dev/null ]] && backup_path "${target}"
-    write_private_file "${target}" "${merged}"
-    write_private_file "${state}" "${wanted}"
-    printf 'Merged the managed %s into %s\n' "${source#"${DEST}/.config/agents/"}" "${target}"
-}
-
-# A persona without agents: take back out what merge_managed_json merged in,
-# leaving what apps wrote.
-unmerge_managed_json() {
-    local target source state merged
-    { read -r target; read -r source; read -r state; } < <(managed_json_paths "$1")
-
-    [[ -f "${state}" ]] || return 0
-    if ! command -v jq >/dev/null 2>&1; then
-        log_warn "jq is not installed; leaving the managed settings in ${target}"
-        return 0
-    fi
-    if [[ -f "${target}" && ! -L "${target}" ]] && jq empty "${target}" 2>/dev/null; then
-        merged="$(sync_settings "${target}" null "${state}")"
-        if ! same_json "${target}" "${merged}"; then
-            if [[ "${DRY_RUN}" -eq 1 ]]; then
-                printf 'Would remove the managed settings from %s\n' "${target}"
-                return 0
-            fi
-            backup_path "${target}"
-            write_private_file "${target}" "${merged}"
-            printf 'Removed the managed settings from %s\n' "${target}"
-        fi
-    fi
-    [[ "${DRY_RUN}" -eq 1 ]] || rm -f "${state}"
 }
 
 warn_unused_agents_checkout() {
@@ -1007,6 +901,66 @@ secure_private_dirs() {
     done
 }
 
+# Every leading part of each relative path read on stdin (a/b/c: a, a/b, a/b/c).
+path_prefixes() {
+    awk -F/ '{ p = $1; print p; for (i = 2; i <= NF; i++) { p = p "/" $i; print p } }'
+}
+
+# Real files or folders where a layer this persona does not link would put its
+# files, such as ~/.config/restic on work. Each is the shallowest path no other
+# layer uses, so shared parents like ~/.config or ~/.local/bin are never named.
+# Only reported; nothing is moved.
+unlinked_layer_paths() {
+    local dir layer relative shared
+    for layer in $(for dir in "${REPO}"/stow/*/; do
+        if [[ -d "${dir}" ]]; then dir="$(basename "${dir}")"; printf '%s\n' "${dir%%.*}"; fi
+    done | LC_ALL=C sort -u); do
+        [[ " ${PERSONA_LAYERS} " == *" ${layer} "* ]] && continue
+        shared="$(for dir in "${REPO}"/stow/*/; do
+            dir="$(basename "${dir}")"
+            if [[ -d "${REPO}/stow/${dir}" && "${dir%%.*}" != "${layer}" ]]; then package_files stow "${dir}"; fi
+        done | path_prefixes | LC_ALL=C sort -u)"
+        for dir in "${REPO}/stow/${layer}" "${REPO}/stow/${layer}".*; do
+            if [[ -d "${dir}" ]]; then package_files stow "$(basename "${dir}")"; fi
+        done | path_prefixes | LC_ALL=C sort -u | while IFS= read -r relative; do
+            grep -Fxq -- "${relative}" <<< "${shared}" && continue
+            if [[ "${relative}" == */* ]] && ! grep -Fxq -- "${relative%/*}" <<< "${shared}"; then
+                continue
+            fi
+            # An empty folder is what pruning stale links leaves behind.
+            if [[ -e "${DEST}/${relative}" && ! -L "${DEST}/${relative}" ]] \
+                && ! [[ -d "${DEST}/${relative}" && -z "$(ls -A "${DEST}/${relative}")" ]]; then
+                printf 'unlinked %s\n' "${DEST}/${relative}"
+            fi
+        done
+    done
+    return 0
+}
+
+# Git reads ~/.gitconfig after ~/.config/git/config, so a [user] left there
+# overrides config.local. Prints the problem as a status line, or nothing.
+# Exit status 1 means no user.email; an unreadable config is left to git.
+git_identity_state() {
+    local status=0
+    command -v git >/dev/null 2>&1 || return 0
+    if git config --file "${DEST}/.gitconfig" --get-regexp '^user[.]' >/dev/null 2>&1; then
+        printf 'shadowed %s\n' "${DEST}/.gitconfig"
+        return 0
+    fi
+    HOME="${DEST}" XDG_CONFIG_HOME="${DEST}/.config" GIT_CONFIG_NOSYSTEM=1 \
+        git config --global --includes --get user.email >/dev/null 2>&1 || status=$?
+    [[ "${status}" -ne 1 ]] || printf 'unset %s\n' "${DEST}/.config/git/config.local"
+}
+
+warn_git_identity() {
+    local state
+    state="$(git_identity_state)"
+    case "${state%% *}" in
+        shadowed) log_warn "${state#* } sets [user] and overrides ~/.config/git/config.local; move anything you need into config.local, then archive it with file-review.sh --cleanup" ;;
+        unset) log_warn "No git identity for persona '${PERSONA_NAME}': set name and email under [user] in ${state#* }" ;;
+    esac
+}
+
 print_managed() {
     local kind package relative entry
     for kind in stow seed; do
@@ -1020,8 +974,7 @@ print_managed() {
         printf '%s/%s\n' "${DEST}" "${entry%%|*}"
     done < <(editor_links)
     [[ "${PERSONA_AGENTS}" == yes ]] || return 0
-    for entry in ${WANTED_AGENT_LINKS[@]+"${WANTED_AGENT_LINKS[@]}"} ${WANTED_SKILL_LINKS[@]+"${WANTED_SKILL_LINKS[@]}"} \
-        ${WANTED_MANAGED_JSON[@]+"${WANTED_MANAGED_JSON[@]}"}; do
+    for entry in ${WANTED_AGENT_LINKS[@]+"${WANTED_AGENT_LINKS[@]}"} ${WANTED_SKILL_LINKS[@]+"${WANTED_SKILL_LINKS[@]}"}; do
         printf '%s/%s\n' "${DEST}" "${entry%%|*}"
     done
     printf '%s/%s\n' "${DEST}" "${SKILLS_DIR}"
@@ -1042,7 +995,9 @@ print_link_state() {
 }
 
 # One line per problem: <state> <path>. States: missing, replaced (a real file
-# where a link belongs), foreign (a link to somewhere else), broken.
+# where a link belongs), foreign (a link to somewhere else), broken, and for
+# git, shadowed (~/.gitconfig overrides the identity) or unset (no user.email),
+# and unlinked (a real path owned by a layer this persona does not link).
 print_status() {
     local package relative target entry link_target
     while IFS= read -r package; do
@@ -1089,9 +1044,6 @@ print_status() {
                 printf 'missing %s\n' "${target}"
             fi
         done
-        for entry in ${WANTED_MANAGED_JSON[@]+"${WANTED_MANAGED_JSON[@]}"}; do
-            print_managed_json_state "${entry}"
-        done
     elif [[ -e "${DEST}/.config/agents" ]]; then
         printf 'unused %s\n' "${DEST}/.config/agents"
     fi
@@ -1099,29 +1051,8 @@ print_status() {
     while IFS= read -r target; do
         printf 'stale %s\n' "${target}"
     done < <(stale_links)
-}
-
-# missing, foreign (a link other than the old one into the checkout, which is
-# reported as stale), or drifted (the next run would change it). Needs jq and
-# the managed copy to say anything.
-print_managed_json_state() {
-    local target source state prev=/dev/null wanted
-    { read -r target; read -r source; read -r state; } < <(managed_json_paths "$1")
-    [[ -f "${source}" ]] || return 0
-    command -v jq >/dev/null 2>&1 || return 0
-    if [[ -L "${target}" ]]; then
-        is_agent_link "${target}" || printf 'foreign %s\n' "${target}"
-        return 0
-    elif [[ ! -e "${target}" ]]; then
-        printf 'missing %s\n' "${target}"
-        return 0
-    fi
-    [[ -f "${state}" ]] && prev="${state}"
-    if ! jq empty "${target}" 2>/dev/null \
-        || ! wanted="$(jq . "${source}" 2>/dev/null)" \
-        || ! same_json "${target}" "$(sync_settings "${target}" "${wanted}" "${prev}")"; then
-        printf 'drifted %s\n' "${target}"
-    fi
+    unlinked_layer_paths
+    git_identity_state
 }
 
 # ---------------------------------------------------------------------------
@@ -1145,8 +1076,12 @@ add_refusal() {
             printf 'belongs to the private agents repo\n'
             return 0
             ;;
+        .claude/*|.cursor/*|.codex/*)
+            printf 'belongs to the app, which keeps its own setup\n'
+            return 0
+            ;;
     esac
-    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}" "${MANAGED_JSON[@]}"; do
+    for entry in "${AGENT_LINKS[@]}" "${SKILL_LINKS[@]}"; do
         if [[ "${relative}" == "${entry%%|*}" || "${relative}" == "${entry%%|*}/"* ]]; then
             printf 'belongs to the private agents repo\n'
             return 0
@@ -1357,23 +1292,12 @@ main() {
                 sync_agents_repo
                 link_agents
                 link_skills
-                # Another app's settings are taken back out, as for a persona
-                # without agents.
-                for entry in "${MANAGED_JSON[@]}"; do
-                    if app_wanted "${entry}"; then
-                        merge_managed_json "${entry}"
-                    else
-                        unmerge_managed_json "${entry}"
-                    fi
-                done
             else
-                for entry in "${MANAGED_JSON[@]}"; do
-                    unmerge_managed_json "${entry}"
-                done
                 warn_unused_agents_checkout
             fi
             copy_seeds
             secure_private_dirs
+            [[ "${DRY_RUN}" -eq 1 ]] || warn_git_identity
             ;;
     esac
 }

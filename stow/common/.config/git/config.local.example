@@ -5,5 +5,9 @@
 # config.desktop (Mac editor, keychain, 1Password signing) and config.server
 # (Linux delta, vimdiff, keys on disk). Anything set here overrides them.
 
+# Personas without the personal layer (work, sandbox) get no identity from the
+# repo, so set it here:
 # [user]
+#     name = Your Name
+#     email = you@example.com
 #     signingkey = ssh-ed25519 AAAA ...

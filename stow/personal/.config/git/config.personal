@@ -1,0 +1,5 @@
+# Personal GitHub identity for the home and server personas. Included by
+# ~/.config/git/config; other personas set [user] in config.local.
+[user]
+	name = smithbr
+	email = 1495361+smithbr@users.noreply.github.com
