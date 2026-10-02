@@ -73,14 +73,14 @@ This is process-level isolation, not a real container or VM.
 - Validates `scripts/bootstrap/linux/apt-packages.txt`
 - Verifies Linux bootstrap guard clauses for missing `apt-get`
 - Verifies idempotency guards for `docker` and `tailscale`
-- Verifies the macOS iTerm2 step enables the Python API, makes the repo profile the default, and rewrites nothing on a second run
+- Verifies the macOS iTerm2 step enables the Python API, makes the repo profile the default, adds the Catppuccin color presets (rewriting a stale one, keeping the user's own), and rewrites nothing on a second run
 - Verifies that the Linux optional installs follow the persona (`DOTFILES_LINUX_OPTIONAL`), including Claude Code through the shared `scripts/bootstrap/claude-code.sh`, and keep Docker and Tailscale when run on their own
 - Checks shell script shebangs, strict mode, `common.sh` sourcing, and `BASEDIR` conventions
 
 [`bin_scripts.bats`](/Users/bran/.dotfiles/tests/bin_scripts.bats)
 
 - Covers scripts in [`stow/tools/.local/bin`](/Users/bran/.dotfiles/stow/tools/.local/bin), [`stow/personal/.local/bin`](/Users/bran/.dotfiles/stow/personal/.local/bin), and [`stow/server.linux/.local/bin`](/Users/bran/.dotfiles/stow/server.linux/.local/bin)
-- Runs `st` (in `stow/desktop.darwin/.local/bin`) under plain Python: team listing and dry runs, a directory or the current directory as a one-tab team, a team winning over a same-named directory, and each tab running its command as the tab's program
+- Runs `st` (in `stow/desktop.darwin/.local/bin`) under plain Python: team listing and dry runs, a team without agents as one tab, the missing-teams-file hint, every team in the tracked `teams.toml.example`, a directory or the current directory as a one-tab team, a team winning over a same-named directory, and each tab running its command as the tab's program
 - Verifies help output and startup probing for `ph-padd`
 - Runs `cf-cert` against a mocked acme.sh: argument checks, issue-only runs, the combined-pem install and chained reload command, stopping on a failed issue, a missing token on closed stdin, and `--pihole` refusing to run without root
 - Verifies non-root self-elevation behavior for `ph-update`, `ph-test`, and `ph-backup`
@@ -114,6 +114,8 @@ This is process-level isolation, not a real container or VM.
 [`file_review.bats`](/Users/bran/.dotfiles/tests/file_review.bats)
 
 - Exercises file inventory against a fixture repo, replaced links, broken managed links, and migration backup reporting
+- Explains a `~/.gitconfig` `[user]` that overrides `config.local`
+- Keeps a local file out of the review when the repo manages its `.example` (`teams.toml` beside `teams.toml.example`)
 - Verifies bulk archival preserves contents and symlinks, excludes protected paths, and is safe to repeat
 - Checks closed stdin, invalid selections, a failed inventory query, alternate destinations, and installer report integration
 - Verifies home dotfiles are grouped by `home-audit` verdict and the picker lists them in that order with their reasons
@@ -129,7 +131,7 @@ This is process-level isolation, not a real container or VM.
 
 - Runs the real [`scripts/link.sh`](/Users/bran/.dotfiles/scripts/link.sh) and GNU Stow against a scratch home and a local agents repo fixture
 - Verifies linking per platform, shared editor settings, backups of changed copies and foreign links, removal of stale repo links (files that moved, were deleted, or belong to an unused package) while real files and foreign links stay, persona choice (flag, environment, saved state, OS default, unknown or wrong-OS names), personas without agents or editors, idempotency, and dry runs
-- Covers agent links (clone, backup of real agent config, unreachable repo), seed files, and the `managed` and `status` reports
+- Covers agent links (clone, backup of real agent config, unreachable repo), seed files (the gh login only for personas with the `personal` layer), the `managed` and `status` reports, and the git identity: only `personal` sets `user.email`, `config.local` overrides it, and a missing email or a `[user]` in `~/.gitconfig` is warned about and reported; `status` names real files a layer the persona does not link would own (not shared parents or the empty folders a persona switch leaves) and never moves them
 - Runs `add` against a fixture repo: a file becomes a link with no backup and keeps its executable bit; directories, `--platform`, relative paths, `--seed`, dry runs; refusals of secrets, private keys, `.local` overrides, agent and editor paths, repo files, outside paths, symlinks, banned words (without naming them), a layer the persona does not link, and a missing layer on closed stdin
 
 [`install.bats`](/Users/bran/.dotfiles/tests/install.bats)

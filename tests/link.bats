@@ -15,14 +15,13 @@ setup() {
     # Stands in for the private agents repo.
     AGENTS_FIXTURE="${TEST_TMPDIR}/agents-origin"
     mkdir -p "${AGENTS_FIXTURE}/skills/core/demo" "${AGENTS_FIXTURE}/skills/extra/other" \
-        "${AGENTS_FIXTURE}/tools/claude" "${AGENTS_FIXTURE}/tools/cursor" "${AGENTS_FIXTURE}/agents"
+        "${AGENTS_FIXTURE}/skills/vault/notes" \
+        "${AGENTS_FIXTURE}/agents"
     printf 'rules\n' > "${AGENTS_FIXTURE}/AGENTS.md"
     printf 'agent\n' > "${AGENTS_FIXTURE}/agents/demo.md"
     printf 'skill\n' > "${AGENTS_FIXTURE}/skills/core/demo/SKILL.md"
     printf 'skill\n' > "${AGENTS_FIXTURE}/skills/extra/other/SKILL.md"
-    printf '{}\n' > "${AGENTS_FIXTURE}/tools/claude/settings.json"
-    printf '{}\n' > "${AGENTS_FIXTURE}/tools/cursor/cli-config.json"
-    printf '{"version":1,"hooks":{}}\n' > "${AGENTS_FIXTURE}/tools/cursor/hooks.json"
+    printf 'skill\n' > "${AGENTS_FIXTURE}/skills/vault/notes/SKILL.md"
     git -C "${AGENTS_FIXTURE}" init -q
     git -C "${AGENTS_FIXTURE}" add -A
     git -C "${AGENTS_FIXTURE}" -c user.name=test -c user.email=test@example.com commit -q -m fixture
@@ -285,12 +284,12 @@ stat_mode() {
 # Agent links
 # ---------------------------------------------------------------------------
 
-@test "home links Claude Code to the agents repo and work links Cursor" {
+@test "home links Claude Code to the agents repo and work adds Cursor" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     run_link --persona home
     assert_success
     [ -d "${DEST}/.config/agents/.git" ]
-    [ -f "${DEST}/.claude/settings.json" ] && [ ! -L "${DEST}/.claude/settings.json" ]
+    [ ! -e "${DEST}/.claude/settings.json" ]
     [ "$(cat "${DEST}/.claude/CLAUDE.md")" = rules ]
     [ "$(cat "${DEST}/.codex/AGENTS.md")" = rules ]
     [ "$(stat_mode "${DEST}/.claude")" = 700 ]
@@ -299,15 +298,14 @@ stat_mode() {
     DEST="${TEST_TMPDIR}/work-home"
     run_link --persona work
     assert_success
-    [ -f "${DEST}/.cursor/cli-config.json" ] && [ ! -L "${DEST}/.cursor/cli-config.json" ]
-    [ -f "${DEST}/.cursor/hooks.json" ] && [ ! -L "${DEST}/.cursor/hooks.json" ]
+    [ ! -e "${DEST}/.cursor/cli-config.json" ] && [ ! -e "${DEST}/.cursor/hooks.json" ]
     [ "$(cat "${DEST}/.cursor/AGENTS.md")" = rules ]
     [ "$(cat "${DEST}/.codex/AGENTS.md")" = rules ]
     [ "$(stat_mode "${DEST}/.cursor")" = 700 ]
-    [ ! -e "${DEST}/.claude" ]
+    [ "$(cat "${DEST}/.claude/CLAUDE.md")" = rules ]
 }
 
-@test "stows only the core skill bundle into a real skills directory" {
+@test "stows the persona's skill bundles into a real skills directory" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     local persona app
     for persona in home:.claude work:.cursor; do
@@ -322,50 +320,75 @@ stat_mode() {
     done
 }
 
-@test "links the app's agents directory and keeps hand-made agents" {
+@test "only home stows the vault bundle, and leaving home removes it" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
-    local persona app
-    for persona in home:.claude work:.cursor; do
-        app="${persona#*:}"
-        DEST="${TEST_TMPDIR}/${persona%%:*}"
-        mkdir -p "${DEST}/${app}/agents"
-        printf 'mine\n' > "${DEST}/${app}/agents/mine.md"
-
-        run_link --persona "${persona%%:*}"
-        assert_success
-        [ "$(readlink "${DEST}/${app}/agents")" = "${DEST}/.config/agents/agents" ]
-        [ "$(cat "${DEST}/${app}/agents/demo.md")" = agent ]
-        run cat "$(backup_of "${app}/agents/mine.md")"
-        assert_output 'mine'
-    done
-}
-
-@test "switching from home to work swaps Claude Code for Cursor" {
-    command -v stow >/dev/null 2>&1 || skip "stow not installed"
-    command -v jq >/dev/null 2>&1 || skip "jq not installed"
-    set_agent_settings '{"theme":"auto"}'
     run_link --persona home
     assert_success
-    jq '.enabledPlugins.p = true' "${DEST}/.claude/settings.json" > "${TEST_TMPDIR}/new.json"
-    mv "${TEST_TMPDIR}/new.json" "${DEST}/.claude/settings.json"
+    [ -L "${DEST}/.agents/skills/notes" ]
+    [ "$(cat "${DEST}/.claude/skills/notes/SKILL.md")" = skill ]
+    # A bundle no persona lists stays a skills-add choice.
+    stow --dir "${DEST}/.config/agents/skills" --target "${DEST}/.agents/skills" extra
 
     run_link --persona work status
-    assert_line "stale ${DEST}/.claude/CLAUDE.md"
-    assert_line "missing ${DEST}/.cursor/AGENTS.md"
+    assert_line "stale ${DEST}/.agents/skills/notes"
+    refute_line --partial "skills/other"
 
     run_link --persona work
     assert_success
-    for link in .claude/CLAUDE.md .claude/agents .claude/skills; do
+    [ ! -e "${DEST}/.agents/skills/notes" ] && [ ! -L "${DEST}/.agents/skills/notes" ]
+    [ ! -e "${DEST}/.cursor/skills/notes" ]
+    [ -L "${DEST}/.agents/skills/demo" ]
+    [ -L "${DEST}/.agents/skills/other" ]
+    [ -f "${DEST}/.config/agents/skills/vault/notes/SKILL.md" ]
+    run_link --persona work status
+    refute_line --partial "stale"
+
+    DEST="${TEST_TMPDIR}/work-home"
+    run_link --persona work
+    assert_success
+    [ -L "${DEST}/.agents/skills/demo" ]
+    [ ! -e "${DEST}/.agents/skills/notes" ]
+}
+
+@test "links Claude's agents directory, keeps hand-made agents, and leaves Cursor's alone" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    mkdir -p "${DEST}/.claude/agents" "${DEST}/.cursor/agents"
+    printf 'mine\n' > "${DEST}/.claude/agents/mine.md"
+    printf 'cursor\n' > "${DEST}/.cursor/agents/own.md"
+
+    run_link --persona work
+    assert_success
+    [ "$(readlink "${DEST}/.claude/agents")" = "${DEST}/.config/agents/agents" ]
+    [ "$(cat "${DEST}/.claude/agents/demo.md")" = agent ]
+    run cat "$(backup_of .claude/agents/mine.md)"
+    assert_output 'mine'
+    [ ! -L "${DEST}/.cursor/agents" ] && [ "$(cat "${DEST}/.cursor/agents/own.md")" = cursor ]
+}
+
+@test "switching from work to home removes Cursor's links and leaves its settings alone" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    run_link --persona work
+    assert_success
+    printf '{"p":true}\n' > "${DEST}/.cursor/cli-config.json"
+
+    run_link --persona home status
+    assert_line "stale ${DEST}/.cursor/AGENTS.md"
+
+    run_link --persona home
+    assert_success
+    for link in .cursor/AGENTS.md .cursor/agents .cursor/skills; do
         [ ! -e "${DEST}/${link}" ] && [ ! -L "${DEST}/${link}" ]
     done
-    [ "$(jq -cS . "${DEST}/.claude/settings.json")" = '{"enabledPlugins":{"p":true}}' ]
-    [ ! -e "${DEST}/.local/state/dotfiles/claude-settings.json" ]
-    [ "$(readlink "${DEST}/.cursor/AGENTS.md")" = "${DEST}/.config/agents/AGENTS.md" ]
+    [ "$(cat "${DEST}/.cursor/cli-config.json")" = '{"p":true}' ]
+    [ "$(readlink "${DEST}/.claude/CLAUDE.md")" = "${DEST}/.config/agents/AGENTS.md" ]
     [ -L "${DEST}/.codex/AGENTS.md" ]
 
+    run_link --persona work
+    assert_success
+    # Work gets no identity from the repo.
     run_link --persona work status
     assert_success
-    assert_output ""
+    assert_output "unset ${DEST}/.config/git/config.local"
 }
 
 @test "replaces the old whole-library skills link and keeps imported bundles" {
@@ -452,214 +475,17 @@ stat_mode() {
 }
 
 # ---------------------------------------------------------------------------
-# Cursor config
-# ---------------------------------------------------------------------------
-
-# Commits new managed Cursor cli-config to the agents fixture.
-set_agent_cli_config() {
-    printf '%s\n' "$1" > "${AGENTS_FIXTURE}/tools/cursor/cli-config.json"
-    git -C "${AGENTS_FIXTURE}" add -A
-    git -C "${AGENTS_FIXTURE}" -c user.name=test -c user.email=test@example.com commit -q -m settings
-}
-
-set_agent_hooks() {
-    printf '%s\n' "$1" > "${AGENTS_FIXTURE}/tools/cursor/hooks.json"
-    git -C "${AGENTS_FIXTURE}" add -A
-    git -C "${AGENTS_FIXTURE}" -c user.name=test -c user.email=test@example.com commit -q -m hooks
-}
-
-live_cli_config() {
-    jq -c "$1" "${DEST}/.cursor/cli-config.json"
-}
-
-live_hooks() {
-    jq -c "$1" "${DEST}/.cursor/hooks.json"
-}
-
-# Commits new managed Claude settings to the agents fixture.
-set_agent_settings() {
-    printf '%s\n' "$1" > "${AGENTS_FIXTURE}/tools/claude/settings.json"
-    git -C "${AGENTS_FIXTURE}" add -A
-    git -C "${AGENTS_FIXTURE}" -c user.name=test -c user.email=test@example.com commit -q -m claude
-}
-
-live_settings() {
-    jq -c "$1" "${DEST}/.claude/settings.json"
-}
-
-@test "merges the managed Claude settings and keeps what Claude Code adds" {
-    command -v stow >/dev/null 2>&1 || skip "stow not installed"
-    command -v jq >/dev/null 2>&1 || skip "jq not installed"
-    set_agent_settings '{"theme":"auto","hooks":{"Stop":[{"c":"vault"}]},"permissions":{"deny":["a"]}}'
-    run_link
-    assert_success
-    [ ! -L "${DEST}/.claude/settings.json" ]
-    [ "$(stat_mode "${DEST}/.claude/settings.json")" = 600 ]
-    [ "$(live_settings .hooks.Stop)" = '[{"c":"vault"}]' ]
-
-    jq '.enabledPlugins.p = true | .hooks.Stop += [{"c":"app"}] | .theme = "dark"' \
-        "${DEST}/.claude/settings.json" > "${TEST_TMPDIR}/new.json"
-    mv "${TEST_TMPDIR}/new.json" "${DEST}/.claude/settings.json"
-    run_link status
-    assert_line "drifted ${DEST}/.claude/settings.json"
-
-    run_link
-    assert_success
-    assert_output --partial "Merged the managed tools/claude/settings.json into ${DEST}/.claude/settings.json"
-    [ "$(live_settings .theme)" = '"auto"' ]
-    [ "$(live_settings .enabledPlugins)" = '{"p":true}' ]
-    [ "$(live_settings .hooks.Stop)" = '[{"c":"vault"},{"c":"app"}]' ]
-    run_link status
-    refute_output --partial ".claude/settings.json"
-}
-
-@test "merges the managed Cursor cli-config into a real file" {
-    command -v stow >/dev/null 2>&1 || skip "stow not installed"
-    command -v jq >/dev/null 2>&1 || skip "jq not installed"
-    export DOTFILES_PERSONA=work
-    set_agent_cli_config '{"approvalMode":"allowlist","permissions":{"deny":["a"]}}'
-    set_agent_hooks '{"version":1,"hooks":{"stop":[{"command":"vault"}]}}'
-
-    run_link
-    assert_success
-    [ ! -L "${DEST}/.cursor/cli-config.json" ]
-    [ "$(stat_mode "${DEST}/.cursor/cli-config.json")" = 600 ]
-    [ "$(live_hooks .hooks.stop)" = '[{"command":"vault"}]' ]
-    [ "$(live_cli_config .permissions.deny)" = '["a"]' ]
-    [ "$(live_cli_config .approvalMode)" = '"allowlist"' ]
-}
-
-@test "keeps what apps add to Cursor config and restores managed values" {
-    command -v stow >/dev/null 2>&1 || skip "stow not installed"
-    command -v jq >/dev/null 2>&1 || skip "jq not installed"
-    export DOTFILES_PERSONA=work
-    set_agent_cli_config '{"approvalMode":"allowlist","permissions":{"deny":["a","b"]}}'
-    set_agent_hooks '{"version":1,"hooks":{"stop":[{"command":"vault"}]}}'
-    run_link
-    assert_success
-
-    jq '.hints = true | .permissions.deny = ["a"] | .approvalMode = "force"' \
-        "${DEST}/.cursor/cli-config.json" > "${TEST_TMPDIR}/new-cli.json"
-    mv "${TEST_TMPDIR}/new-cli.json" "${DEST}/.cursor/cli-config.json"
-    jq '.hooks.stop += [{"command":"app"}]' \
-        "${DEST}/.cursor/hooks.json" > "${TEST_TMPDIR}/new-hooks.json"
-    mv "${TEST_TMPDIR}/new-hooks.json" "${DEST}/.cursor/hooks.json"
-    run_link status
-    assert_line "drifted ${DEST}/.cursor/cli-config.json"
-    # A hook the app added is kept, so it is not drift.
-    refute_line "drifted ${DEST}/.cursor/hooks.json"
-
-    run_link --dry-run
-    assert_success
-    assert_output --partial "Would merge the managed tools/cursor/cli-config.json"
-    [ "$(live_cli_config .approvalMode)" = '"force"' ]
-
-    run_link
-    assert_success
-    [ "$(live_cli_config .hints)" = 'true' ]
-    [ "$(live_hooks .hooks.stop)" = '[{"command":"vault"},{"command":"app"}]' ]
-    [ "$(live_cli_config .permissions.deny)" = '["a","b"]' ]
-    [ "$(live_cli_config .approvalMode)" = '"allowlist"' ]
-    run jq -c .approvalMode "$(backup_of .cursor/cli-config.json)"
-    assert_output '"force"'
-    run_link status
-    refute_output --partial ".cursor/cli-config.json"
-}
-
-@test "drops Cursor config the agents repo stops managing" {
-    command -v stow >/dev/null 2>&1 || skip "stow not installed"
-    command -v jq >/dev/null 2>&1 || skip "jq not installed"
-    export DOTFILES_PERSONA=work
-    set_agent_cli_config '{"old":1,"permissions":{"deny":["a","b"]}}'
-    run_link
-    assert_success
-    jq '.permissions.deny += ["mine"]' "${DEST}/.cursor/cli-config.json" > "${TEST_TMPDIR}/new.json"
-    mv "${TEST_TMPDIR}/new.json" "${DEST}/.cursor/cli-config.json"
-
-    set_agent_cli_config '{"permissions":{"deny":["a"]}}'
-    run_link --refresh
-    assert_success
-    [ "$(live_cli_config .)" = '{"permissions":{"deny":["a","mine"]}}' ]
-}
-
-@test "replaces the old Cursor config link with a merged real file" {
-    command -v stow >/dev/null 2>&1 || skip "stow not installed"
-    command -v jq >/dev/null 2>&1 || skip "jq not installed"
-    export DOTFILES_PERSONA=work
-    set_agent_cli_config '{"approvalMode":"allowlist"}'
-    run_link
-    assert_success
-    rm "${DEST}/.cursor/cli-config.json"
-    ln -s "${DEST}/.config/agents/tools/cursor/cli-config.json" "${DEST}/.cursor/cli-config.json"
-
-    run_link status
-    assert_line "stale ${DEST}/.cursor/cli-config.json"
-    run_link
-    assert_success
-    assert_output --partial "Removed stale link ${DEST}/.cursor/cli-config.json"
-    [ ! -L "${DEST}/.cursor/cli-config.json" ]
-    [ "$(live_cli_config .approvalMode)" = '"allowlist"' ]
-    [ -z "$(backup_of .cursor/cli-config.json)" ]
-    [ "$(cat "${DEST}/.config/agents/tools/cursor/cli-config.json")" = '{"approvalMode":"allowlist"}' ]
-}
-
-@test "moves invalid Cursor config aside before merging" {
-    command -v stow >/dev/null 2>&1 || skip "stow not installed"
-    command -v jq >/dev/null 2>&1 || skip "jq not installed"
-    export DOTFILES_PERSONA=work
-    set_agent_cli_config '{"approvalMode":"allowlist"}'
-    mkdir -p "${DEST}/.cursor"
-    printf 'not json\n' > "${DEST}/.cursor/cli-config.json"
-
-    run_link
-    assert_success
-    [ "$(live_cli_config .approvalMode)" = '"allowlist"' ]
-    run cat "$(backup_of .cursor/cli-config.json)"
-    assert_output 'not json'
-}
-
-@test "skips Cursor config without jq and still links the rest" {
-    command -v stow >/dev/null 2>&1 || skip "stow not installed"
-    export DOTFILES_PERSONA=work
-    local dir entry name
-    local -a dirs=()
-    local no_jq="${TEST_TMPDIR}/no-jq-bin"
-    mkdir -p "${no_jq}"
-    IFS=: read -r -a dirs <<< "${PATH}"
-    for dir in "${dirs[@]}"; do
-        for entry in "${dir}"/*; do
-            name="${entry##*/}"
-            [[ "${name}" == jq || -e "${no_jq}/${name}" || ! -x "${entry}" ]] && continue
-            ln -s "${entry}" "${no_jq}/${name}"
-        done
-    done
-
-    PATH="${no_jq}" run_link
-    assert_success
-    assert_output --partial "jq is not installed"
-    [ -L "${DEST}/.cursor/AGENTS.md" ]
-    [ ! -e "${DEST}/.cursor/cli-config.json" ]
-}
-
-# ---------------------------------------------------------------------------
 # Personas without agents
 # ---------------------------------------------------------------------------
 
-@test "a persona without agents removes agent links and managed settings" {
+@test "a persona without agents removes agent links and leaves app settings alone" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     command -v jq >/dev/null 2>&1 || skip "jq not installed"
-    set_agent_cli_config '{"approvalMode":"allowlist"}'
-    set_agent_hooks '{"version":1,"hooks":{"stop":[{"command":"vault"}]}}'
     run_link --persona work
     assert_success
     stow --dir "${DEST}/.config/agents/skills" --target "${DEST}/.agents/skills" extra
     mkdir -p "${DEST}/.agents/skills/synced/mine"
-    jq '.hints = true' \
-        "${DEST}/.cursor/cli-config.json" > "${TEST_TMPDIR}/new-cli.json"
-    mv "${TEST_TMPDIR}/new-cli.json" "${DEST}/.cursor/cli-config.json"
-    jq '.hooks.stop += [{"command":"app"}]' \
-        "${DEST}/.cursor/hooks.json" > "${TEST_TMPDIR}/new-hooks.json"
-    mv "${TEST_TMPDIR}/new-hooks.json" "${DEST}/.cursor/hooks.json"
+    printf '{"hints":true}\n' > "${DEST}/.cursor/cli-config.json"
     printf 'transcript\n' > "${DEST}/.cursor/ide_state.json"
 
     run_link --persona sandbox status
@@ -675,11 +501,7 @@ live_settings() {
         [ ! -e "${DEST}/${link}" ] && [ ! -L "${DEST}/${link}" ]
     done
     [ -d "${DEST}/.agents/skills/synced/mine" ]
-    [ "$(jq -cS . "${DEST}/.cursor/cli-config.json")" = '{"hints":true}' ]
-    # version came from the managed copy, so it goes out with the rest.
-    [ "$(jq -cS . "${DEST}/.cursor/hooks.json")" = '{"hooks":{"stop":[{"command":"app"}]}}' ]
-    [ ! -e "${DEST}/.local/state/dotfiles/cursor-cli-config.json" ]
-    [ ! -e "${DEST}/.local/state/dotfiles/cursor-hooks.json" ]
+    [ "$(cat "${DEST}/.cursor/cli-config.json")" = '{"hints":true}' ]
     [ -d "${DEST}/.config/agents/.git" ]
     [ "$(cat "${DEST}/.cursor/ide_state.json")" = transcript ]
 
@@ -735,7 +557,7 @@ live_settings() {
     assert_line "${DEST}/Library/Application Support/Code/User/settings.json"
     assert_line "${DEST}/.config/gh/hosts.yml"
     assert_line "${DEST}/.claude/CLAUDE.md"
-    assert_line "${DEST}/.claude/settings.json"
+    refute_line "${DEST}/.claude/settings.json"
     assert_line "${DEST}/.claude/skills"
     assert_line "${DEST}/.codex/AGENTS.md"
     refute_line --partial "${DEST}/.cursor/"
@@ -745,10 +567,9 @@ live_settings() {
 
     run_link --persona work managed
     assert_line "${DEST}/.cursor/AGENTS.md"
-    assert_line "${DEST}/.cursor/cli-config.json"
-    assert_line "${DEST}/.cursor/hooks.json"
+    refute_line "${DEST}/.cursor/cli-config.json"
     assert_line "${DEST}/.cursor/skills"
-    refute_line --partial "${DEST}/.claude/"
+    assert_line "${DEST}/.claude/CLAUDE.md"
 }
 
 @test "status names each kind of drift" {
@@ -1094,7 +915,7 @@ persona_state() {
     refute_line --partial "Application Support"
     run_link status
     assert_success
-    assert_output ""
+    assert_output "unset ${DEST}/.config/git/config.local"
 }
 
 @test "switching to a persona without editors removes the editor links" {
@@ -1183,34 +1004,109 @@ persona_state() {
 # Prints a git setting as git resolves it with DEST as the home directory.
 dest_git_config() {
     HOME="${DEST}" XDG_CONFIG_HOME="${DEST}/.config" GIT_CONFIG_NOSYSTEM=1 \
-        git config --global --get "$1"
+        git config --global --includes --get "$1"
 }
 
 @test "git and ssh pick up the settings of the persona's layers" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     run_link --persona work
     assert_success
-    [[ "$(dest_git_config core.editor)" == code ]]
-    [[ "$(dest_git_config gpg.format)" == ssh ]]
+    run dest_git_config core.editor
+    assert_output code
+    run dest_git_config gpg.format
+    assert_output ssh
     [ -L "${DEST}/.ssh/config.d/1password" ]
 
     # config.local overrides a layer setting.
     printf '[core]\n    editor = vim\n' > "${DEST}/.config/git/config.local"
-    [[ "$(dest_git_config core.editor)" == vim ]]
+    run dest_git_config core.editor
+    assert_output vim
 
     DEST="${TEST_TMPDIR}/pi-home"
     DOTFILES_OS=linux run_link --persona server
     assert_success
-    [[ "$(dest_git_config core.pager)" == delta ]]
-    [[ "$(dest_git_config merge.tool)" == vimdiff ]]
+    run dest_git_config core.pager
+    assert_output delta
+    run dest_git_config merge.tool
+    assert_output vimdiff
     [ ! -e "${DEST}/.ssh/config.d" ]
 
     DEST="${TEST_TMPDIR}/sandbox-home"
     DOTFILES_OS=linux run_link --persona sandbox
     assert_success
-    [[ "$(dest_git_config user.name)" == smithbr ]]
     run dest_git_config core.pager
     assert_failure
+}
+
+@test "only the personal layer brings a git identity and the gh login" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    run_link --persona home
+    assert_success
+    refute_output --partial "No git identity"
+    [ -f "${DEST}/.config/gh/hosts.yml" ]
+    run dest_git_config user.email
+    assert_output --partial smithbr@users.noreply.github.com
+
+    # config.local still wins over the personal identity.
+    printf '[user]\n    email = me@example.com\n' > "${DEST}/.config/git/config.local"
+    run dest_git_config user.email
+    assert_output me@example.com
+
+    for persona in work sandbox; do
+        DEST="${TEST_TMPDIR}/${persona}-home"
+        run_link --persona "${persona}"
+        assert_success
+        run dest_git_config user.email
+        assert_failure
+        [ ! -e "${DEST}/.config/gh/hosts.yml" ]
+        run_link --persona "${persona}"
+        assert_output --partial "No git identity for persona '${persona}'"
+        run_link --persona "${persona}" status
+        assert_line "unset ${DEST}/.config/git/config.local"
+
+        printf '[user]\n    email = me@work.example\n' > "${DEST}/.config/git/config.local"
+        run_link --persona "${persona}"
+        refute_output --partial "No git identity"
+    done
+}
+
+@test "a [user] in ~/.gitconfig is reported because it overrides config.local" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    printf '[user]\n    email = old@example.com\n' > "${DEST}/.gitconfig"
+    run_link --persona work
+    assert_success
+    assert_output --partial "${DEST}/.gitconfig sets [user]"
+    run_link --persona work status
+    assert_line "shadowed ${DEST}/.gitconfig"
+    [ "$(cat "${DEST}/.gitconfig")" = "$(printf '[user]\n    email = old@example.com')" ]
+
+    printf '[filter "lfs"]\n    required = true\n' > "${DEST}/.gitconfig"
+    run_link --persona work status
+    refute_line "shadowed ${DEST}/.gitconfig"
+}
+
+@test "status names real files a layer the persona does not link would own" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    mkdir -p "${DEST}/.config/restic" "${DEST}/.config/git" "${DEST}/.local/bin"
+    printf 'secret\n' > "${DEST}/.config/restic/b2.env"
+    printf 'old copy\n' > "${DEST}/.local/bin/cf-cert"
+    printf '[user]\n    email = me@work.example\n' > "${DEST}/.config/git/config.local"
+    run_link --persona work
+    assert_success
+
+    run_link --persona work status
+    assert_success
+    assert_output "unlinked ${DEST}/.config/restic
+unlinked ${DEST}/.local/bin/cf-cert"
+    [ "$(cat "${DEST}/.config/restic/b2.env")" = secret ]
+    [ "$(cat "${DEST}/.local/bin/cf-cert")" = 'old copy' ]
+
+    # A persona that links the layer does not report its folder.
+    rm "${DEST}/.local/bin/cf-cert"
+    run_link --persona home
+    assert_success
+    run_link --persona home status
+    refute_output --partial unlinked
 }
 
 # Links a run of the single-layer layout left: every tool under stow/common.
@@ -1257,9 +1153,10 @@ plant_single_layer_links() {
 brew_optional=macos
 linux_optional="
     run_link --persona home installs
-    assert_line "brew=core home"
+    assert_line "brew=core home personal"
     DOTFILES_OS=linux run_link --persona server installs
     assert_line "linux_optional=docker tailscale claude-code"
+    assert_line "brew=core personal"
     DOTFILES_OS=linux run_link --persona sandbox installs
     assert_line "brew="
     assert_line "brew_optional="
