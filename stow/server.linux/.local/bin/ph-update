@@ -9,7 +9,6 @@ OS_UPDATE_SCRIPT="${SCRIPT_DIR}/os-update"
 if [[ ! -x "${OS_UPDATE_SCRIPT}" && -x "${SCRIPT_DIR}/../../../tools/.local/bin/os-update" ]]; then
     OS_UPDATE_SCRIPT="$(cd "${SCRIPT_DIR}/../../../tools/.local/bin" && pwd)/os-update"
 fi
-PADD_BIN=""
 
 # Root searches only system directories, never the caller's user-writable ones
 # such as ~/.local/bin. User-installed helpers run as SUDO_USER instead.
@@ -42,7 +41,6 @@ Run the Pi-hole maintenance flow for this machine.
 |------|-------------|
 | `os-update` | Run system package updates before privilege escalation |
 | `Pi-hole` | Run `pihole -up` and `pihole -f` |
-| `PADD` | Run `ph-padd -u` |
 
 ## Examples
 
@@ -64,7 +62,7 @@ Usage:
   ph-update -r
   ph-update --help
 
-Run os-update, refresh Pi-hole, update PADD, and optionally restart Linux.
+Run os-update, refresh Pi-hole, and optionally restart Linux.
 EOF
 }
 
@@ -159,34 +157,6 @@ run_os_update() {
     "${OS_UPDATE_SCRIPT}"
 }
 
-# ph-padd lives in ~/.local/bin, which root no longer searches. Prefer the
-# absolute path resolved before elevation, then PATH, then this script's dir.
-resolve_padd_bin() {
-    local candidate=""
-
-    for candidate in \
-        "${PH_UPDATE_PADD_BIN:-}" \
-        "$(command -v ph-padd 2>/dev/null || true)" \
-        "${SCRIPT_DIR}/ph-padd"; do
-        if [[ "${candidate}" == /* && -f "${candidate}" && -x "${candidate}" ]]; then
-            PADD_BIN="${candidate}"
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-# PADD updates itself in place, and that file belongs to the invoking user.
-run_padd_update() {
-    if [[ "${EUID}" -eq 0 && -n "${SUDO_USER:-}" ]]; then
-        sudo -u "${SUDO_USER}" "${PADD_BIN}" -u
-        return
-    fi
-
-    "${PADD_BIN}" -u
-}
-
 preflight_check() {
     local section=""
 
@@ -208,35 +178,18 @@ preflight_check() {
 }
 
 check_deps() {
-    local missing=0
-    local section=""
-
     printf '\n'
     _header "Dependencies"
 
     if [[ ! -x "${OS_UPDATE_SCRIPT}" ]]; then
-        missing=1
         add_result "FAIL" "os-update helper is not executable"
         add_next_step "Ensure ${OS_UPDATE_SCRIPT} exists and is executable"
         _box "FAIL  os-update helper is not executable"$'\n'"Fix: Ensure ${OS_UPDATE_SCRIPT} exists and is executable"
         return 1
     fi
 
-    if ! resolve_padd_bin; then
-        missing=1
-        add_result "FAIL" "ph-padd command is unavailable"
-        add_next_step "Install ph-padd or ensure the ph-padd command is on PATH"
-        section+="FAIL  ph-padd command is unavailable"$'\n'
-        section+="Fix: Install ph-padd or ensure the ph-padd command is on PATH"$'\n'
-    fi
-
-    if [[ "${missing}" -eq 0 ]]; then
-        _box "OK  Required commands are available"
-        return 0
-    fi
-
-    _box "${section%$'\n'}"
-    return 1
+    _box "OK  Required commands are available"
+    return 0
 }
 
 print_intro() {
@@ -381,12 +334,9 @@ main() {
         return 1
     }
 
-    # Root gets a fixed PATH, so hand over the resolved ph-padd location; it
-    # only ever runs as the invoking user.
     if [[ "${EUID}" -ne 0 ]]; then
         run_os_update
-        resolve_padd_bin || true
-        exec sudo PH_UPDATE_SKIP_OS_UPDATE=1 PH_UPDATE_PADD_BIN="${PADD_BIN}" "${0}" "${@+"${@}"}"
+        exec sudo PH_UPDATE_SKIP_OS_UPDATE=1 "${0}" "${@+"${@}"}"
     fi
 
     print_intro
@@ -418,14 +368,6 @@ main() {
         "Run pihole -up and pihole -f manually to inspect the failure" \
         "Preparing Pi-hole update commands" \
         update_pihole || true
-
-    run_step \
-        "PADD" \
-        "PADD update completed" \
-        "PADD update failed" \
-        "Run ph-padd -u manually to inspect the failure" \
-        "Running ph-padd -u" \
-        run_padd_update || true
 
     print_summary || return 1
 

@@ -437,7 +437,7 @@ MOCK
         assert_failure
         assert_output --partial "PADD_PASSWORD"
 
-        # ph-update still calls -u, so it succeeds without downloading anything
+        # -u never downloads: the file comes from the repo
         run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" sh "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --update
         assert_success
         assert_output "ph-padd is managed by ~/.dotfiles; update it there."
@@ -750,7 +750,7 @@ MOCK
     assert_output --partial "Usage:"
     assert_output --partial "ph-update"
     assert_output --partial "ph-update -r"
-    assert_output --partial "Run os-update, refresh Pi-hole, update PADD, and optionally restart Linux"
+    assert_output --partial "Run os-update, refresh Pi-hole, and optionally restart Linux"
 }
 
 @test "ph-update runs os-update before self-elevating through sudo" {
@@ -781,7 +781,7 @@ MOCK
     assert_success
     assert_output --partial "sudo apt-get update"
     refute_output --partial "PATH="
-    assert_output --partial "sudo PH_UPDATE_SKIP_OS_UPDATE=1 PH_UPDATE_PADD_BIN=${BIN_SANDBOX}/ph-padd ${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update"
+    assert_output --partial "sudo PH_UPDATE_SKIP_OS_UPDATE=1 ${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update"
 }
 
 @test "ph-update preserves -r through self-elevating sudo" {
@@ -850,7 +850,6 @@ MOCK
         "${probe_script}" -r
     assert_success
     assert_output --partial "Pi-hole update and gravity refresh completed"
-    assert_output --partial "PADD update completed"
     assert_output --partial "shutdown -r now"
 }
 
@@ -896,43 +895,6 @@ MOCK
     assert_failure
     assert_output --partial "pihole command is unavailable"
     [[ ! -e "${TEST_TMPDIR}/user-path-used" ]]
-}
-
-@test "ph-update runs ph-padd as the invoking user when elevated" {
-    local probe_script="${TEST_TMPDIR}/ph-update"
-
-    # Elevated branches without being root: skip the re-exec and treat
-    # SUDO_USER as set by sudo.
-    sed -e 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
-        -e 's/if \[\[ "${EUID}" -eq 0 \&\& -n "${SUDO_USER:-}" \]\]; then/if [[ -n "${SUDO_USER:-}" ]]; then/' \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update" > "${probe_script}"
-    chmod +x "${probe_script}"
-    ln -sf "${PROJECT_ROOT}/stow/tools/.local/bin/os-update" "${TEST_TMPDIR}/os-update"
-
-    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
-#!/usr/bin/env bash
-printf 'sudo %s\n' "$*"
-MOCK
-
-    cat > "${BIN_SANDBOX}/pihole" <<'MOCK'
-#!/usr/bin/env bash
-printf 'pihole %s\n' "$*"
-MOCK
-
-    cat > "${TEST_TMPDIR}/padd-elsewhere" <<'MOCK'
-#!/usr/bin/env bash
-printf 'padd ran directly\n'
-MOCK
-
-    chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/pihole" "${TEST_TMPDIR}/padd-elsewhere"
-
-    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" PH_UPDATE_SKIP_OS_UPDATE=1 \
-        SUDO_USER=pi PH_UPDATE_PADD_BIN="${TEST_TMPDIR}/padd-elsewhere" \
-        "${probe_script}"
-    assert_success
-    assert_output --partial "sudo -u pi ${TEST_TMPDIR}/padd-elsewhere -u"
-    refute_output --partial "padd ran directly"
-    assert_output --partial "PADD update completed"
 }
 
 @test "ph-test displays help" {
