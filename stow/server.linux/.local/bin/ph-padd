@@ -28,6 +28,41 @@ padd_data=""
 # should PADD run only once?
 runOnce=false
 
+# Unbound beside Pi-hole: when its control socket or config is found, the
+# NETWORK rows show the resolver instead of the upstream DNS summary.
+appendPathDir() {
+    local dir
+    dir="${1}"
+
+    case ":${PATH}:" in
+        *":${dir}:"*) ;;
+        *) PATH="${PATH}:${dir}" ;;
+    esac
+}
+
+old_ifs="${IFS}"
+IFS=:
+for dir in ${PH_PADD_SBIN_PATHS:-${PH_TEST_SBIN_PATHS:-/usr/local/sbin:/usr/sbin:/sbin}}; do
+    appendPathDir "${dir}"
+done
+IFS="${old_ifs}"
+
+if [ -n "${PH_PADD_UNBOUND_MAIN_CONF:-${PH_TEST_UNBOUND_MAIN_CONF:-}}" ]; then
+    UNBOUND_MAIN_CONF="${PH_PADD_UNBOUND_MAIN_CONF:-${PH_TEST_UNBOUND_MAIN_CONF:-}}"
+elif command -v unbound-checkconf >/dev/null 2>&1; then
+    UNBOUND_MAIN_CONF="$(unbound-checkconf -o config-file 2>/dev/null || printf '%s\n' '/etc/unbound/unbound.conf')"
+else
+    UNBOUND_MAIN_CONF="/etc/unbound/unbound.conf"
+fi
+
+UNBOUND_DIR=$(dirname "${UNBOUND_MAIN_CONF}")
+
+if [ -n "${PH_PADD_UNBOUND_CONF:-${PH_TEST_UNBOUND_CONF:-}}" ]; then
+    UNBOUND_CONF="${PH_PADD_UNBOUND_CONF:-${PH_TEST_UNBOUND_CONF:-}}"
+else
+    UNBOUND_CONF="${UNBOUND_DIR}/unbound.conf.d/pi-hole.conf"
+fi
+
 # COLORS
 CSI="$(printf '\033')["  # Control Sequence Introducer
 red_text="${CSI}91m"     # Red
@@ -510,6 +545,148 @@ GetPADDValue() {
     printf '%s\n' "${padd_data}" | sed -n "s/^$1=//p" 2>/dev/null | tr -d '\000-\011\013-\037\177'
 }
 
+UnboundConfigPaths() {
+    if [ "${UNBOUND_CONF}" = "${UNBOUND_MAIN_CONF}" ]; then
+        printf '%s\n' "${UNBOUND_CONF}"
+        return
+    fi
+
+    printf '%s\n%s\n' "${UNBOUND_CONF}" "${UNBOUND_MAIN_CONF}"
+}
+
+GetUnboundSetting() {
+    local key
+    local path
+    local value
+
+    key="${1}"
+
+    while IFS= read -r path; do
+        [ -f "${path}" ] || continue
+
+        value=$(grep -E "^[[:space:]]*${key}:" "${path}" 2>/dev/null | tail -1 | awk '{print $2}' || true)
+        if [ -n "${value}" ]; then
+            printf '%s\n' "${value}"
+            return 0
+        fi
+    done <<EOF
+$(UnboundConfigPaths)
+EOF
+
+    return 1
+}
+
+GetUnboundStatsValue() {
+    local key
+
+    key="${1}"
+    printf '%s\n' "${unbound_stats}" | sed -n "s/^${key}=//p" | head -1
+}
+
+# unbound_status stays N/A when no Unbound is found, which keeps the plain
+# Pi-hole DNS rows in the layouts.
+GetUnboundInformation() {
+    local unbound_iface
+    local unbound_port
+    local unbound_status_output
+    local harden_dnssec
+    local control_enabled
+    local cache_hits
+    local cache_queries
+    local cache_rate
+
+    unbound_status="N/A"
+    unbound_listener="N/A"
+    unbound_listener_heatmap=${reset_text}
+    unbound_dnssec_status="N/A"
+    unbound_dnssec_heatmap=${reset_text}
+    unbound_control_status="N/A"
+    unbound_cache_status="N/A"
+    unbound_cache_heatmap=${reset_text}
+    unbound_stats=""
+
+    unbound_iface="$(GetUnboundSetting interface || true)"
+    unbound_port="$(GetUnboundSetting port || true)"
+    [ -n "${unbound_port}" ] || unbound_port="53"
+
+    if [ -n "${unbound_iface}" ]; then
+        unbound_listener="${unbound_iface}:${unbound_port}"
+        unbound_listener_heatmap=${cyan_text}
+    fi
+
+    if command -v unbound-control >/dev/null 2>&1; then
+        unbound_status_output="$(unbound-control status 2>/dev/null || true)"
+
+        case "${unbound_status_output}" in
+            *"is running"*)
+                unbound_status="Running"
+                unbound_stats="$(unbound-control stats_noreset 2>/dev/null || true)"
+                ;;
+            *"not running"*)
+                unbound_status="Stopped"
+                ;;
+        esac
+    fi
+
+    if [ "${unbound_status}" = "N/A" ]; then
+        if command -v pgrep >/dev/null 2>&1 && pgrep -x unbound >/dev/null 2>&1; then
+            unbound_status="Running"
+        elif [ -f "${UNBOUND_CONF}" ] || [ -f "${UNBOUND_MAIN_CONF}" ]; then
+            unbound_status="Stopped"
+        fi
+    fi
+
+    harden_dnssec="$(GetUnboundSetting harden-dnssec-stripped || true)"
+    case "${harden_dnssec}" in
+        yes)
+            unbound_dnssec_status="Hardened"
+            unbound_dnssec_heatmap=${green_text}
+            ;;
+        no)
+            unbound_dnssec_status="Disabled"
+            unbound_dnssec_heatmap=${blue_text}
+            ;;
+    esac
+
+    control_enabled="$(GetUnboundSetting control-enable || true)"
+    case "${control_enabled}" in
+        yes)
+            unbound_control_status="Enabled"
+            ;;
+        no)
+            unbound_control_status="Disabled"
+            ;;
+    esac
+
+    cache_hits="$(GetUnboundStatsValue total.num.cachehits)"
+    cache_queries="$(GetUnboundStatsValue total.num.queries)"
+    # unbound-control output is data: accept plain integers only
+    case "${cache_hits}" in
+        *[!0-9]*) cache_hits="" ;;
+    esac
+    case "${cache_queries}" in
+        *[!0-9]*) cache_queries="" ;;
+    esac
+    if [ -n "${cache_hits}" ] && [ -n "${cache_queries}" ] && [ "${cache_queries}" -gt 0 ] 2>/dev/null; then
+        cache_rate=$(awk -v hits="${cache_hits}" -v queries="${cache_queries}" 'BEGIN { printf "%.0f", (hits / queries) * 100 }')
+        unbound_cache_status="${cache_rate}% hit"
+
+        if [ "${cache_rate}" -ge 70 ]; then
+            unbound_cache_heatmap=${green_text}
+        elif [ "${cache_rate}" -ge 30 ]; then
+            unbound_cache_heatmap=${yellow_text}
+        else
+            unbound_cache_heatmap=${blue_text}
+        fi
+    elif [ "${unbound_control_status}" = "Disabled" ]; then
+        unbound_cache_status="Ctl off"
+        unbound_cache_heatmap=${blue_text}
+    elif [ "${unbound_status}" = "Running" ]; then
+        unbound_cache_status="No stats"
+        unbound_cache_heatmap=${yellow_text}
+    fi
+}
+
 GetSummaryInformation() {
     if [ "${connection_down_flag}" = true ]; then
         clients="N/A"
@@ -678,6 +855,8 @@ GetSystemInformation() {
 }
 
 GetNetworkInformation() {
+    GetUnboundInformation
+
     if [ "${connection_down_flag}" = true ]; then
         iface_name="N/A"
         pi_ip4_addr="N/A"
@@ -1300,9 +1479,16 @@ PrintDashboard() {
         moveXOffset; printf " %-9s%-29s${clear_line}\n" "Piholed:" "${ads_blocked_today} out of ${dns_queries_today}"
         moveXOffset; printf " %-9s%-29s${clear_line}\n" "Latest:" "${latest_blocked}"
         moveXOffset; printf "%s${clear_line}\n" "${bold_text}NETWORK ================================${reset_text}"
-        moveXOffset; printf " %-9s%-16s%-5s%-9s${clear_line}\n" "Host:" "${full_hostname}" "DNS:" "${dns_information}"
+        if [ "${unbound_status}" != "N/A" ]; then
+            moveXOffset; printf " %-9s%-16s%-5s%-9s${clear_line}\n" "Host:" "${full_hostname}" "UB:" "${unbound_status}"
+        else
+            moveXOffset; printf " %-9s%-16s%-5s%-9s${clear_line}\n" "Host:" "${full_hostname}" "DNS:" "${dns_information}"
+        fi
         moveXOffset; printf " %-9s%s${clear_line}\n" "IP:" "${pi_ip4_addr} (${iface_name})"
         moveXOffset; printf " %-9s${ipv6_heatmap}%-10s${reset_text} %-8s${dhcp_heatmap}%-10s${reset_text}${clear_line}\n" "IPv6:" "${ipv6_status}" "DHCP:" "${dhcp_status}"
+        if [ "${unbound_status}" != "N/A" ]; then
+            moveXOffset; printf " %-9s${unbound_listener_heatmap}%-29s${reset_text}${clear_line}\n" "Listen:" "${unbound_listener}"
+        fi
 
         moveXOffset; printf " %-9s%-4s%-12s%-4s%-5s${clear_line}\n" "Traffic:" "TX:" "${tx_bytes}" "RX:" "${rx_bytes}"
         moveXOffset; printf "%s${clear_line}\n" "${bold_text}SYSTEM =================================${reset_text}"
@@ -1324,9 +1510,17 @@ PrintDashboard() {
         moveXOffset; printf "%s${clear_line}\n" "${bold_text}NETWORK =============================================${reset_text}"
         moveXOffset; printf " %-10s%-16s %-8s%-16s${clear_line}\n" "Hostname:" "${full_hostname}" "IP:  " "${pi_ip4_addr}"
         moveXOffset; printf " %-10s%-16s %-4s%-7s %-4s%-5s${clear_line}\n" "Interfce:" "${iface_name}" "TX:" "${tx_bytes}" "RX:" "${rx_bytes}"
-        moveXOffset; printf " %-10s%-16s %-8s${dnssec_heatmap}%-16s${reset_text}${clear_line}\n" "DNS:" "${dns_information}" "DNSSEC:" "${dnssec_status}"
+        if [ "${unbound_status}" != "N/A" ]; then
+            moveXOffset; printf " %-10s${unbound_listener_heatmap}%-16s${reset_text} %-8s${unbound_cache_heatmap}%-16s${reset_text}${clear_line}\n" "Unbound:" "${unbound_listener}" "Cache:" "${unbound_cache_status}"
+        else
+            moveXOffset; printf " %-10s%-16s %-8s${dnssec_heatmap}%-16s${reset_text}${clear_line}\n" "DNS:" "${dns_information}" "DNSSEC:" "${dnssec_status}"
+        fi
         moveXOffset; printf " %-10s%s${clear_line}\n" "IPv6:" "${pi_ip6_addr}"
-        moveXOffset; printf " %-10s%-5s %-4s${dhcp_range_heatmap}%-33s${reset_text}${clear_line}\n" "DHCP:" "${dhcp_check_box}" "Rng" "${dhcp_range}"
+        if [ "${unbound_status}" != "N/A" ]; then
+            moveXOffset; printf " %-10s${unbound_dnssec_heatmap}%-16s${reset_text} %-4s${dhcp_range_heatmap}%-33s${reset_text}${clear_line}\n" "DNSSEC:" "${unbound_dnssec_status}" "Rng" "${dhcp_range}"
+        else
+            moveXOffset; printf " %-10s%-5s %-4s${dhcp_range_heatmap}%-33s${reset_text}${clear_line}\n" "DHCP:" "${dhcp_check_box}" "Rng" "${dhcp_range}"
+        fi
         moveXOffset; printf "%s${clear_line}\n" "${bold_text}SYSTEM ==============================================${reset_text}"
         moveXOffset; printf " %-10s%-29s${clear_line}\n" "Uptime:" "${system_uptime}"
         moveXOffset; printf " %-10s${temp_heatmap}%-17s${reset_text} %-8s${cpu_load_1_heatmap}%-4s${reset_text}, ${cpu_load_5_heatmap}%-4s${reset_text}, ${cpu_load_15_heatmap}%-4s${reset_text}${clear_line}\n" "CPU Temp:" "${temperature}" "Load:" "${cpu_load_1}" "${cpu_load_5}" "${cpu_load_15}"
@@ -1356,8 +1550,13 @@ PrintDashboard() {
         moveXOffset; printf " %-10s%-15s %-4s%-17s${clear_line}\n" "Hostname:" "${full_hostname}" "IP:" "${pi_ip4_addr}"
         moveXOffset; printf " %-10s%-15s %-4s%-17s%-4s%s${clear_line}\n" "Interfce:" "${iface_name}" "TX:" "${tx_bytes}" "RX:" "${rx_bytes}"
         moveXOffset; printf " %-10s%s${clear_line}\n" "IPv6:" "${pi_ip6_addr}"
-        moveXOffset; printf " %-10s%-15s %-10s${dnssec_heatmap}%-19s${reset_text}${clear_line}\n" "DNS:" "${dns_information}" "DNSSEC:" "${dnssec_status}"
-        moveXOffset; printf " %-10s%-16s%-6s${dhcp_range_heatmap}%-36s${reset_text}${clear_line}\n" "DHCP:" "${dhcp_check_box}" "Range" "${dhcp_range}"
+        if [ "${unbound_status}" != "N/A" ]; then
+            moveXOffset; printf " %-10s${unbound_listener_heatmap}%-15s${reset_text} %-10s${unbound_cache_heatmap}%-19s${reset_text}${clear_line}\n" "Unbound:" "${unbound_listener}" "Cache:" "${unbound_cache_status}"
+            moveXOffset; printf " %-10s${unbound_dnssec_heatmap}%-16s${reset_text}%-6s${dhcp_range_heatmap}%-36s${reset_text}${clear_line}\n" "DNSSEC:" "${unbound_dnssec_status}" "Range" "${dhcp_range}"
+        else
+            moveXOffset; printf " %-10s%-15s %-10s${dnssec_heatmap}%-19s${reset_text}${clear_line}\n" "DNS:" "${dns_information}" "DNSSEC:" "${dnssec_status}"
+            moveXOffset; printf " %-10s%-16s%-6s${dhcp_range_heatmap}%-36s${reset_text}${clear_line}\n" "DHCP:" "${dhcp_check_box}" "Range" "${dhcp_range}"
+        fi
         moveXOffset; printf "%s${clear_line}\n" "${bold_text}SYSTEM =====================================================${reset_text}"
         moveXOffset; printf " %-10s%-39s${clear_line}\n" "Uptime:" "${system_uptime}"
         moveXOffset; printf " %-10s${temp_heatmap}%-""${temp_padding}""s${reset_text}%-10s${cpu_load_1_heatmap}%-4s${reset_text}, ${cpu_load_5_heatmap}%-4s${reset_text}, ${cpu_load_15_heatmap}%-4s${reset_text}${clear_line}\n" "CPU Temp:" "${temperature}" "CPU Load:" "${cpu_load_1}" "${cpu_load_5}" "${cpu_load_15}"
@@ -1382,10 +1581,17 @@ PrintDashboard() {
         moveXOffset; printf " %-10s%-19s${clear_line}\n" "Hostname:" "${full_hostname}"
         moveXOffset; printf " %-10s%-15s %-4s%-9s %-4s%-9s${clear_line}\n" "Interfce:" "${iface_name}" "TX:" "${tx_bytes}" "RX:" "${rx_bytes}"
         moveXOffset; printf " %-6s%-19s %-10s%-29s${clear_line}\n" "IPv4:" "${pi_ip4_addr}" "IPv6:" "${pi_ip6_addr}"
-        moveXOffset; printf "%s${clear_line}\n" "${bold_text}DNS ==========================DHCP==============================================${reset_text}"
-        moveXOffset; printf " %-10s%-19s %-6s${dhcp_heatmap}%-19s${reset_text}${clear_line}\n" "Servers:" "${dns_information}" "DHCP:" "${dhcp_status}"
-        moveXOffset; printf " %-10s${dnssec_heatmap}%-19s${reset_text} %-10s${dhcp_ipv6_heatmap}%-9s${reset_text}${clear_line}\n" "DNSSEC:" "${dnssec_status}" "IPv6 Spt:" "${dhcp_ipv6_status}"
-        moveXOffset; printf " %-10s${conditional_forwarding_heatmap}%-20s${reset_text}%-6s${dhcp_range_heatmap}%-36s${reset_text}${clear_line}\n" "CdFwding:" "${conditional_forwarding_status}" "Range" "${dhcp_range}"
+        if [ "${unbound_status}" != "N/A" ]; then
+            moveXOffset; printf "%s${clear_line}\n" "${bold_text}UNBOUND ======================DHCP==============================================${reset_text}"
+            moveXOffset; printf " %-10s${unbound_listener_heatmap}%-19s${reset_text} %-6s${dhcp_heatmap}%-19s${reset_text}${clear_line}\n" "Listen:" "${unbound_listener}" "DHCP:" "${dhcp_status}"
+            moveXOffset; printf " %-10s${unbound_dnssec_heatmap}%-19s${reset_text} %-10s${dhcp_ipv6_heatmap}%-9s${reset_text}${clear_line}\n" "DNSSEC:" "${unbound_dnssec_status}" "IPv6 Spt:" "${dhcp_ipv6_status}"
+            moveXOffset; printf " %-10s${unbound_cache_heatmap}%-20s${reset_text}%-6s${dhcp_range_heatmap}%-36s${reset_text}${clear_line}\n" "Cache:" "${unbound_cache_status}" "Range" "${dhcp_range}"
+        else
+            moveXOffset; printf "%s${clear_line}\n" "${bold_text}DNS ==========================DHCP==============================================${reset_text}"
+            moveXOffset; printf " %-10s%-19s %-6s${dhcp_heatmap}%-19s${reset_text}${clear_line}\n" "Servers:" "${dns_information}" "DHCP:" "${dhcp_status}"
+            moveXOffset; printf " %-10s${dnssec_heatmap}%-19s${reset_text} %-10s${dhcp_ipv6_heatmap}%-9s${reset_text}${clear_line}\n" "DNSSEC:" "${dnssec_status}" "IPv6 Spt:" "${dhcp_ipv6_status}"
+            moveXOffset; printf " %-10s${conditional_forwarding_heatmap}%-20s${reset_text}%-6s${dhcp_range_heatmap}%-36s${reset_text}${clear_line}\n" "CdFwding:" "${conditional_forwarding_status}" "Range" "${dhcp_range}"
+        fi
         moveXOffset; printf "%s${clear_line}\n" "${bold_text}SYSTEM =========================================================================${reset_text}"
         moveXOffset; printf " %-10s%-39s${clear_line}\n" "Device:" "${sys_model}"
         moveXOffset; printf " %-10s%-39s %-10s[${memory_heatmap}%-10s${reset_text}] %-6s${clear_line}\n" "Uptime:" "${system_uptime}" "Memory:" "${memory_bar}" "${memory_percent}%"
@@ -1939,7 +2145,7 @@ NormalPADD() {
 DisplayHelp() {
     cat << EOM
 
-::: PADD displays stats about your Pi-hole!
+::: PADD displays stats about your Pi-hole, and Unbound when it is beside it.
 :::
 :::
 ::: Options:

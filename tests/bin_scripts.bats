@@ -186,14 +186,6 @@ run_padd_dns_unbound_probe() {
     assert_output --partial "--runonce"
 }
 
-@test "ph-padd-dns displays help" {
-    run sh "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-padd-dns" --help
-    assert_success
-    assert_output --partial "Unbound resolver details"
-    assert_output --partial "--api"
-    assert_output --partial "--runonce"
-}
-
 @test "ph-padd startup probe fails fast when no API URLs are discovered" {
     cat > "${BIN_SANDBOX}/dig" <<MOCK
 #!/usr/bin/env bash
@@ -212,7 +204,7 @@ MOCK
     assert_output --partial "+tries=1"
 }
 
-@test "ph-padd-dns surfaces unbound listener and cache details" {
+@test "ph-padd surfaces unbound listener and cache details" {
     local main_conf="${TEST_TMPDIR}/unbound.conf"
     local include_conf="${TEST_TMPDIR}/pi-hole.conf"
 
@@ -243,10 +235,10 @@ MOCK
 
     chmod +x "${BIN_SANDBOX}/unbound-control"
 
-    export PH_PADD_DNS_UNBOUND_MAIN_CONF="${main_conf}"
-    export PH_PADD_DNS_UNBOUND_CONF="${include_conf}"
+    export PH_PADD_UNBOUND_MAIN_CONF="${main_conf}"
+    export PH_PADD_UNBOUND_CONF="${include_conf}"
 
-    run_padd_dns_unbound_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-padd-dns"
+    run_padd_dns_unbound_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-padd"
 
     assert_success
     assert_output --partial "status=Running"
@@ -254,11 +246,11 @@ MOCK
     assert_output --partial "dnssec=Hardened"
     assert_output --partial "cache=75% hit"
 
-    unset PH_PADD_DNS_UNBOUND_MAIN_CONF
-    unset PH_PADD_DNS_UNBOUND_CONF
+    unset PH_PADD_UNBOUND_MAIN_CONF
+    unset PH_PADD_UNBOUND_CONF
 }
 
-@test "ph-padd-dns does not splice unbound stats into awk code" {
+@test "ph-padd does not splice unbound stats into awk code" {
     local marker="${TEST_TMPDIR}/awk-ran"
 
     cat > "${BIN_SANDBOX}/unbound-control" <<MOCK
@@ -273,8 +265,8 @@ esac
 MOCK
     chmod +x "${BIN_SANDBOX}/unbound-control"
 
-    PH_PADD_DNS_UNBOUND_MAIN_CONF="${TEST_TMPDIR}/missing.conf" \
-        run_padd_dns_unbound_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-padd-dns"
+    PH_PADD_UNBOUND_MAIN_CONF="${TEST_TMPDIR}/missing.conf" \
+        run_padd_dns_unbound_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-padd"
 
     assert_success
     assert_output --partial "cache=No stats"
@@ -333,7 +325,7 @@ MOCK
     write_padd_network_mocks
     printf '{"system":{"uptime":"a[$(touch %s)]"}}' "${marker}" > "${TEST_TMPDIR}/curl-body"
 
-    for script in ph-padd ph-padd-dns; do
+    for script in ph-padd; do
         PADD_PROBE_MAIN='API_URL=https://127.0.0.1/api/; GetPADDData; convertUptime "$(GetPADDValue system.uptime)"; echo; convertUptime 90061' \
             run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}"
         assert_success
@@ -348,7 +340,7 @@ MOCK
     write_padd_network_mocks
     printf '%s' '{"node_name":"evil\u001b]0;t\u0007\nsystem.uptime=5"}' > "${TEST_TMPDIR}/curl-body"
 
-    for script in ph-padd ph-padd-dns; do
+    for script in ph-padd; do
         PADD_PROBE_MAIN='API_URL=https://127.0.0.1/api/; GetPADDData; printf "host=%s|uptime=%s\n" "$(GetPADDValue node_name)" "$(GetPADDValue system.uptime)"' \
             run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}"
         assert_success
@@ -363,7 +355,7 @@ MOCK
     : > "${TEST_TMPDIR}/ca.pem"
     PADD_PROBE_MAIN='TestAPIAvailability; printf "api=%s\n" "${API_URL}"'
 
-    for script in ph-padd ph-padd-dns; do
+    for script in ph-padd; do
         run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --server 192.0.2.10
         assert_success
         assert_output --partial "api=https://192.0.2.10/api/"
@@ -397,7 +389,7 @@ MOCK
     printf '%s\n' '"http://attacker.example:80/api/"' > "${TEST_TMPDIR}/dig-reply"
     PADD_PROBE_MAIN='TestAPIAvailability; printf "api=%s\n" "${API_URL}"'
 
-    for script in ph-padd ph-padd-dns; do
+    for script in ph-padd; do
         run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --server 192.0.2.10
         assert_failure
         assert_output --partial "Refusing plain http:// API URL http://192.0.2.10:80/api/"
@@ -416,7 +408,7 @@ MOCK
     printf '%s' '{"session":{"valid":true,"sid":"c2Vzc2lvbg=="}}' > "${TEST_TMPDIR}/curl-body"
     PADD_PROBE_MAIN='API_URL=https://192.0.2.10/api/; Authenticate; printf "valid=%s\n" "${validSession}"; GetFTLData info/ftl >/dev/null'
 
-    for script in ph-padd ph-padd-dns; do
+    for script in ph-padd; do
         PADD_PASSWORD='hunter2"\x' run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}"
         assert_success
         assert_output --partial "valid=true"
@@ -434,7 +426,7 @@ MOCK
 @test "ph-padd scripts reject --secret and skip self-update" {
     local script
 
-    for script in ph-padd ph-padd-dns; do
+    for script in ph-padd; do
         run sh "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --secret hunter2
         assert_failure
         assert_output --partial "PADD_PASSWORD"

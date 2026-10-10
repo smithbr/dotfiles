@@ -82,11 +82,11 @@ This is process-level isolation, not a real container or VM.
 
 - Covers scripts in [`stow/tools/.local/bin`](../stow/tools/.local/bin), [`stow/personal/.local/bin`](../stow/personal/.local/bin), and [`stow/server.linux/.local/bin`](../stow/server.linux/.local/bin)
 - Runs `st` (in `stow/desktop.darwin/.local/bin`) under plain Python: team listing and dry runs, a team without agents as one tab, the missing-teams-file hint, every team in the tracked `teams.toml.example`, a directory or the current directory as a one-tab team, a team winning over a same-named directory, and each tab running its command as the tab's program
-- Verifies help output and startup probing for `ph-padd`
+- Verifies help output, startup probing, and the Unbound rows for `ph-padd`
 - Runs `cf-cert` against a mocked acme.sh: argument checks, issue-only runs, the combined-pem install and chained reload command, stopping on a failed issue, a missing token on closed stdin, and `--pihole` refusing to run without root
 - Verifies non-root self-elevation behavior for `ph-update`, `ph-test`, and `ph-backup`
 - Runs `ph-backup` against mocked Pi-hole, Unbound, and Tailscale and inspects the resulting tar.gz
-- Runs `os-update`, `ph-padd-dns`, and `ph-sec-audit` against mocked system tools
+- Runs `os-update` and `ph-sec-audit` against mocked system tools
 - Runs `ts-test` in a fully mocked sandbox
 - Runs `sshkey` help, local key creation, and cleanup flows inside an isolated home directory
 - Runs `df-link` and `df-file-review` through a stow-style link into a fake repo: arguments pass through, `df-file-review` defaults to `--cleanup`, and a wrapper outside a repo fails clearly
