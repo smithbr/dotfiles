@@ -1,7 +1,7 @@
 # My dotfiles
 
 macOS and Debian/Ubuntu dotfiles linked into place with [GNU Stow](https://www.gnu.org/software/stow/).
-Every managed file in `~` is a symlink into this repo, so edit it in place and commit.
+Every managed file in `~` is a symlink into this repo, so edit it in place and commit; the few files under `seed/` are copied once instead.
 
 ```bash
 git clone https://github.com/smithbr/dotfiles.git ~/.dotfiles
