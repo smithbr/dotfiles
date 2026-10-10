@@ -5,8 +5,10 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "${REPO_ROOT}"
 
-printf 'pre-push: running shellcheck and test suite\n'
-./tests/run_tests.sh
+# CI runs the full suite on every push; here only the lint and, when it
+# matters, the container install.
+printf 'pre-push: running shellcheck\n'
+./tests/run_tests.sh --lint-only
 
 # A sandbox install boots a container and takes minutes, so only pay for it when
 # the pushed commits touch something that can break a fresh install.

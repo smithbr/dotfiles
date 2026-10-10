@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# Run the full test suite using Homebrew-installed Bats.
+# Run the full test suite using Homebrew-installed Bats, or with --lint-only
+# just ShellCheck (what the pre-push hook runs; CI runs everything).
 
 set -euo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LINT_ONLY=0
+if [[ "${1:-}" == --lint-only ]]; then
+    LINT_ONLY=1
+    shift
+fi
 
 if ! command -v brew >/dev/null 2>&1; then
     echo "error: Homebrew not found. Install Homebrew first." >&2
@@ -94,6 +100,9 @@ run_shellcheck() {
 }
 
 ensure_shellcheck
+run_shellcheck
+[[ "${LINT_ONLY}" -eq 0 ]] || exit 0
+
 ensure_stow
 ensure_parallel
 ensure_bats_dependencies
@@ -117,8 +126,6 @@ if [[ ! -f "${BREW_PREFIX}/lib/bats-assert/load.bash" ]]; then
 fi
 
 export BATS_LIB_PATH="${BREW_PREFIX}/lib"
-
-run_shellcheck
 
 # Run tests in parallel across all available cores. Each test isolates its own
 # state via setup_tmpdir (mktemp -d), so parallel execution is safe and roughly

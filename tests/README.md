@@ -19,8 +19,9 @@ This repo can use the versioned hooks in [`.githooks`](../.githooks):
 
 - `pre-commit` runs `~/.config/agents/scripts/check-drift` (retired terms, and `AGENT_LINKS` against the
   agents repo); it skips with a note when the agents checkout is missing
-- `pre-push` runs the full test suite via [`run_tests.sh`](run_tests.sh), then a
-  container install via [`sandbox-install.sh`](sandbox-install.sh)
+- `pre-push` runs ShellCheck (`run_tests.sh --lint-only`), then a container
+  install via [`sandbox-install.sh`](sandbox-install.sh); CI runs the full suite
+  on every push
 
 To enable them locally:
 
@@ -157,7 +158,7 @@ This is process-level isolation, not a real container or VM.
 
 - Bootstraps Bats dependencies from Homebrew
 - Exports `BATS_LIB_PATH`
-- Runs all `*.bats` files in this directory
+- Runs all `*.bats` files in this directory, or only ShellCheck with `--lint-only`
 
 ## Writing tests
 
