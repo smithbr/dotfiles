@@ -75,7 +75,7 @@ This is process-level isolation, not a real container or VM.
 - Verifies idempotency guards for `docker` and `tailscale`
 - Dry-runs `harden.sh` against a scratch root (`HARDEN_ROOT`) with mocked system tools: required arguments, closing public SSH only once Tailscale is connected, Cloudflare-only ports, and stopping before user or SSH changes when there is no key to copy
 - Verifies the macOS iTerm2 step enables the Python API, makes the repo profile the default, adds the Catppuccin color presets (rewriting a stale one, keeping the user's own), and rewrites nothing on a second run
-- Verifies that the Linux optional installs follow the persona (`DOTFILES_LINUX_OPTIONAL`), including Claude Code through the shared `scripts/bootstrap/claude-code.sh`, and keep Docker and Tailscale when run on their own
+- Verifies that `harden.sh` re-runs itself through sudo for the user who ran it
 - Checks shell script shebangs, strict mode, `common.sh` sourcing, and `BASEDIR` conventions
 
 [`bin_scripts.bats`](bin_scripts.bats)
@@ -137,7 +137,7 @@ This is process-level isolation, not a real container or VM.
 
 [`install.bats`](install.bats)
 
-- Tests `install.sh` argument parsing, including `--persona`, the persona picker (number, name, empty answer, EOF), and rejecting an unknown persona before any change
+- Tests `install.sh` argument parsing, including `--persona`, the persona picker (number, name, empty answer, EOF), rejecting an unknown persona before any change, and the closing setup step (offered on a terminal, named otherwise, a failing script reported)
 - Verifies SSH key helper behavior
 - Tests error handling when `HOME` is unset
 - Runs an isolated integration test for [`install.sh`](../install.sh) with sandboxed home and mocked external commands

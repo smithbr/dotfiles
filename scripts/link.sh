@@ -4,7 +4,7 @@
 #   personas/<name>         which layers, editors, agents and installs a machine
 #                           gets: key=value lines for os, layers, agents,
 #                           agent_apps, skills, editors, brew,
-#                           brew_optional, linux_optional.
+#                           brew_optional, setup.
 #   stow/<layer>, stow/<layer>.<os>
 #                           mirror $HOME; every file becomes a symlink into the
 #                           repo, so editing the live file edits the repo.
@@ -104,7 +104,7 @@ Commands:
   persona   Print the persona in effect and where it came from
             (flag, env, saved or default)
   personas  List the personas this OS can use
-  installs  Print the persona's brew, brew_optional and linux_optional lists
+  installs  Print the persona's brew, brew_optional and setup lists
   add PATH...
             Start managing files from the home directory: copy each one into
             a layer, then link it (a directory adds every file in it)
@@ -214,20 +214,36 @@ PERSONA_EDITORS=yes
 PERSONA_AGENT_APPS="${AGENT_APPS}"
 PERSONA_SKILLS=core
 # Installs, for install.sh: Brewfiles installed in full, Brewfiles offered in
-# the macOS picker, and the Linux bootstrap's optional installs.
+# the macOS picker, and the setup scripts offered at the end.
 PERSONA_BREW=""
 PERSONA_BREW_OPTIONAL=""
-PERSONA_LINUX_OPTIONAL=""
+PERSONA_SETUP=""
+
+state_dir() {
+    printf '%s/.local/state/dotfiles\n' "${DEST}"
+}
 
 persona_state_file() {
-    printf '%s/.local/state/dotfiles/persona\n' "${DEST}"
+    printf '%s/persona\n' "$(state_dir)"
+}
+
+# True when no directory between $DEST and PATH (PATH included) is a symlink,
+# so writing under PATH cannot land in someone else's tree.
+no_symlinked_parents() {
+    local path="$1" step="${DEST}" part
+    local -a parts=()
+    IFS=/ read -r -a parts <<< "${path#"${DEST}"/}"
+    for part in "${parts[@]}"; do
+        step="${step}/${part}"
+        [[ -L "${step}" ]] && { printf '%s\n' "${step}"; return 1; }
+    done
+    return 0
 }
 
 default_persona() {
     case "$(platform)" in
         darwin) printf 'home\n' ;;
-        linux) printf 'server\n' ;;
-        *) printf 'sandbox\n' ;;
+        *) printf 'server\n' ;;
     esac
 }
 
@@ -299,7 +315,7 @@ load_persona() {
             layers) PERSONA_LAYERS="${value}" ;;
             brew) PERSONA_BREW="${value}" ;;
             brew_optional) PERSONA_BREW_OPTIONAL="${value}" ;;
-            linux_optional) PERSONA_LINUX_OPTIONAL="${value}" ;;
+            setup) PERSONA_SETUP="${value}" ;;
             skills)
                 for bundle in ${value}; do
                     if [[ ! "${bundle}" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
@@ -364,23 +380,24 @@ save_persona() {
     if [[ -f "${file}" && ! -L "${file}" && "$(cat "${file}")" == "${PERSONA_NAME}" ]]; then
         return 0
     fi
-    for parent in "${DEST}/.local" "${DEST}/.local/state" "${DEST}/.local/state/dotfiles" "${file}"; do
-        if [[ -L "${parent}" ]]; then
-            log_error "Persona state path is a symlink: ${parent}; not saving the persona"
-            return 1
-        fi
-    done
+    if ! parent="$(no_symlinked_parents "${file}")"; then
+        log_error "Persona state path is a symlink: ${parent}; not saving the persona"
+        return 1
+    fi
     (umask 077 && mkdir -p "$(dirname "${file}")" && printf '%s\n' "${PERSONA_NAME}" > "${file}")
     printf 'Saved persona %s\n' "${PERSONA_NAME}"
 }
 
-# A persona layer with no stow/<layer> or stow/<layer>.<os> directory links
-# nothing; say so rather than skip it quietly.
+# A persona layer with no stow/<layer> or stow/<layer>.<os> directory on any
+# OS links nothing; say so rather than skip it quietly.
 warn_missing_layers() {
-    local layer
+    local layer dir found
     for layer in ${PERSONA_LAYERS}; do
-        [[ -d "${REPO}/stow/${layer}" || -d "${REPO}/stow/${layer}.$(platform)" ]] \
-            || log_warn "Persona '${PERSONA_NAME}' lists layer '${layer}', which has no stow/${layer} or stow/${layer}.$(platform) directory"
+        found=0
+        for dir in "${REPO}/stow/${layer}" "${REPO}/stow/${layer}".*; do
+            [[ -d "${dir}" ]] && found=1
+        done
+        [[ "${found}" -eq 1 ]] || log_warn "Persona '${PERSONA_NAME}' lists layer '${layer}', which has no directory under stow/"
     done
 }
 
@@ -394,6 +411,20 @@ packages_in() {
         done
     done
     return 0
+}
+
+# package|relative for every file in every package of one kind. Each listing
+# is captured before it is printed: a child exiting mid-write can interrupt
+# printf on a full pipe, and bash drops the line.
+package_entries() {
+    local kind="$1" package relative files
+    for package in $(packages_in "${kind}"); do
+        files="$(package_files "${kind}" "${package}")"
+        [[ -n "${files}" ]] || continue
+        while IFS= read -r relative; do
+            printf '%s|%s\n' "${package}" "${relative}"
+        done <<< "${files}"
+    done
 }
 
 # Relative paths of every file and symlink in one package.
@@ -475,10 +506,10 @@ is_repo_link() {
 # Relative paths of the links that belong here: this platform's stow files and
 # editor links.
 managed_links() {
-    local package entry
-    while IFS= read -r package; do
-        package_files stow "${package}"
-    done < <(packages_in stow)
+    local entry
+    while IFS= read -r entry; do
+        printf '%s\n' "${entry#*|}"
+    done < <(package_entries stow)
     while IFS= read -r entry; do
         printf '%s\n' "${entry%%|*}"
     done < <(editor_links)
@@ -614,14 +645,11 @@ BACKUP_DIR=""
 # reached through a symlinked parent (as in file-review.sh's archive).
 backup_path() {
     local target="$1" relative="${1#"${DEST}"/}" parent backup_dir
-    backup_dir="${BACKUP_DIR:-${DEST}/.local/state/dotfiles/clobbered/$(date +%Y%m%d-%H%M%S)}"
-    for parent in "${DEST}/.local" "${DEST}/.local/state" "${DEST}/.local/state/dotfiles" \
-        "${DEST}/.local/state/dotfiles/clobbered" "${backup_dir}"; do
-        if [[ -L "${parent}" ]]; then
-            log_error "Backup parent is a symlink: ${parent}; not moving ${target}"
-            return 1
-        fi
-    done
+    backup_dir="${BACKUP_DIR:-$(state_dir)/clobbered/$(date +%Y%m%d-%H%M%S)}"
+    if ! parent="$(no_symlinked_parents "${backup_dir}")"; then
+        log_error "Backup parent is a symlink: ${parent}; not moving ${target}"
+        return 1
+    fi
     BACKUP_DIR="${backup_dir}"
     (umask 077 && mkdir -p "$(dirname "${BACKUP_DIR}/${relative}")")
     chmod 700 "${BACKUP_DIR}"
@@ -632,39 +660,52 @@ backup_path() {
 # Clear real files and foreign links out of stow's way. BLOCKED counts the
 # paths that still block stow, which is always 0 unless this is a dry run.
 BLOCKED=0
-clear_conflicts() {
-    local package relative target source
-    while IFS= read -r package; do
-        while IFS= read -r relative; do
-            target="${DEST}/${relative}"
-            source="${REPO}/stow/${package}/${relative}"
-            [[ -e "${target}" || -L "${target}" ]] || continue
-            is_linked "${target}" "${source}" && continue
+# Make room for a link at TARGET to SOURCE. Nothing to do when it is absent
+# or already that link; our own link elsewhere (the file moved between
+# packages) and an identical copy go quietly; anything else is backed up. A
+# dry run reports instead and returns 1.
+clear_target() {
+    local target="$1" source="$2" would=""
+    [[ -e "${target}" || -L "${target}" ]] || return 0
+    is_linked "${target}" "${source}" && return 0
 
-            # Our own link into another package (the file moved between
-            # packages) is replaced quietly, like an identical copy.
-            if is_repo_link "${target}"; then
-                if [[ "${DRY_RUN}" -eq 1 ]]; then
-                    printf 'Would relink %s\n' "${target}"
-                    BLOCKED=$((BLOCKED + 1))
-                else
-                    rm -f "${target}"
-                fi
-            elif [[ -f "${target}" && ! -L "${target}" ]] && cmp -s "${target}" "${source}"; then
-                if [[ "${DRY_RUN}" -eq 1 ]]; then
-                    printf 'Would replace identical copy %s with a link\n' "${target}"
-                    BLOCKED=$((BLOCKED + 1))
-                else
-                    rm -f "${target}"
-                fi
-            elif [[ "${DRY_RUN}" -eq 1 ]]; then
-                printf 'Would back up %s before linking\n' "${target}"
-                BLOCKED=$((BLOCKED + 1))
-            else
-                backup_path "${target}"
-            fi
-        done < <(package_files stow "${package}")
-    done < <(packages_in stow)
+    if is_repo_link "${target}"; then
+        would="Would relink ${target}"
+    elif [[ -f "${target}" && ! -L "${target}" ]] && cmp -s "${target}" "${source}"; then
+        would="Would replace identical copy ${target} with a link"
+    else
+        would="Would back up ${target} before linking"
+    fi
+    if [[ "${DRY_RUN}" -eq 1 ]]; then
+        printf '%s\n' "${would}"
+        BLOCKED=$((BLOCKED + 1))
+        return 1
+    fi
+    if [[ "${would}" == "Would back up"* ]]; then
+        backup_path "${target}"
+    else
+        rm -f "${target}"
+    fi
+}
+
+# Link TARGET to SOURCE after clearing whatever is there.
+place_link() {
+    local target="$1" source="$2"
+    is_linked "${target}" "${source}" && return 0
+    clear_target "${target}" "${source}" || return 0
+    if [[ "${DRY_RUN}" -eq 1 ]]; then
+        printf 'Would link %s -> %s\n' "${target}" "${source}"
+        return 0
+    fi
+    mkdir -p "$(dirname "${target}")"
+    ln -sfn "${source}" "${target}"
+}
+
+clear_conflicts() {
+    local entry
+    while IFS= read -r entry; do
+        clear_target "${DEST}/${entry#*|}" "${REPO}/stow/${entry%%|*}/${entry#*|}" || true
+    done < <(package_entries stow)
 }
 
 run_stow() {
@@ -735,31 +776,12 @@ sync_agents_repo() {
     fi
 }
 
+# A real file or directory where an agent link belongs is usually config an
+# agent CLI wrote on its first run; place_link keeps it recoverable.
 link_agents() {
-    local entry relative target link_target
+    local entry
     for entry in ${WANTED_AGENT_LINKS[@]+"${WANTED_AGENT_LINKS[@]}"}; do
-        relative="${entry%%|*}"
-        target="${DEST}/${relative}"
-        link_target="${DEST}/.config/agents/${entry#*|}"
-
-        if [[ -L "${target}" && "$(readlink "${target}")" == "${link_target}" ]]; then
-            continue
-        fi
-        if [[ "${DRY_RUN}" -eq 1 ]]; then
-            if [[ -e "${target}" && ! -L "${target}" ]]; then
-                printf 'Would back up %s and link it to %s\n' "${target}" "${link_target}"
-            else
-                printf 'Would link %s -> %s\n' "${target}" "${link_target}"
-            fi
-            continue
-        fi
-        # A real file or directory here is usually config an agent CLI wrote on
-        # its first run. Keep it recoverable instead of deleting it.
-        if [[ -e "${target}" && ! -L "${target}" ]]; then
-            backup_path "${target}"
-        fi
-        mkdir -p "$(dirname "${target}")"
-        ln -sfn "${link_target}" "${target}"
+        place_link "${DEST}/${entry%%|*}" "${DEST}/.config/agents/${entry#*|}"
     done
 }
 
@@ -789,13 +811,7 @@ link_skills() {
     fi
 
     for relative in ${WANTED_SKILL_LINKS[@]+"${WANTED_SKILL_LINKS[@]}"}; do
-        target="${DEST}/${relative}"
-        [[ -L "${target}" && "$(readlink "${target}")" == "${skills}" ]] && continue
-        if [[ -e "${target}" && ! -L "${target}" ]]; then
-            backup_path "${target}"
-        fi
-        mkdir -p "$(dirname "${target}")"
-        ln -sfn "${skills}" "${target}"
+        place_link "${DEST}/${relative}" "${skills}"
     done
 }
 
@@ -821,49 +837,26 @@ editor_links() {
 # Same rules as the stow packages: an identical copy is replaced, anything
 # else is backed up first.
 link_editors() {
-    local entry relative target source
+    local entry
     while IFS= read -r entry; do
-        relative="${entry%%|*}"
-        source="${entry#*|}"
-        target="${DEST}/${relative}"
-        is_linked "${target}" "${source}" && continue
-
-        if is_repo_link "${target}"; then
-            [[ "${DRY_RUN}" -eq 0 ]] && rm -f "${target}"
-        elif [[ -f "${target}" && ! -L "${target}" ]] && cmp -s "${target}" "${source}"; then
-            [[ "${DRY_RUN}" -eq 0 ]] && rm -f "${target}"
-        elif [[ -e "${target}" || -L "${target}" ]]; then
-            if [[ "${DRY_RUN}" -eq 1 ]]; then
-                printf 'Would back up %s before linking\n' "${target}"
-                continue
-            fi
-            backup_path "${target}"
-        fi
-        if [[ "${DRY_RUN}" -eq 1 ]]; then
-            printf 'Would link %s -> %s\n' "${target}" "${source}"
-            continue
-        fi
-        mkdir -p "$(dirname "${target}")"
-        ln -s "${source}" "${target}"
+        place_link "${DEST}/${entry%%|*}" "${entry#*|}"
     done < <(editor_links)
 }
 
 copy_seeds() {
-    local package relative target
-    while IFS= read -r package; do
-        while IFS= read -r relative; do
-            target="${DEST}/${relative}"
-            [[ -e "${target}" || -L "${target}" ]] && continue
-            if [[ "${DRY_RUN}" -eq 1 ]]; then
-                printf 'Would create %s\n' "${target}"
-                continue
-            fi
-            mkdir -p "$(dirname "${target}")"
-            cp "${REPO}/seed/${package}/${relative}" "${target}"
-            chmod 600 "${target}"
-            printf 'Created %s\n' "${target}"
-        done < <(package_files seed "${package}")
-    done < <(packages_in seed)
+    local entry target
+    while IFS= read -r entry; do
+        target="${DEST}/${entry#*|}"
+        [[ -e "${target}" || -L "${target}" ]] && continue
+        if [[ "${DRY_RUN}" -eq 1 ]]; then
+            printf 'Would create %s\n' "${target}"
+            continue
+        fi
+        mkdir -p "$(dirname "${target}")"
+        cp "${REPO}/seed/${entry%%|*}/${entry#*|}" "${target}"
+        chmod 600 "${target}"
+        printf 'Created %s\n' "${target}"
+    done < <(package_entries seed)
 }
 
 secure_private_dirs() {
@@ -937,13 +930,11 @@ warn_git_identity() {
 }
 
 print_managed() {
-    local kind package relative entry
+    local kind entry
     for kind in stow seed; do
-        while IFS= read -r package; do
-            while IFS= read -r relative; do
-                printf '%s/%s\n' "${DEST}" "${relative}"
-            done < <(package_files "${kind}" "${package}")
-        done < <(packages_in "${kind}")
+        while IFS= read -r entry; do
+            printf '%s/%s\n' "${DEST}" "${entry#*|}"
+        done < <(package_entries "${kind}")
     done
     while IFS= read -r entry; do
         printf '%s/%s\n' "${DEST}" "${entry%%|*}"
@@ -959,7 +950,7 @@ print_managed() {
 print_link_state() {
     local target="$1" source="$2"
     if is_linked "${target}" "${source}"; then
-        return 0
+        [[ -e "${target}" ]] || printf 'broken %s\n' "${target}"
     elif [[ -L "${target}" ]]; then
         printf 'foreign %s\n' "${target}"
     elif [[ -e "${target}" ]]; then
@@ -974,32 +965,18 @@ print_link_state() {
 # git, shadowed (~/.gitconfig overrides the identity) or unset (no user.email),
 # and unlinked (a real path owned by a layer this persona does not link).
 print_status() {
-    local package relative target entry link_target
-    while IFS= read -r package; do
-        while IFS= read -r relative; do
-            print_link_state "${DEST}/${relative}" "${REPO}/stow/${package}/${relative}"
-        done < <(package_files stow "${package}")
-    done < <(packages_in stow)
+    local target entry
+    while IFS= read -r entry; do
+        print_link_state "${DEST}/${entry#*|}" "${REPO}/stow/${entry%%|*}/${entry#*|}"
+    done < <(package_entries stow)
     while IFS= read -r entry; do
         print_link_state "${DEST}/${entry%%|*}" "${entry#*|}"
     done < <(editor_links)
 
-    for entry in ${WANTED_AGENT_LINKS[@]+"${WANTED_AGENT_LINKS[@]}"}; do
-        [[ "${PERSONA_AGENTS}" == yes ]] || break
-        target="${DEST}/${entry%%|*}"
-        link_target="${DEST}/.config/agents/${entry#*|}"
-        if [[ -L "${target}" && "$(readlink "${target}")" == "${link_target}" ]]; then
-            [[ -e "${target}" ]] || printf 'broken %s\n' "${target}"
-        elif [[ -L "${target}" ]]; then
-            printf 'foreign %s\n' "${target}"
-        elif [[ -e "${target}" ]]; then
-            printf 'replaced %s\n' "${target}"
-        else
-            printf 'missing %s\n' "${target}"
-        fi
-    done
-
     if [[ "${PERSONA_AGENTS}" == yes ]]; then
+        for entry in ${WANTED_AGENT_LINKS[@]+"${WANTED_AGENT_LINKS[@]}"}; do
+            print_link_state "${DEST}/${entry%%|*}" "${DEST}/.config/agents/${entry#*|}"
+        done
         target="${DEST}/${SKILLS_DIR}"
         if [[ -L "${target}" || ( -e "${target}" && ! -d "${target}" ) ]]; then
             printf 'replaced %s\n' "${target}"
@@ -1007,17 +984,7 @@ print_status() {
             printf 'missing %s\n' "${target}"
         fi
         for entry in ${WANTED_SKILL_LINKS[@]+"${WANTED_SKILL_LINKS[@]}"}; do
-            link_target="${DEST}/${SKILLS_DIR}"
-            target="${DEST}/${entry}"
-            if [[ -L "${target}" && "$(readlink "${target}")" == "${link_target}" ]]; then
-                [[ -e "${target}" ]] || printf 'broken %s\n' "${target}"
-            elif [[ -L "${target}" ]]; then
-                printf 'foreign %s\n' "${target}"
-            elif [[ -e "${target}" ]]; then
-                printf 'replaced %s\n' "${target}"
-            else
-                printf 'missing %s\n' "${target}"
-            fi
+            print_link_state "${DEST}/${entry}" "${target}"
         done
     elif [[ -e "${DEST}/.config/agents" ]]; then
         printf 'unused %s\n' "${DEST}/.config/agents"
@@ -1100,7 +1067,7 @@ add_refusal() {
 # Pick the layer for add: --layer, else a choice on a terminal. Only layers
 # this persona links qualify, so the added file is linked right here.
 choose_add_layer() {
-    local layer choice index=1
+    local layer
     local -a layers=()
     read -r -a layers <<< "${PERSONA_LAYERS}"
 
@@ -1115,19 +1082,7 @@ choose_add_layer() {
         log_error "Name the layer with --layer (one of: ${PERSONA_LAYERS})"
         exit 2
     fi
-    if command -v gum >/dev/null 2>&1; then
-        ADD_LAYER="$(gum choose --header "Layer for the new files" "${layers[@]}")" || ADD_LAYER=""
-    else
-        for layer in "${layers[@]}"; do
-            printf '  %d) %s\n' "${index}" "${layer}"
-            index=$((index + 1))
-        done
-        printf 'Layer for the new files [1-%d]: ' "${#layers[@]}"
-        IFS= read -r choice || choice=""
-        if [[ "${choice}" =~ ^[0-9]+$ && "${choice}" -ge 1 && "${choice}" -le "${#layers[@]}" ]]; then
-            ADD_LAYER="${layers[$((choice - 1))]}"
-        fi
-    fi
+    ADD_LAYER="$(choose_one "Layer for the new files" "" "${layers[@]}")"
     if [[ -z "${ADD_LAYER}" ]]; then
         log_error "No layer chosen; nothing added"
         exit 1
@@ -1248,8 +1203,8 @@ main() {
     case "${COMMAND}" in
         persona) printf '%s %s\n' "${PERSONA_NAME}" "${PERSONA_SOURCE}" ;;
         installs)
-            printf 'brew=%s\nbrew_optional=%s\nlinux_optional=%s\n' \
-                "${PERSONA_BREW}" "${PERSONA_BREW_OPTIONAL}" "${PERSONA_LINUX_OPTIONAL}"
+            printf 'brew=%s\nbrew_optional=%s\nsetup=%s\n' \
+                "${PERSONA_BREW}" "${PERSONA_BREW_OPTIONAL}" "${PERSONA_SETUP}"
             ;;
         managed) print_managed ;;
         status) print_status ;;

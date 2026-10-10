@@ -1,0 +1,9 @@
+os=linux
+layers=common tools personal
+agents=yes
+agent_apps=claude codex
+skills=core
+editors=no
+brew=core
+brew_optional=
+setup=harden docker tailscale claude-code

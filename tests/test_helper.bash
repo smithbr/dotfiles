@@ -30,6 +30,6 @@ write_test_persona() {
     local name
     mkdir -p "$1/personas"
     for name in home server; do
-        printf 'os=darwin,linux\nlayers=common\nagents=yes\nagent_apps=claude cursor codex\nskills=core\neditors=%s\nbrew=\nbrew_optional=\nlinux_optional=\n' "${2:-no}" > "$1/personas/${name}"
+        printf 'os=darwin,linux\nlayers=common\nagents=yes\nagent_apps=claude cursor codex\nskills=core\neditors=%s\nbrew=\nbrew_optional=\nsetup=\n' "${2:-no}" > "$1/personas/${name}"
     done
 }

@@ -7,10 +7,15 @@
 #     name (optionally only from Cloudflare); public SSH closes once
 #     Tailscale is connected
 #   - unattended security upgrades
-# Run it as root on the new machine. It needs nothing else from this repo:
+# Run as root on a new machine with only a root login, it needs nothing else
+# from this repo:
 #   ssh root@HOST 'bash -s -- --user NAME --allow 80 --allow 443' < scripts/bootstrap/linux/harden.sh
-# Set TS_AUTHKEY to join the tailnet unattended; otherwise `tailscale up`
-# prints a login URL and waits. Safe to run again.
+# Run from the repo as the admin user (install.sh offers it as the "harden"
+# setup script), it re-runs itself through sudo for that user. Set TS_AUTHKEY
+# to join the tailnet unattended; otherwise `tailscale up` prints a login URL
+# and waits (skipped without a terminal). Safe to run again. It is never run
+# unasked: on a server already in use it would close every port but the
+# tailnet's and allow only one SSH user.
 
 set -euo pipefail
 
@@ -18,7 +23,8 @@ usage() {
     cat <<'EOF'
 Usage: harden.sh --user NAME [options]
 
-  -u, --user NAME      admin user to create or reuse (gets sudo and the SSH keys)
+  -u, --user NAME      admin user to create or reuse (gets sudo and the SSH keys);
+                       under sudo, the user who ran it
   -a, --allow PORT     open PORT[/tcp|/udp] to the internet (repeatable)
       --cloudflare     open --allow ports to Cloudflare's IP ranges only
       --keep-public-ssh  leave SSH open to the internet (rate limited)
@@ -50,6 +56,7 @@ CLOUDFLARE=0
 KEEP_PUBLIC_SSH=0
 SSH_PORT=22
 declare -a ALLOW_PORTS=()
+declare -a EXTRA_ARGS=()
 
 die() {
     log_error "$*"
@@ -102,19 +109,23 @@ parse_args() {
                 [[ "$#" -ge 2 ]] || die "$1 needs a value"
                 ADMIN_USER="$2"
                 shift 2
+                continue
                 ;;
             -a|--allow)
                 [[ "$#" -ge 2 ]] || die "$1 needs a value"
                 [[ "$2" =~ ^[0-9]{1,5}(/(tcp|udp))?$ ]] || die "Not a port: $2 (use PORT or PORT/tcp)"
                 ALLOW_PORTS+=("$2")
+                EXTRA_ARGS+=("$1" "$2")
                 shift 2
                 ;;
             --cloudflare)
                 CLOUDFLARE=1
+                EXTRA_ARGS+=("$1")
                 shift
                 ;;
             --keep-public-ssh)
                 KEEP_PUBLIC_SSH=1
+                EXTRA_ARGS+=("$1")
                 shift
                 ;;
             -n|--dry-run)
@@ -132,6 +143,14 @@ parse_args() {
         esac
     done
 
+    # From the repo as the admin user, or under sudo, that user is the one.
+    if [[ -z "${ADMIN_USER}" ]]; then
+        if [[ "${EUID}" -ne 0 ]]; then
+            ADMIN_USER="$(id -un)"
+        else
+            ADMIN_USER="${SUDO_USER:-}"
+        fi
+    fi
     [[ -n "${ADMIN_USER}" ]] || { usage >&2; die "--user is required"; }
     [[ "${ADMIN_USER}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "Not a valid user name: ${ADMIN_USER}"
     [[ "${ADMIN_USER}" != root ]] || die "--user must not be root"
@@ -139,7 +158,12 @@ parse_args() {
 
 preflight() {
     if [[ "${EUID}" -ne 0 ]]; then
-        [[ "${DRY_RUN}" -eq 1 ]] || die "Run as root (or with sudo bash)."
+        if [[ "${DRY_RUN}" -eq 0 ]]; then
+            if [[ ! -f "${BASH_SOURCE[0]}" ]] || ! command -v sudo >/dev/null 2>&1; then
+                die "Run as root (or with sudo bash)."
+            fi
+            exec sudo bash "${BASH_SOURCE[0]}" --user "${ADMIN_USER}" "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+        fi
         log_warn "Not root: the dry run may miss files only root can read"
     fi
     command -v apt-get >/dev/null 2>&1 || die "Needs Debian or Ubuntu (apt-get not found)."
@@ -236,6 +260,8 @@ setup_tailscale() {
         printf '%s' "${TS_AUTHKEY}" > "${key_file}"
         tailscale up --auth-key="file:${key_file}" || log_warn "tailscale up failed"
         rm -f "${key_file}"
+    elif [[ ! -t 0 ]]; then
+        log_warn "No terminal to log Tailscale in from; run: sudo tailscale up"
     else
         log_info "Open the login URL below to add this machine to your tailnet"
         run tailscale up || log_warn "tailscale up failed"

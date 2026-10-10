@@ -6,4 +6,4 @@ skills=core
 editors=no
 brew=core personal
 brew_optional=macos
-linux_optional=docker tailscale claude-code
+setup=docker tailscale claude-code

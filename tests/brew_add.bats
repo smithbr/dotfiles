@@ -12,7 +12,7 @@ setup() {
     cat > "${FAKE_REPO}/scripts/link.sh" <<'EOF'
 #!/usr/bin/env bash
 [[ "$1" == installs ]] || { printf '%s|' link.sh "$@"; exit 0; }
-printf 'brew=%s\nbrew_optional=%s\nlinux_optional=\n' "${FAKE_BREW-core home}" "${FAKE_BREW_OPTIONAL-macos}"
+printf 'brew=%s\nbrew_optional=%s\nsetup=\n' "${FAKE_BREW-core home}" "${FAKE_BREW_OPTIONAL-macos}"
 EOF
     cat > "${FAKE_REPO}/homebrew/Brewfile.core" <<'EOF'
 # Install all dependencies with: brew bundle

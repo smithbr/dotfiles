@@ -7,7 +7,7 @@ Every managed file in `~` is a symlink into this repo, so edit it in place and c
 git clone https://github.com/smithbr/dotfiles.git ~/.dotfiles
 ~/.dotfiles/install.sh --persona home
 ```
-On a brand-new VPS, lock it down first (admin user, key-only SSH over Tailscale, firewall), then install as that user:
+The install ends by offering the persona's setup scripts on a terminal: Docker, Tailscale, Claude Code, and on a `vps` first `harden` (key-only SSH over Tailscale, firewall, unattended upgrades; for a new machine, never one already serving). A VPS that only has a root login needs its admin user before the install; create it with the same script, then install as that user:
 
 ```bash
 ssh root@HOST 'bash -s -- --user NAME --allow 80 --allow 443' < ~/.dotfiles/scripts/bootstrap/linux/harden.sh
@@ -18,8 +18,8 @@ Pick the persona that fits the machine:
 
 - `home` (everything),
 - `work` (scoped config),
-- `server` (a headless box, macOS or Linux)
-- `sandbox` (throwaway VMs and CI).
+- `server` (a headless box at home, macOS or Linux),
+- `vps` (a Linux box on the public internet; its setup step offers `harden`).
 
 ## Managing files
 ```bash

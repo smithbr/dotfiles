@@ -143,17 +143,16 @@ run_parser() {
 run_persona_prompt() {
     local answer="$1"
     run bash -c "
-        log_warn() { printf 'WARN %s\n' \"\$*\" >&2; }
+        source '${PROJECT_ROOT}/scripts/common.sh'
         LINK_SCRIPT='${PROJECT_ROOT}/scripts/link.sh'
-        HAS_GUM=false
         $(sed -n '/^prompt_persona() {$/,/^}$/p' "${PROJECT_ROOT}/install.sh")
-        prompt_persona home 2>/dev/null
+        DOTFILES_PROMPT=read prompt_persona home 2>/dev/null
     " <<< "${answer}"
 }
 
 @test "install.sh persona picker takes a number or a name and falls back to the default" {
     export DOTFILES_OS=darwin
-    run_persona_prompt "4"
+    run_persona_prompt "3"
     assert_output "work"
     run_persona_prompt "server"
     assert_output "server"
@@ -162,21 +161,43 @@ run_persona_prompt() {
     run_persona_prompt "bogus"
     assert_output "home"
     run bash -c "
-        log_warn() { :; }
+        source '${PROJECT_ROOT}/scripts/common.sh'
         LINK_SCRIPT='${PROJECT_ROOT}/scripts/link.sh'
-        HAS_GUM=false
         $(sed -n '/^prompt_persona() {$/,/^}$/p' "${PROJECT_ROOT}/install.sh")
-        prompt_persona home 2>/dev/null
+        DOTFILES_PROMPT=read prompt_persona home 2>/dev/null
     " < /dev/null
     assert_output "home"
 }
 
-@test "install.sh skips Homebrew for a persona that installs none" {
-    run bash "${PROJECT_ROOT}/install.sh" --dry-run --skip-system --skip-shell --persona sandbox < /dev/null
+@test "install.sh offers the persona's setup scripts last" {
+    run bash "${PROJECT_ROOT}/install.sh" --dry-run --skip-system --skip-brew --skip-shell --persona server < /dev/null
     assert_success
-    assert_output --partial "Persona: sandbox"
-    assert_output --partial "Homebrew (the sandbox persona installs none)"
-    refute_output --partial "[3/"$'\n'"Homebrew"
+    assert_output --partial "] Setup"
+    assert_output --partial "Dry run: would offer claude-code"
+    assert_output --partial "No docker setup script for macOS"
+
+    run bash "${PROJECT_ROOT}/install.sh" --dry-run --skip-system --skip-brew --skip-shell --persona home < /dev/null
+    assert_success
+    refute_output --partial "] Setup"
+}
+
+@test "install.sh runs the chosen setup scripts and reports a failing one" {
+    local repo="${TEST_TMPDIR}/repo"
+    mkdir -p "${repo}/scripts/bootstrap/linux"
+    printf '#!/usr/bin/env bash\necho ran one\n' > "${repo}/scripts/bootstrap/linux/one.sh"
+    printf '#!/usr/bin/env bash\necho ran two\nexit 3\n' > "${repo}/scripts/bootstrap/two.sh"
+    run bash -c "
+        source '${PROJECT_ROOT}/scripts/common.sh'
+        BASEDIR='${repo}' os_dir=linux os_label=Linux dry_run=0
+        $(sed -n '/^setup_script_path() {$/,/^}$/p;/^run_setup_scripts() {$/,/^}$/p' "${PROJECT_ROOT}/install.sh")
+        DOTFILES_SETUP='one two three' DOTFILES_PROMPT=read run_setup_scripts 2>/dev/null
+    " <<< "all"
+    assert_success
+    assert_output --partial "No three setup script for Linux"
+    assert_output --partial "ran one"
+    assert_output --partial "ok: one done"
+    assert_output --partial "ran two"
+    assert_output --partial "failed: two failed"
 }
 
 @test "install.sh rejects an unknown persona before changing anything" {
@@ -207,40 +228,6 @@ run_persona_prompt() {
 
 # Run the shipped _box with a stub gum that records its arguments, so the
 # tests check what width (if any) the box is asked to wrap at.
-run_box() {
-    local columns="$1" content="$2"
-    local stub_bin="${TEST_TMPDIR}/bin"
-    mkdir -p "${stub_bin}"
-    cat > "${stub_bin}/gum" <<'EOF'
-#!/usr/bin/env bash
-printf 'gum-args:'
-printf ' %s' "$@"
-printf '\n'
-cat >/dev/null
-EOF
-    chmod +x "${stub_bin}/gum"
-
-    run env PATH="${stub_bin}:${PATH}" COLUMNS="${columns}" bash -c "
-        set -euo pipefail
-        HAS_GUM=true
-        $(sed -n '/^_box() {/,/^}/p' "${PROJECT_ROOT}/install.sh")
-        _box \"\$1\"
-    " bash "${content}"
-}
-
-@test "_box wraps lines wider than the terminal" {
-    run_box 60 "INFO Found ${HOME}/.ssh/id_ed25519.pub with no private key on disk; assuming an external agent (e.g. 1Password) manages it, leaving it untouched"
-    assert_success
-    assert_output --partial "--width 58"
-}
-
-@test "_box keeps a snug box for short content" {
-    run_box 60 "Done."
-    assert_success
-    assert_output --partial "gum-args:"
-    refute_output --partial "--width"
-}
-
 # ---------------------------------------------------------------------------
 # ssh_key_comment
 # ---------------------------------------------------------------------------

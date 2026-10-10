@@ -37,6 +37,20 @@ run_link() {
     run bash "${PROJECT_ROOT}/${LINK}" --destination "${DEST}" "$@"
 }
 
+# A copy of the repo whose personas also hold "bare": the common layer only,
+# no agents, no editors, on either OS. No real persona is that spare.
+make_bare_repo() {
+    BARE="${TEST_TMPDIR}/bare-repo"
+    mkdir -p "${BARE}/scripts"
+    cp -R "${PROJECT_ROOT}/stow" "${PROJECT_ROOT}/editors" "${PROJECT_ROOT}/seed" "${PROJECT_ROOT}/personas" "${BARE}/"
+    cp "${PROJECT_ROOT}/scripts/link.sh" "${PROJECT_ROOT}/scripts/common.sh" "${BARE}/scripts/"
+    printf 'os=darwin,linux\nlayers=common\nagents=no\nagent_apps=\nskills=\neditors=no\nbrew=\nbrew_optional=\nsetup=\n' > "${BARE}/personas/bare"
+}
+
+run_bare_link() {
+    run bash "${BARE}/scripts/link.sh" --repo "${BARE}" --destination "${DEST}" "$@"
+}
+
 package_file() {
     printf '%s/stow/%s\n' "${PROJECT_ROOT}" "$1"
 }
@@ -437,19 +451,20 @@ stat_mode() {
 @test "a persona without agents removes agent links and leaves app settings alone" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     command -v jq >/dev/null 2>&1 || skip "jq not installed"
-    run_link --persona work
+    make_bare_repo
+    run_bare_link --persona work
     assert_success
     stow --dir "${DEST}/.config/agents/skills" --target "${DEST}/.agents/skills" extra
     mkdir -p "${DEST}/.agents/skills/synced/mine"
     printf '{"hints":true}\n' > "${DEST}/.cursor/cli-config.json"
     printf 'transcript\n' > "${DEST}/.cursor/ide_state.json"
 
-    run_link --persona sandbox status
+    run_bare_link --persona bare status
     assert_line "stale ${DEST}/.cursor/AGENTS.md"
     assert_line "stale ${DEST}/.agents/skills/other"
     assert_line "unused ${DEST}/.config/agents"
 
-    run_link --persona sandbox
+    run_bare_link --persona bare
     assert_success
     assert_output --partial "this persona does not use"
     for link in .cursor/AGENTS.md .cursor/agents .cursor/skills .codex/AGENTS.md \
@@ -461,11 +476,11 @@ stat_mode() {
     [ -d "${DEST}/.config/agents/.git" ]
     [ "$(cat "${DEST}/.cursor/ide_state.json")" = transcript ]
 
-    run_link --persona sandbox status
+    run_bare_link --persona bare status
     assert_success
     refute_line --partial "stale"
     assert_line "unused ${DEST}/.config/agents"
-    run_link --persona sandbox managed
+    run_bare_link --persona bare managed
     refute_line --partial ".claude/"
     refute_line --partial ".cursor/"
 }
@@ -808,7 +823,7 @@ persona_state() {
     assert_success
     refute_line "home"
     assert_line "server"
-    assert_line "sandbox"
+    assert_line "vps"
 }
 
 @test "uses the OS default until a persona is chosen, and says so" {
@@ -842,13 +857,13 @@ persona_state() {
 
 @test "the persona from the environment is used and saved like the flag" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
-    DOTFILES_PERSONA=sandbox run_link persona
-    assert_output "sandbox env"
-    DOTFILES_PERSONA=sandbox run_link
+    DOTFILES_PERSONA=server run_link persona
+    assert_output "server env"
+    DOTFILES_PERSONA=server run_link
     assert_success
-    [ "$(persona_state)" = "sandbox" ]
+    [ "$(persona_state)" = "server" ]
     # The flag wins over the environment.
-    DOTFILES_PERSONA=sandbox run_link --persona work persona
+    DOTFILES_PERSONA=server run_link --persona work persona
     assert_output "work flag"
 }
 
@@ -860,17 +875,18 @@ persona_state() {
 
 @test "a persona without agents or editors links only the shared files" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
-    run_link --persona sandbox
+    make_bare_repo
+    run_bare_link --persona bare
     assert_success
     [ -L "${DEST}/.zshenv" ]
     [ ! -e "${DEST}/.config/agents" ]
     [ ! -e "${DEST}/.cursor/AGENTS.md" ]
     [ ! -e "${DEST}/Library/Application Support/Code" ]
 
-    run_link managed
+    run_bare_link managed
     refute_line "${DEST}/.config/agents"
     refute_line --partial "Application Support"
-    run_link status
+    run_bare_link status
     assert_success
     assert_output "unset ${DEST}/.config/git/config.local"
 }
@@ -951,11 +967,12 @@ persona_state() {
     [ -L "${DEST}/.local/bin/os-update" ]
     [ ! -e "${DEST}/.local/bin/ph-update" ]
 
-    DEST="${TEST_TMPDIR}/sandbox-home"
-    DOTFILES_OS=linux run_link --persona sandbox
+    DEST="${TEST_TMPDIR}/vps-home"
+    DOTFILES_OS=linux run_link --persona vps
     assert_success
     [ -L "${DEST}/.zshenv" ]
-    [ ! -e "${DEST}/.local/bin" ]
+    [ -L "${DEST}/.local/bin/cf-cert" ]
+    [ ! -e "${DEST}/.local/bin/ph-update" ]
 }
 
 # Prints a git setting as git resolves it with DEST as the home directory.
@@ -988,8 +1005,8 @@ dest_git_config() {
     assert_output vimdiff
     [ ! -e "${DEST}/.ssh/config.d" ]
 
-    DEST="${TEST_TMPDIR}/sandbox-home"
-    DOTFILES_OS=linux run_link --persona sandbox
+    DEST="${TEST_TMPDIR}/vps-home"
+    DOTFILES_OS=linux run_link --persona vps
     assert_success
     run dest_git_config core.pager
     assert_failure
@@ -1009,7 +1026,7 @@ dest_git_config() {
     run dest_git_config user.email
     assert_output me@example.com
 
-    for persona in work sandbox; do
+    for persona in work; do
         DEST="${TEST_TMPDIR}/${persona}-home"
         run_link --persona "${persona}"
         assert_success
@@ -1108,13 +1125,14 @@ plant_single_layer_links() {
     assert_success
     assert_output "brew=core work
 brew_optional=macos
-linux_optional="
+setup="
     run_link --persona home installs
-    assert_line "brew=core home personal"
+    assert_line "brew=core home"
     DOTFILES_OS=linux run_link --persona server installs
-    assert_line "linux_optional=docker tailscale claude-code"
-    assert_line "brew=core personal"
-    DOTFILES_OS=linux run_link --persona sandbox installs
-    assert_line "brew="
+    assert_line "setup=docker tailscale claude-code"
+    assert_line "brew=core"
+    DOTFILES_OS=linux run_link --persona vps installs
+    assert_line "brew=core"
     assert_line "brew_optional="
+    assert_line "setup=harden docker tailscale claude-code"
 }

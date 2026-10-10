@@ -81,98 +81,6 @@ teardown() {
     assert_output "SKIPPED"
 }
 
-@test "linux setup.sh defines optional install selection flow" {
-    local setup_script="${PROJECT_ROOT}/scripts/bootstrap/linux/setup.sh"
-
-    grep -qF 'prompt_optional_linux_bootstraps "optional Linux install"' "${setup_script}" || {
-        echo "MISSING optional prompt"
-        return 1
-    }
-
-    grep -qF 'gum_choose_multiselect \' "${setup_script}" || {
-        echo "MISSING gum chooser helper"
-        return 1
-    }
-
-    grep -qF '"Select optional packages to install"' "${setup_script}" || {
-        echo "MISSING gum chooser header"
-        return 1
-    }
-
-    grep -qF 'read -r -p "Install ${prompt_label} ${pending_names[${idx}]}? [Y/n] " reply' "${setup_script}" || {
-        echo "MISSING fallback prompt"
-        return 1
-    }
-
-    grep -qF 'run_bootstrap_step "1" "Checking base Linux packages"' "${setup_script}" || {
-        echo "MISSING base package step"
-        return 1
-    }
-
-    grep -qF 'run_optional_bootstrap_script' "${setup_script}" || {
-        echo "MISSING optional bootstrap runner"
-        return 1
-    }
-}
-
-@test "linux setup.sh runs only selected optional installs" {
-    run bash -c '
-        set -euo pipefail
-
-        export TEST_ROOT="'"${TEST_TMPDIR}"'/linux-bootstrap"
-        export TEST_BOOTSTRAP_DIR="${TEST_ROOT}/bootstrap"
-        export TEST_BIN="${TEST_ROOT}/bin"
-        export TEST_LOG="${TEST_ROOT}/optional.log"
-        export PATH="${TEST_BIN}:/usr/bin:/bin"
-        export BOOTSTRAP_DIR="${TEST_BOOTSTRAP_DIR}"
-
-        mkdir -p "${TEST_BOOTSTRAP_DIR}" "${TEST_BIN}"
-        : > "${TEST_LOG}"
-
-        printf "curl\n" > "${TEST_BOOTSTRAP_DIR}/apt-packages.txt"
-
-        cat > "${TEST_BOOTSTRAP_DIR}/docker.sh" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-echo "OPTIONAL docker" >> "${TEST_LOG}"
-MOCK
-
-        cat > "${TEST_BOOTSTRAP_DIR}/tailscale.sh" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-echo "OPTIONAL tailscale" >> "${TEST_LOG}"
-MOCK
-
-        cat > "${TEST_BIN}/apt-get" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-echo "apt-get $*" >> "${TEST_LOG}"
-MOCK
-
-        cat > "${TEST_BIN}/dpkg-query" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-printf "curl\tinstall ok installed\n"
-MOCK
-
-        chmod +x "${TEST_BOOTSTRAP_DIR}/docker.sh" \
-            "${TEST_BOOTSTRAP_DIR}/tailscale.sh" \
-            "${TEST_BIN}/apt-get" \
-            "${TEST_BIN}/dpkg-query"
-
-        cd "'"${PROJECT_ROOT}"'"
-        printf "y\nn\n" | ./scripts/bootstrap/linux/setup.sh
-
-        grep -qx "OPTIONAL docker" "${TEST_LOG}" || { echo "missing docker"; exit 1; }
-        if grep -qx "OPTIONAL tailscale" "${TEST_LOG}"; then
-            echo "tailscale should not run"
-            exit 1
-        fi
-        if grep -q "^apt-get " "${TEST_LOG}"; then
-            echo "base apt packages should have been treated as already installed"
-            exit 1
-        fi
-    '
-    assert_success
-    assert_output --partial "Running optional Linux installs: Docker"
-}
-
 @test "linux setup.sh installs only missing base packages" {
     run bash -c '
         set -euo pipefail
@@ -239,119 +147,6 @@ MOCK
     '
     assert_success
     assert_output --partial "Installing base Linux packages: git"
-}
-
-@test "linux setup.sh excludes installed optional packages from selection" {
-    run bash -c '
-        set -euo pipefail
-
-        export TEST_ROOT="'"${TEST_TMPDIR}"'/linux-bootstrap-installed-optional"
-        export TEST_BOOTSTRAP_DIR="${TEST_ROOT}/bootstrap"
-        export TEST_BIN="${TEST_ROOT}/bin"
-        export TEST_LOG="${TEST_ROOT}/optional.log"
-        export PATH="${TEST_BIN}:/usr/bin:/bin"
-        export BOOTSTRAP_DIR="${TEST_BOOTSTRAP_DIR}"
-
-        mkdir -p "${TEST_BOOTSTRAP_DIR}" "${TEST_BIN}"
-        : > "${TEST_LOG}"
-
-        printf "curl\n" > "${TEST_BOOTSTRAP_DIR}/apt-packages.txt"
-
-        cat > "${TEST_BOOTSTRAP_DIR}/docker.sh" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-echo "OPTIONAL docker" >> "${TEST_LOG}"
-MOCK
-
-        cat > "${TEST_BOOTSTRAP_DIR}/tailscale.sh" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-echo "OPTIONAL tailscale" >> "${TEST_LOG}"
-MOCK
-
-        cat > "${TEST_BIN}/docker" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-exit 0
-MOCK
-
-        cat > "${TEST_BIN}/apt-get" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-echo "apt-get $*" >> "${TEST_LOG}"
-MOCK
-
-        cat > "${TEST_BIN}/dpkg-query" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-printf "curl\tinstall ok installed\n"
-MOCK
-
-        chmod +x "${TEST_BOOTSTRAP_DIR}/docker.sh" \
-            "${TEST_BOOTSTRAP_DIR}/tailscale.sh" \
-            "${TEST_BIN}/docker" \
-            "${TEST_BIN}/apt-get" \
-            "${TEST_BIN}/dpkg-query"
-
-        cd "'"${PROJECT_ROOT}"'"
-        printf "y\n" | ./scripts/bootstrap/linux/setup.sh
-
-        grep -qx "OPTIONAL tailscale" "${TEST_LOG}" || { echo "missing tailscale"; exit 1; }
-        if grep -q "^OPTIONAL docker$" "${TEST_LOG}"; then
-            echo "docker should have been excluded from the picker"
-            exit 1
-        fi
-    '
-    assert_success
-    assert_output --partial "Running optional Linux installs: Tailscale"
-}
-
-@test "linux setup.sh skips optional installs when none are selected" {
-    run bash -c '
-        set -euo pipefail
-
-        export TEST_ROOT="'"${TEST_TMPDIR}"'/linux-bootstrap-none"
-        export TEST_BOOTSTRAP_DIR="${TEST_ROOT}/bootstrap"
-        export TEST_BIN="${TEST_ROOT}/bin"
-        export TEST_LOG="${TEST_ROOT}/optional.log"
-        export PATH="${TEST_BIN}:/usr/bin:/bin"
-        export BOOTSTRAP_DIR="${TEST_BOOTSTRAP_DIR}"
-
-        mkdir -p "${TEST_BOOTSTRAP_DIR}" "${TEST_BIN}"
-        : > "${TEST_LOG}"
-
-        printf "curl\n" > "${TEST_BOOTSTRAP_DIR}/apt-packages.txt"
-
-        cat > "${TEST_BOOTSTRAP_DIR}/docker.sh" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-echo "OPTIONAL docker" >> "${TEST_LOG}"
-MOCK
-
-        cat > "${TEST_BOOTSTRAP_DIR}/tailscale.sh" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-echo "OPTIONAL tailscale" >> "${TEST_LOG}"
-MOCK
-
-        cat > "${TEST_BIN}/apt-get" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-echo "apt-get $*" >> "${TEST_LOG}"
-MOCK
-
-        cat > "${TEST_BIN}/dpkg-query" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-printf "curl\tinstall ok installed\n"
-MOCK
-
-        chmod +x "${TEST_BOOTSTRAP_DIR}/docker.sh" \
-            "${TEST_BOOTSTRAP_DIR}/tailscale.sh" \
-            "${TEST_BIN}/apt-get" \
-            "${TEST_BIN}/dpkg-query"
-
-        cd "'"${PROJECT_ROOT}"'"
-        printf "n\nn\n" | ./scripts/bootstrap/linux/setup.sh
-
-        if grep -q "^OPTIONAL " "${TEST_LOG}"; then
-            echo "optional installers should not run"
-            exit 1
-        fi
-    '
-    assert_success
-    assert_output --partial "No optional Linux installs selected"
 }
 
 # ---------------------------------------------------------------------------
@@ -425,7 +220,8 @@ MOCK
 
 # Runs harden.sh with HARDEN_ROOT pointing at a scratch tree. TS_UP=1 makes
 # the mocked tailscale report a connection; ROOT_KEYS=0 leaves root without
-# SSH keys. Arguments go to harden.sh.
+# SSH keys; SUDO_MOCK=1 replaces sudo with one that only prints its arguments.
+# Arguments go to harden.sh.
 _run_harden() {
     run bash -c '
         set -euo pipefail
@@ -457,16 +253,19 @@ MOCK
         printf "#!/usr/bin/env bash\nexit 0\n" > "${TEST_BIN}/apt-get"
         printf "#!/usr/bin/env bash\nexit 0\n" > "${TEST_BIN}/systemctl"
         printf "#!/usr/bin/env bash\nexit 1\n" > "${TEST_BIN}/sshd"
+        if [[ "${SUDO_MOCK:-0}" -eq 1 ]]; then
+            printf "#!/usr/bin/env bash\nprintf \"sudo %%s\\\\n\" \"\$*\"\n" > "${TEST_BIN}/sudo"
+        fi
         chmod +x "${TEST_BIN}"/*
         cd "'"${PROJECT_ROOT}"'"
         ./scripts/bootstrap/linux/harden.sh '"$*"'
     '
 }
 
-@test "harden.sh requires --user and rejects root and bad ports" {
+@test "harden.sh defaults to the user running it and rejects root and bad ports" {
     _run_harden --dry-run
-    assert_failure
-    assert_output --partial "--user is required"
+    assert_success
+    assert_output --partial "AllowUsers $(id -un)"
 
     _run_harden --dry-run --user root
     assert_failure
@@ -477,11 +276,11 @@ MOCK
     assert_output --partial "Not a port: http"
 }
 
-@test "harden.sh refuses a real run without root" {
+@test "harden.sh re-runs itself through sudo when not root, for the user who ran it" {
     [[ "${EUID}" -ne 0 ]] || skip "running as root"
-    _run_harden --user admin
-    assert_failure
-    assert_output --partial "Run as root"
+    SUDO_MOCK=1 _run_harden --allow 443 --cloudflare
+    assert_success
+    assert_output --regexp "^sudo bash .*/scripts/bootstrap/linux/harden.sh --user $(id -un) --allow 443 --cloudflare$"
 }
 
 @test "harden.sh closes public SSH once Tailscale is connected" {
@@ -501,10 +300,11 @@ MOCK
     [[ ! -e "${TEST_TMPDIR}/root/home/admin" ]]
 }
 
-@test "harden.sh keeps public SSH while Tailscale is not connected" {
+@test "harden.sh keeps public SSH while Tailscale is not connected, and does not wait for a login without a terminal" {
     TS_UP=0 _run_harden --dry-run --user admin
     assert_success
-    assert_output --partial "would run: tailscale up"
+    assert_output --partial "No terminal to log Tailscale in from"
+    refute_output --partial "would run: tailscale up"
     assert_output --partial "public SSH stays open"
     assert_output --partial "would run: ufw limit 22/tcp"
     refute_output --partial "Public SSH closed"
@@ -842,64 +642,3 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
-# linux/setup.sh — optional installs follow the persona
-# ---------------------------------------------------------------------------
-
-# Runs linux/setup.sh with mocked apt, Docker and Tailscale installers, the
-# given DOTFILES_LINUX_OPTIONAL (unset when the first argument is "unset"), and
-# the given answers on stdin. Claude Code is not mocked in the bootstrap dir,
-# so it runs the shared installer, with curl mocked.
-_run_linux_optionals() {
-    local offered="$1" answers="$2"
-    run bash -c '
-        set -euo pipefail
-        export TEST_ROOT="'"${TEST_TMPDIR}"'/linux-optional"
-        export HOME="${TEST_ROOT}/home"
-        export TEST_BIN="${TEST_ROOT}/bin"
-        export TEST_LOG="${TEST_ROOT}/optional.log"
-        export BOOTSTRAP_DIR="${TEST_ROOT}/bootstrap"
-        export PATH="${TEST_BIN}:/usr/bin:/bin"
-        mkdir -p "${BOOTSTRAP_DIR}" "${TEST_BIN}" "${HOME}"
-        : > "${TEST_LOG}"
-        printf "curl\n" > "${BOOTSTRAP_DIR}/apt-packages.txt"
-        for name in docker tailscale; do
-            printf "#!/usr/bin/env bash\necho \"OPTIONAL %s\" >> \"\${TEST_LOG}\"\n" "${name}" > "${BOOTSTRAP_DIR}/${name}.sh"
-            chmod +x "${BOOTSTRAP_DIR}/${name}.sh"
-        done
-        printf "#!/usr/bin/env bash\nprintf \"curl\\\\tinstall ok installed\\\\n\"\n" > "${TEST_BIN}/dpkg-query"
-        printf "#!/usr/bin/env bash\necho \"apt-get \$*\" >> \"\${TEST_LOG}\"\n" > "${TEST_BIN}/apt-get"
-        printf "#!/usr/bin/env bash\nprintf \"echo OPTIONAL claude-code >> \\\\\"\\\\\${TEST_LOG}\\\\\"\\\\n\"\n" > "${TEST_BIN}/curl"
-        chmod +x "${TEST_BIN}/dpkg-query" "${TEST_BIN}/apt-get" "${TEST_BIN}/curl"
-        if [[ "'"${offered}"'" != unset ]]; then
-            export DOTFILES_LINUX_OPTIONAL="'"${offered}"'"
-        fi
-        cd "'"${PROJECT_ROOT}"'"
-        printf "'"${answers}"'" | ./scripts/bootstrap/linux/setup.sh
-        echo "--- log"
-        cat "${TEST_LOG}"
-    '
-}
-
-@test "linux setup.sh offers only the persona's optional installs" {
-    _run_linux_optionals "docker claude-code" 'y\ny\n'
-    assert_success
-    assert_output --partial "Running optional Linux installs: Docker Claude Code"
-    refute_output --partial "Tailscale"
-    assert_line "OPTIONAL docker"
-    assert_line "OPTIONAL claude-code"
-}
-
-@test "linux setup.sh offers no optional installs to a persona that lists none" {
-    _run_linux_optionals "" 'y\ny\ny\n'
-    assert_success
-    assert_output --partial "No optional Linux installs for this persona"
-    refute_line --partial "OPTIONAL"
-}
-
-@test "linux setup.sh run on its own still offers Docker and Tailscale only" {
-    _run_linux_optionals unset 'y\ny\ny\n'
-    assert_success
-    assert_output --partial "Running optional Linux installs: Docker Tailscale"
-    refute_output --partial "Claude Code"
-    assert_line "OPTIONAL tailscale"
-}

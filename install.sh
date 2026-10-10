@@ -18,7 +18,7 @@ Options:
   -v, --verbose      Stream command output instead of collecting it into boxes
   -d, --debug        Verbose output plus shell command tracing (set -x)
   -h, --help         Show this help message and exit
-      --persona NAME Set this machine up as NAME (home, work, server, sandbox;
+      --persona NAME Set this machine up as NAME (home, work, server, vps;
                      see personas/). Saved for later runs; without it, a terminal
                      asks (the saved choice preselected), otherwise the saved
                      choice or the OS default applies
@@ -96,78 +96,11 @@ fi
 
 LINK_SCRIPT="${BASEDIR}/scripts/link.sh"
 LOCAL_INSTALL_SSH_KEY_PATH="${HOME}/.ssh/id_ed25519"
-HAS_GUM=false
-command -v gum >/dev/null 2>&1 && [[ -t 1 ]] && HAS_GUM=true
 STEP_INDEX=0
 STEP_TOTAL=0
-# Follow-ups gathered during the run and shown together at the end, so they
-# are not lost in the scrollback of Homebrew and stow output.
-declare -a NEXT_STEPS=()
-
-_header() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --bold --foreground 212 "$1"
-    else
-        printf '%s\n' "$1"
-    fi
-}
-
-_item() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 244 "  $1"
-    else
-        printf '  %s\n' "$1"
-    fi
-}
-
-_check() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 76 "  $(printf '\xe2\x9c\x93') $1"
-    else
-        printf '  ok: %s\n' "$1"
-    fi
-}
-
-_cross() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 196 "  $(printf '\xe2\x9c\x97') $1"
-    else
-        printf '  failed: %s\n' "$1"
-    fi
-}
-
-_skip() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 244 "  - $1"
-    else
-        printf '  skipped: %s\n' "$1"
-    fi
-}
 
 _next_step() {
     NEXT_STEPS+=("$1")
-}
-
-_box() {
-    local content="$1"
-    local columns=0
-    local longest=0
-    local -a width_args=()
-
-    if [[ "${HAS_GUM}" == true ]]; then
-        # gum style never wraps on its own, so a line wider than the terminal
-        # gets soft-wrapped by the terminal and tears the border apart. Cap the
-        # box (content + padding; the border adds 2) to the terminal width, but
-        # only when needed so short messages keep a snug box.
-        columns="${COLUMNS:-$(tput cols 2>/dev/null || printf '80')}"
-        longest="$(printf '%s\n' "${content}" | awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }')"
-        if (( longest + 4 > columns && columns > 12 )); then
-            width_args=(--width "$((columns - 2))")
-        fi
-        printf '%s' "${content}" | gum style --border rounded --border-foreground 240 --margin "0 0" --padding "0 1" ${width_args[@]+"${width_args[@]}"}
-    else
-        printf '%s\n' "${content}" | sed 's/^/  /'
-    fi
 }
 
 begin_section() {
@@ -421,46 +354,69 @@ select_files_to_archive() {
     fi
 }
 
+# The setup scripts a persona offers (its setup list: docker, tailscale,
+# claude-code, ...) live in scripts/bootstrap/<os>/ or scripts/bootstrap/.
+setup_script_path() {
+    local name="$1" dir
+    for dir in "${BASEDIR}/scripts/bootstrap/${os_dir}" "${BASEDIR}/scripts/bootstrap"; do
+        if [[ -f "${dir}/${name}.sh" ]]; then
+            printf '%s\n' "${dir}/${name}.sh"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Offered on a terminal once everything is linked, so a machine gets the
+# scripts for what it is for (a Pi-hole, a Docker host) when it is ready.
+# Every script is safe to run again; a failure is reported, not fatal.
+run_setup_scripts() {
+    local name script
+    local -a offered=() chosen=()
+
+    for name in ${DOTFILES_SETUP:-}; do
+        if setup_script_path "${name}" >/dev/null; then
+            offered+=("${name}")
+        else
+            _item "No ${name} setup script for ${os_label}; skipping it"
+        fi
+    done
+    if [[ "${#offered[@]}" -eq 0 ]]; then
+        _skip "Nothing to offer on ${os_label}"
+    elif [[ "${dry_run}" -eq 1 ]]; then
+        _skip "Dry run: would offer ${offered[*]}"
+    else
+        while IFS= read -r name; do
+            [[ -z "${name}" ]] || chosen+=("${name}")
+        done < <(choose_many "Setup scripts to run now" "${offered[@]}" || true)
+        if [[ "${#chosen[@]}" -eq 0 ]]; then
+            _skip "None chosen; run them from scripts/bootstrap/ later: ${offered[*]}"
+        fi
+        for name in ${chosen[@]+"${chosen[@]}"}; do
+            script="$(setup_script_path "${name}")"
+            _item "Running ${name}"
+            if bash "${script}"; then
+                _check "${name} done"
+            else
+                _cross "${name} failed; rerun it: bash ${script}"
+            fi
+        done
+    fi
+}
+
 # Ask which persona this machine is, when a terminal is available and neither
 # --persona nor DOTFILES_PERSONA chose one. Unboxed, before the steps, so the
 # picker can draw. A closed stdin, EOF or an empty answer keeps the default
 # (the saved choice, else the OS default).
 prompt_persona() {
-    local default="$1" name reply="" choice=""
+    local default="$1" name
     local -a names=()
 
     while IFS= read -r name; do
         names+=("${name}")
     done < <(bash "${LINK_SCRIPT}" personas)
     [[ "${#names[@]}" -gt 0 ]] || { printf '%s\n' "${default}"; return 0; }
-
-    if [[ "${HAS_GUM}" == true ]]; then
-        choice="$(gum choose --header "Which persona is this machine?" --selected "${default}" "${names[@]}" </dev/tty)" || choice=""
-    else
-        local i=1
-        printf 'Which persona is this machine?\n' >&2
-        for name in "${names[@]}"; do
-            printf '  %d) %s\n' "${i}" "${name}" >&2
-            i=$((i + 1))
-        done
-        if ! read -r -p "Persona [${default}]: " reply; then
-            reply=""
-        fi
-        if [[ "${reply}" =~ ^[0-9]+$ && "${reply}" -ge 1 && "${reply}" -le "${#names[@]}" ]]; then
-            choice="${names[$((reply - 1))]}"
-        else
-            choice="${reply}"
-        fi
-    fi
-
-    for name in "${names[@]}"; do
-        if [[ "${name}" == "${choice}" ]]; then
-            printf '%s\n' "${choice}"
-            return 0
-        fi
-    done
-    [[ -z "${choice}" ]] || log_warn "Unknown persona '${choice}'; using ${default}" >&2
-    printf '%s\n' "${default}"
+    choose_one "Which persona is this machine?" "${default}" "${names[@]}"
 }
 
 # Settle the persona before anything changes, and pass it on to link.sh and
@@ -479,14 +435,14 @@ resolve_persona() {
     fi
     PERSONA_NAME="${name}"
 
-    # What the persona installs, for homebrew/brew.sh and the Linux bootstrap.
+    # What the persona installs, for homebrew/brew.sh and the setup step.
     local installs key value
     installs="$(bash "${LINK_SCRIPT}" installs)" || exit 2
     while IFS='=' read -r key value; do
         case "${key}" in
             brew) export DOTFILES_BREWFILES="${value}" ;;
             brew_optional) export DOTFILES_BREW_OPTIONAL="${value}" ;;
-            linux_optional) export DOTFILES_LINUX_OPTIONAL="${value}" ;;
+            setup) export DOTFILES_SETUP="${value}" ;;
         esac
     done <<< "${installs}"
     if [[ -z "${DOTFILES_BREWFILES// /}" && -z "${DOTFILES_BREW_OPTIONAL// /}" && "${run_brew}" -eq 1 ]]; then
@@ -500,6 +456,12 @@ brew_skip_reason="Homebrew"
 resolve_persona
 
 cd "${BASEDIR}"
+
+case "${OSTYPE}" in
+    darwin*) os_label="macOS" os_dir=macos ;;
+    linux*) os_label="Linux" os_dir=linux ;;
+    *) os_label="${OSTYPE}" os_dir="" ;;
+esac
 
 run_mode="Installing"
 [[ "${dry_run}" -eq 1 ]] && run_mode="Dry run (nothing will be changed)"
@@ -520,6 +482,7 @@ if [[ "${run_shell_setup}" -eq 1 ]]; then
 else
     skipped_steps+=("login shell")
 fi
+[[ -z "${DOTFILES_SETUP// /}" ]] || STEP_TOTAL=$((STEP_TOTAL + 1))
 
 _header "Dotfiles setup"
 _item "${run_mode} from ${BASEDIR}"
@@ -535,26 +498,14 @@ begin_step "Repository link" "Point ~/.dotfiles at this checkout"
 run_boxed ensure_dotfiles_repo_link
 
 if [[ "${run_system_bootstrap}" -eq 1 ]]; then
-    case "${OSTYPE}" in
-        darwin*) os_label="macOS" ;;
-        linux*) os_label="Linux" ;;
-        *) os_label="${OSTYPE}" ;;
-    esac
     begin_step "System packages" "Run the ${os_label} bootstrap script (system tools and settings)"
     if [[ "${dry_run}" -eq 1 ]]; then
         _skip "Dry run: skipping the system bootstrap script."
-    else
-        case "${OSTYPE}" in
-            darwin*)
-                chmod +x scripts/bootstrap/macos/setup.sh
-                ./scripts/bootstrap/macos/setup.sh
-                ;;
-            linux*)
-                chmod +x scripts/bootstrap/linux/setup.sh
-                ./scripts/bootstrap/linux/setup.sh
-                ;;
-        esac
+    elif [[ -n "${os_dir}" ]]; then
+        bash "scripts/bootstrap/${os_dir}/setup.sh"
         _check "System bootstrap complete"
+    else
+        _skip "No bootstrap for ${OSTYPE}"
     fi
 fi
 
@@ -619,6 +570,16 @@ file_cleanup_is_interactive && offer_cleanup=1
 run_boxed review_existing_files
 if [[ "${offer_cleanup}" -eq 1 ]]; then
     select_files_to_archive
+fi
+
+if [[ -n "${DOTFILES_SETUP// /}" ]]; then
+    begin_step "Setup" "Run the setup scripts this persona offers, chosen on a terminal"
+    run_setup_scripts
+fi
+# Hardening is never automatic (on a server in use it would close ports and
+# SSH users that are needed), so say when a Linux machine still lacks it.
+if [[ "${os_dir}" == linux && ! -f /etc/ssh/sshd_config.d/00-harden.conf ]]; then
+    _next_step "Harden this machine when it is new or yours alone: bash ${BASEDIR}/scripts/bootstrap/linux/harden.sh"
 fi
 
 if [[ -n "${zsh_path:-}" && "${dry_run}" -eq 0 ]]; then
