@@ -34,9 +34,9 @@ acme.sh lives in ~/.acme.sh of the running user (root's under sudo); set
 ACME_HOME to use another. Writing root-owned paths needs sudo.
 
 Examples:
-  sudo cf-cert --pihole pihole.bsm.sh
+  sudo cf-cert --pihole pihole.example.com
   sudo cf-cert --fullchain-file /etc/nginx/tls/fullchain.pem \
-      --key-file /etc/nginx/tls/key.pem --reload 'systemctl reload nginx' host.bsm.sh
+      --key-file /etc/nginx/tls/key.pem --reload 'systemctl reload nginx' host.example.com
 EOF
 }
 
