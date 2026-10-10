@@ -1,5 +1,6 @@
 #!/usr/bin/env bats
-# Tests for scripts/common.sh — logging, require_non_root, sudo_cmd, spin.
+# Tests for scripts/common.sh — logging, output helpers, require_non_root,
+# sudo_cmd, spin, and the pickers.
 
 load test_helper
 
@@ -295,4 +296,143 @@ MOCK
     assert_failure
     assert_output --partial "boom"
     assert_output --partial "Should fail... failed"
+}
+
+# ---------------------------------------------------------------------------
+# _box
+# ---------------------------------------------------------------------------
+
+run_box() {
+    local columns="$1" content="$2"
+    local stub_bin="${TEST_TMPDIR}/bin"
+    mkdir -p "${stub_bin}"
+    cat > "${stub_bin}/gum" <<'EOF'
+#!/usr/bin/env bash
+printf 'gum-args:'
+printf ' %s' "$@"
+printf '\n'
+cat >/dev/null
+EOF
+    chmod +x "${stub_bin}/gum"
+
+    run env PATH="${stub_bin}:${PATH}" COLUMNS="${columns}" bash -c "
+        set -euo pipefail
+        source '${PROJECT_ROOT}/scripts/common.sh'
+        HAS_GUM=true
+        _box \"\$1\"
+    " bash "${content}"
+}
+
+@test "_box wraps lines wider than the terminal" {
+    run_box 60 "INFO Found ${HOME}/.ssh/id_ed25519.pub with no private key on disk; assuming an external agent (e.g. 1Password) manages it, leaving it untouched"
+    assert_success
+    assert_output --partial "--width 58"
+}
+
+@test "_box keeps a snug box for short content" {
+    run_box 60 "Done."
+    assert_success
+    assert_output --partial "gum-args:"
+    refute_output --partial "--width"
+}
+
+# ---------------------------------------------------------------------------
+# choose_one / choose_many
+# ---------------------------------------------------------------------------
+
+# Runs one picker call without gum, answering with stdin; stderr is dropped.
+run_picker() {
+    local answer="$1"
+    shift
+    run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"'"
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        DOTFILES_PROMPT=read "$@" 2>/dev/null
+    ' _ "$@" <<< "${answer}"
+}
+
+@test "choose_one takes a number or an item and falls back to the default" {
+    run_picker 2 choose_one "Pick" red red green blue
+    assert_success
+    assert_output "green"
+    run_picker blue choose_one "Pick" red red green blue
+    assert_output "blue"
+    run_picker "" choose_one "Pick" red red green blue
+    assert_output "red"
+    run_picker 9 choose_one "Pick" red red green blue
+    assert_output "red"
+    run_picker bogus choose_one "Pick" "" red green blue
+    assert_success
+    assert_output ""
+}
+
+@test "choose_one lists the items and the default on stderr" {
+    run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"'"
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        DOTFILES_PROMPT=read choose_one "Which one?" green red green 2>&1 >/dev/null
+    ' < /dev/null
+    assert_success
+    assert_output "Which one?
+  1) red
+  2) green
+Choice [green]: "
+}
+
+@test "choose_many takes numbers or all, and none on Enter, end of input, or a bad number" {
+    run_picker "1 3" choose_many "Pick" red green blue
+    assert_success
+    assert_output "red
+blue"
+    run_picker all choose_many "Pick" red green blue
+    assert_output "red
+green
+blue"
+    run_picker "" choose_many "Pick" red green blue
+    assert_failure
+    assert_output ""
+    run_picker "2 7" choose_many "Pick" red green blue
+    assert_failure
+    assert_output ""
+    run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"'"
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        DOTFILES_PROMPT=read choose_many "Pick" red green 2>/dev/null
+    ' < /dev/null
+    assert_failure
+    assert_output ""
+}
+
+@test "choose_many shows labels and prints values" {
+    run_picker 2 choose_many "Pick" $'Red\tred' $'Green (installed)\tgreen'
+    assert_success
+    assert_output "green"
+    run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"'"
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        DOTFILES_PROMPT=read choose_many "Pick" $'"'"'Red\tred'"'"' 2>&1 >/dev/null
+    ' < /dev/null
+    assert_output --partial "  1) Red"
+    refute_output --partial "red"$'\t'
+}
+
+@test "choose_many hands gum the labels and values and passes its choices through" {
+    cat > "${TEST_TMPDIR}/bin/gum" <<'MOCK'
+#!/usr/bin/env bash
+[[ "$1" == choose ]] || exit 0
+printf '%s\n' "$@" > "${GUM_ARGS}"
+printf 'green\n'
+MOCK
+    chmod +x "${TEST_TMPDIR}/bin/gum"
+    run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"':/usr/bin:/bin"
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        DOTFILES_PROMPT=gum GUM_ARGS="'"${TEST_TMPDIR}"'/gum-args" choose_many "Pick" red $'"'"'Green\tgreen'"'"' 2>/dev/null
+    '
+    assert_success
+    assert_output "green"
+    grep -Fqx -- "--no-limit" "${TEST_TMPDIR}/gum-args"
+    grep -Fqx -- "--header=Pick" "${TEST_TMPDIR}/gum-args"
+    grep -Fqx -- "red"$'\t'"red" "${TEST_TMPDIR}/gum-args"
+    grep -Fqx -- "Green"$'\t'"green" "${TEST_TMPDIR}/gum-args"
 }

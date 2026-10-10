@@ -543,67 +543,40 @@ print_home_candidates() {
     [[ "${found}" -ne 0 ]] || printf '  none\n'
 }
 
-# gum draws on stderr and reads keys from stdin, so both must be a terminal.
-# FILE_REVIEW_PROMPT (gum or read) lets tests pick a mode without a terminal.
-cleanup_prompt_mode() {
-    if [[ -n "${FILE_REVIEW_PROMPT:-}" ]]; then
-        printf '%s\n' "${FILE_REVIEW_PROMPT}"
-    elif command -v gum >/dev/null 2>&1 && [[ -t 0 && -t 2 ]]; then
-        printf 'gum\n'
-    else
-        printf 'read\n'
-    fi
-}
-
-# Both choosers fill the caller's selected array, or return 1 to move nothing.
-choose_with_gum() {
-    local choice="" path="" tmp_output="" known=0
-    local height="${#candidates[@]}"
+# Offers the candidates with their reasons and fills the caller's selected
+# array; returns 1 to move nothing. Only paths that were offered may move.
+choose_candidates() {
+    local index=0 path choice known
     local -a options=() picked=()
 
-    [[ "${height}" -le 15 ]] || height=15
-    [[ "${height}" -ge 3 ]] || height=3
-    local index=0
     for path in "${candidates[@]}"; do
         options+=("$(candidate_label "${index}")"$'\t'"${path}")
         index=$((index + 1))
     done
-
-    log_info "Archive candidates: unmanaged does not necessarily mean unused. Use tab or x to select, ctrl+a for all, enter to continue, or esc to skip."
-    tmp_output="$(mktemp "${TMPDIR:-/tmp}/file-review.XXXXXX")"
-    if ! gum_choose_multiselect "Select paths to archive" "${height}" \
-        --label-delimiter=$'\t' "${options[@]}" > "${tmp_output}"; then
-        rm -f "${tmp_output}"
-        printf 'Cleanup skipped; no files moved.\n'
-        return 1
-    fi
     while IFS= read -r choice || [[ -n "${choice}" ]]; do
         [[ -z "${choice}" ]] || picked+=("${choice}")
-    done < "${tmp_output}"
-    rm -f "${tmp_output}"
+    done < <(choose_many "Archive candidates, most likely abandoned first. Unmanaged does not necessarily mean unused." "${options[@]}" || true)
 
-    # Only paths that were offered may move.
-    if [[ "${#picked[@]}" -gt 0 ]]; then
-        for choice in "${picked[@]}"; do
-            known=0
-            for path in "${candidates[@]}"; do
-                if [[ "${path}" == "${choice}" ]]; then
-                    selected+=("${path}")
-                    known=1
-                    break
-                fi
-            done
-            if [[ "${known}" -eq 0 ]]; then
-                log_warn "Invalid selection; no files moved"
-                return 1
+    for choice in ${picked[@]+"${picked[@]}"}; do
+        known=0
+        for path in "${candidates[@]}"; do
+            if [[ "${path}" == "${choice}" ]]; then
+                selected+=("${path}")
+                known=1
+                break
             fi
         done
-    fi
-
+        if [[ "${known}" -eq 0 ]]; then
+            log_warn "Invalid selection; no files moved"
+            return 1
+        fi
+    done
     if [[ "${#selected[@]}" -eq 0 ]]; then
         printf 'Cleanup skipped; no files moved.\n'
         return 1
     fi
+
+    [[ "$(prompt_mode)" == gum ]] || return 0
     printf 'Selected for archiving:\n'
     for path in "${selected[@]}"; do
         printf '  %s\n' "$(display_path "${path}")"
@@ -612,34 +585,6 @@ choose_with_gum() {
         printf 'Cleanup skipped; no files moved.\n'
         return 1
     fi
-}
-
-choose_with_read() {
-    local answer="" token="" index=0 path=""
-    local -a choices=()
-
-    printf '\nArchive candidates, most likely abandoned first. Unmanaged does not necessarily mean unused:\n'
-    for path in "${candidates[@]}"; do
-        printf '  %d) %s\n' "$((index + 1))" "$(candidate_label "${index}")"
-        index=$((index + 1))
-    done
-    printf 'Archive which paths? Enter numbers separated by spaces, all, or Enter to skip: '
-    if ! IFS= read -r answer || [[ -z "${answer//[[:space:]]/}" ]]; then
-        printf '\nCleanup skipped; no files moved.\n'
-        return 1
-    fi
-    if [[ "${answer}" == all ]]; then
-        selected=("${candidates[@]}")
-        return 0
-    fi
-    read -r -a choices <<< "${answer}"
-    for token in "${choices[@]}"; do
-        if [[ ! "${token}" =~ ^[1-9][0-9]*$ || "${#token}" -gt 6 ]] || (( token > ${#candidates[@]} )); then
-            log_warn "Invalid selection; no files moved"
-            return 1
-        fi
-        selected+=("${candidates[token-1]}")
-    done
 }
 
 archive_selection() {
@@ -651,10 +596,7 @@ archive_selection() {
         return
     fi
     [[ "${#candidates[@]}" -gt 0 ]] || return 0
-    case "$(cleanup_prompt_mode)" in
-        gum) choose_with_gum || return 0 ;;
-        *) choose_with_read || return 0 ;;
-    esac
+    choose_candidates || return 0
     MANAGED_PATHS_CACHE=""
     prime_managed_paths_cache || return 1
     for path in "${selected[@]}"; do

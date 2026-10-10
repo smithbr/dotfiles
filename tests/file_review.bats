@@ -295,7 +295,7 @@ MOCK
     assert_success
     refute_output --partial "File review for"
     refute_output --partial "Bulk cleanup"
-    assert_output --partial "Archive which paths?"
+    assert_output --partial "Numbers separated by spaces, all, or Enter for none"
     local archives=("${HOME}/.local/state/dotfiles/cleanup/"*)
     [[ -f "${archives[0]}/.old-file" ]]
     [[ ! -e "${HOME}/.old-file" ]]
@@ -313,7 +313,7 @@ MOCK
     printf 'keep\n' > "${HOME}/.old-file"
     printf 'keep\n' > "${HOME}/.other-file"
     run env PATH="${TEST_TMPDIR}/bin:${PATH}" TEST_TMPDIR="${TEST_TMPDIR}" \
-        FILE_REVIEW_PROMPT=gum GUM_PICK="${HOME}/.old-file" \
+        DOTFILES_PROMPT=gum GUM_PICK="${HOME}/.old-file" \
         "${PROJECT_ROOT}/scripts/file-review.sh" --source "${TEST_SOURCE_DIR}" --select
     assert_success
     assert_output --partial "Selected for archiving:"
@@ -328,7 +328,7 @@ MOCK
 @test "gum picker moves nothing when skipped, declined, or given an unknown path" {
     write_gum_mock
     printf 'keep\n' > "${HOME}/.old-file"
-    local -a base=(env PATH="${TEST_TMPDIR}/bin:${PATH}" TEST_TMPDIR="${TEST_TMPDIR}" FILE_REVIEW_PROMPT=gum)
+    local -a base=(env PATH="${TEST_TMPDIR}/bin:${PATH}" TEST_TMPDIR="${TEST_TMPDIR}" DOTFILES_PROMPT=gum)
     local -a review=("${PROJECT_ROOT}/scripts/file-review.sh" --source "${TEST_SOURCE_DIR}" --select)
 
     run "${base[@]}" GUM_CHOOSE_STATUS=130 GUM_PICK="${HOME}/.old-file" "${review[@]}"
@@ -357,7 +357,7 @@ MOCK
         echo "--- report"
         review_existing_files </dev/null
         echo "--- select"
-        printf "all\n" | FILE_REVIEW_PROMPT=read select_files_to_archive
+        printf "all\n" | DOTFILES_PROMPT=read select_files_to_archive
     '
     assert_success
     local report="${output%%--- select*}"
@@ -383,7 +383,7 @@ MOCK
     assert_output --regexp "In use: [^"$'\n'"]*"$'\n'" +~/\.true {20,}in use by true; changed today"
 
     # The numbered picker lists junk, then leftovers, then entries to review.
-    run bash -c 'printf "\n" | FILE_REVIEW_PROMPT=read "$1/scripts/file-review.sh" --source "$2" --select' _ "${PROJECT_ROOT}" "${TEST_SOURCE_DIR}"
+    run bash -c 'printf "\n" | DOTFILES_PROMPT=read "$1/scripts/file-review.sh" --source "$2" --select' _ "${PROJECT_ROOT}" "${TEST_SOURCE_DIR}"
     assert_success
     assert_line --regexp "^  1\) ~/\.notes\.bak  \(junk: "
     assert_line --regexp "^  2\) ~/\.stale-tool  \(leftover: no installed owner, untouched [0-9]+ days\)$"

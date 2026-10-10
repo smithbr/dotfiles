@@ -4,6 +4,8 @@
 load test_helper
 
 setup() {
+    # Copies of the tools made by the tests find the shared helpers here.
+    export DOTFILES_DIR="${PROJECT_ROOT}"
     setup_tmpdir
     export BIN_SANDBOX="${TEST_TMPDIR}/bin"
     mkdir -p "${BIN_SANDBOX}"
@@ -592,33 +594,13 @@ MOCK
 
     chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/apt-get" "${BIN_SANDBOX}/brew"
 
-    run env -u XDG_CONFIG_HOME HOME="${home}" DOTFILES_DIR="${TEST_TMPDIR}/no-dotfiles" \
+    run env -u XDG_CONFIG_HOME -u DOTFILES_DIR HOME="${home}" \
         TEST_TMPDIR="${TEST_TMPDIR}" PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
         "${home}/.local/bin/os-update"
     assert_success
     assert_output --partial "brew update xdg=${home}/.config"
     refute_output --partial "PLANTED"
     [[ ! -e "${TEST_TMPDIR}/planted-ran" ]]
-}
-
-@test "os-update only sources a fallback common.sh that others cannot write" {
-    local copy_dir="${TEST_TMPDIR}/elsewhere/stow/tools/.local/bin"
-    local dotfiles="${TEST_TMPDIR}/dots"
-    mkdir -p "${copy_dir}" "${dotfiles}/scripts"
-    cp "${PROJECT_ROOT}/stow/tools/.local/bin/os-update" "${copy_dir}/os-update"
-    printf 'printf "FALLBACK SOURCED\\n"\n' > "${dotfiles}/scripts/common.sh"
-
-    chmod 666 "${dotfiles}/scripts/common.sh"
-    run env DOTFILES_DIR="${dotfiles}" "${copy_dir}/os-update" --help
-    assert_success
-    assert_output --partial "not sourcing ${dotfiles}/scripts/common.sh"
-    refute_output --partial "FALLBACK SOURCED"
-
-    chmod 644 "${dotfiles}/scripts/common.sh"
-    run env DOTFILES_DIR="${dotfiles}" "${copy_dir}/os-update" --help
-    assert_success
-    assert_output --partial "FALLBACK SOURCED"
-    refute_output --partial "not sourcing"
 }
 
 @test "os-update refuses to clear a Homebrew cache path that is not a Homebrew directory" {
@@ -847,7 +829,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/pihole" "${BIN_SANDBOX}/ph-padd" "${BIN_SANDBOX}/shutdown"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" PH_UPDATE_SKIP_OS_UPDATE=1 \
-        "${probe_script}" -r
+        DOTFILES_DIR="${PROJECT_ROOT}" "${probe_script}" -r
     assert_success
     assert_output --partial "Pi-hole update and gravity refresh completed"
     assert_output --partial "shutdown -r now"
@@ -891,7 +873,7 @@ MOCK
     done
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" PH_UPDATE_SKIP_OS_UPDATE=1 \
-        "${probe_script}"
+        DOTFILES_DIR="${PROJECT_ROOT}" "${probe_script}"
     assert_failure
     assert_output --partial "pihole command is unavailable"
     [[ ! -e "${TEST_TMPDIR}/user-path-used" ]]

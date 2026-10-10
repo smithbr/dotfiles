@@ -5,6 +5,12 @@
 
 set -euo pipefail
 
+# Shared helpers from the dotfiles repo, reached through this script's stow
+# link; DOTFILES_DIR names the repo when a copy runs from elsewhere.
+DOTFILES_DIR="${DOTFILES_DIR:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../../.." && pwd)}"
+# shellcheck source=scripts/common.sh
+source "${DOTFILES_DIR}/scripts/common.sh"
+
 append_path_dir() {
     local dir="${1}"
     if [[ -n "${dir}" && ":${PATH}:" != *":${dir}:"* ]]; then
@@ -80,83 +86,9 @@ UNBOUND_CONF="${PH_TEST_UNBOUND_CONF:-${UNBOUND_DIR}/unbound.conf.d/pi-hole.conf
 PIHOLE_SETUPVARS=""
 PIHOLE_TOML=""
 
-HAS_GUM=false
-command -v gum >/dev/null 2>&1 && [[ -t 1 ]] && HAS_GUM=true
-
-declare -a SUMMARY_RESULTS=()
-declare -a NEXT_STEPS=()
-PASS_COUNT=0
-WARN_COUNT=0
-FAIL_COUNT=0
 CURRENT_SECTION_TITLE=""
 CURRENT_SECTION_BODY=""
 RUN_WITH_TIMEOUT_OUTPUT=""
-
-_header() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --bold --foreground 212 "$1"
-    else
-        printf '%s\n' "$1"
-    fi
-}
-
-_box() {
-    local content="$1"
-
-    if [[ "${HAS_GUM}" == true ]]; then
-        printf '%s' "${content}" | gum style --border rounded --border-foreground 240 --margin "0 0" --padding "0 1"
-    else
-        printf '%s\n' "${content}" | sed 's/^/  /'
-    fi
-}
-
-_success() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 76 --bold "$1"
-    else
-        printf '%s\n' "$1"
-    fi
-}
-
-_warn() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 214 --bold "$1"
-    else
-        printf '%s\n' "$1" >&2
-    fi
-}
-
-_item() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 244 "  $1"
-    else
-        printf '  %s\n' "$1"
-    fi
-}
-
-add_result() {
-    local kind="$1"
-    local message="$2"
-
-    SUMMARY_RESULTS+=("${kind}"$'\t'"${message}")
-
-    case "${kind}" in
-        PASS) PASS_COUNT=$((PASS_COUNT + 1)) ;;
-        WARN) WARN_COUNT=$((WARN_COUNT + 1)) ;;
-        FAIL) FAIL_COUNT=$((FAIL_COUNT + 1)) ;;
-    esac
-}
-
-add_next_step() {
-    local step="$1"
-    local existing=""
-
-    for existing in "${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}"; do
-        [[ "${existing}" == "${step}" ]] && return 0
-    done
-
-    NEXT_STEPS+=("${step}")
-}
 
 flush_section() {
     [[ -n "${CURRENT_SECTION_TITLE}" ]] || return 0

@@ -2,6 +2,12 @@
 
 set -euo pipefail
 
+# Shared helpers from the dotfiles repo, reached through this script's stow
+# link; DOTFILES_DIR names the repo when a copy runs from elsewhere.
+DOTFILES_DIR="${DOTFILES_DIR:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../../.." && pwd)}"
+# shellcheck source=scripts/common.sh
+source "${DOTFILES_DIR}/scripts/common.sh"
+
 IS_LINUX=false
 IS_MACOS=false
 case "${OSTYPE}" in
@@ -10,14 +16,6 @@ case "${OSTYPE}" in
 esac
 
 COMMAND=""
-HAS_GUM=false
-command -v gum >/dev/null 2>&1 && [[ -t 1 ]] && HAS_GUM=true
-
-declare -a SUMMARY_RESULTS=()
-declare -a NEXT_STEPS=()
-PASS_COUNT=0
-WARN_COUNT=0
-FAIL_COUNT=0
 
 TS_STATUS_JSON=""
 TS_STATUS_TEXT=""
@@ -25,73 +23,6 @@ TS_PREFS=""
 TS_SELF_IP=""
 TS_SELF_HOSTNAME=""
 TS_ACCEPT_DNS=""
-
-_header() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --bold --foreground 212 "$1"
-    else
-        printf '%s\n' "$1"
-    fi
-}
-
-_success() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum log --level info "$1"
-    else
-        printf '%s\n' "$1"
-    fi
-}
-
-_warn() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum log --level warn "$1" >&2
-    else
-        printf '%s\n' "$1" >&2
-    fi
-}
-
-_check() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 76 "  $(printf '\xe2\x9c\x93') $1"
-    else
-        printf '  [ok] %s\n' "$1"
-    fi
-}
-
-_cross() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 196 "  $(printf '\xe2\x9c\x97') $1"
-    else
-        printf '  [fail] %s\n' "$1"
-    fi
-}
-
-_item() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 244 "  $1"
-    else
-        printf '  - %s\n' "$1"
-    fi
-}
-
-_box() {
-    local content="$1"
-
-    if [[ "${HAS_GUM}" == true ]]; then
-        printf '%s' "${content}" | gum style --border rounded --border-foreground 240 --margin "0 0" --padding "0 1"
-    else
-        printf '%s\n' "${content}" | sed 's/^/  /'
-    fi
-}
-
-die() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum log --level error "$1" >&2
-    else
-        printf '%s\n' "$1" >&2
-    fi
-    exit 1
-}
 
 usage() {
     local help_text
@@ -134,19 +65,6 @@ EOF
     fi
 }
 
-add_result() {
-    local kind="$1"
-    local message="$2"
-
-    SUMMARY_RESULTS+=("${kind}"$'\t'"${message}")
-
-    case "${kind}" in
-        PASS) PASS_COUNT=$((PASS_COUNT + 1)) ;;
-        WARN) WARN_COUNT=$((WARN_COUNT + 1)) ;;
-        FAIL) FAIL_COUNT=$((FAIL_COUNT + 1)) ;;
-    esac
-}
-
 pass_result() {
     _check "$1"
     add_result "PASS" "$1"
@@ -172,17 +90,6 @@ show_fix() {
 
 command_exists() {
     command -v "$1" >/dev/null 2>&1
-}
-
-add_next_step() {
-    local step="$1"
-    local existing=""
-
-    for existing in "${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}"; do
-        [[ "${existing}" == "${step}" ]] && return 0
-    done
-
-    NEXT_STEPS+=("${step}")
 }
 
 backend_state_summary() {
