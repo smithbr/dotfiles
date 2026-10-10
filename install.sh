@@ -523,7 +523,7 @@ fi
 
 _header "Dotfiles setup"
 _item "${run_mode} from ${BASEDIR}"
-[[ "${PERSONA_NAME}" == none ]] || _item "Persona: ${PERSONA_NAME}"
+_item "Persona: ${PERSONA_NAME}"
 if [[ "${#skipped_steps[@]}" -gt 0 ]]; then
     _item "Skipping: $(printf '%s, ' "${skipped_steps[@]}" | sed 's/, $//')"
 fi

@@ -22,3 +22,14 @@ setup_tmpdir() {
 teardown_tmpdir() {
     [[ -d "${TEST_TMPDIR:-}" ]] && rm -rf "${TEST_TMPDIR}"
 }
+
+# Give a fixture repo the default persona for either OS (home on macOS,
+# server on Linux), linking the common layer and, with a second argument of
+# yes, the shared editor settings; link.sh refuses a repo without personas/.
+write_test_persona() {
+    local name
+    mkdir -p "$1/personas"
+    for name in home server; do
+        printf 'os=darwin,linux\nlayers=common\nagents=yes\nagent_apps=claude cursor codex\nskills=core\neditors=%s\nbrew=\nbrew_optional=\nlinux_optional=\n' "${2:-no}" > "$1/personas/${name}"
+    done
+}

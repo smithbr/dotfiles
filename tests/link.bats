@@ -111,19 +111,6 @@ stat_mode() {
     [ -z "$(find "${PROJECT_ROOT}/stow" -path '*/User/*' -print)" ]
 }
 
-@test "relinks an editor link left by the old stow layout without a backup" {
-    command -v stow >/dev/null 2>&1 || skip "stow not installed"
-    local dir="${DEST}/Library/Application Support/Code/User"
-    mkdir -p "${dir}"
-    ln -s "../../../../.dotfiles/stow/darwin/Library/Application Support/Code/User/keybindings.json" "${dir}/keybindings.json"
-
-    run_link
-    assert_success
-    refute_output --partial "Backed up"
-    [ "$(readlink "${dir}/keybindings.json")" = "${PROJECT_ROOT}/editors/code/keybindings.json" ]
-    [ ! -e "${DEST}/.local/state/dotfiles/clobbered" ]
-}
-
 @test "replaces identical editor settings and backs up changed ones" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     local dir="${DEST}/Library/Application Support/Cursor/User"
@@ -391,23 +378,6 @@ stat_mode() {
     assert_output "unset ${DEST}/.config/git/config.local"
 }
 
-@test "replaces the old whole-library skills link and keeps imported bundles" {
-    command -v stow >/dev/null 2>&1 || skip "stow not installed"
-    run_link
-    assert_success
-    stow --dir "${DEST}/.config/agents/skills" --target "${DEST}/.agents/skills" extra
-    run_link
-    assert_success
-    [ -L "${DEST}/.agents/skills/other" ]
-
-    rm -rf "${DEST}/.agents/skills"
-    ln -s "${DEST}/.config/agents/skills" "${DEST}/.agents/skills"
-    run_link
-    assert_success
-    [ ! -L "${DEST}/.agents/skills" ]
-    [ -L "${DEST}/.agents/skills/demo" ]
-}
-
 @test "moves real agent config aside and leaves unmanaged agent state alone" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     export DOTFILES_PERSONA=work
@@ -423,20 +393,6 @@ stat_mode() {
     assert_output 'skill'
     [ "$(cat "${DEST}/.cursor/projects/sess/x.jsonl")" = transcript ]
     [ "$(cat "${DEST}/.cursor/mcp.json")" = overrides ]
-}
-
-@test "names skill folders left from the old flat layout and keeps them" {
-    command -v stow >/dev/null 2>&1 || skip "stow not installed"
-    run_link
-    assert_success
-    refute_output --partial "does not track"
-
-    mkdir -p "${DEST}/.config/agents/skills/old-skill"
-    printf 'finder\n' > "${DEST}/.config/agents/skills/old-skill/.DS_Store"
-    run_link
-    assert_success
-    assert_output --partial "does not track, likely left from the old flat layout: old-skill."
-    [ -f "${DEST}/.config/agents/skills/old-skill/.DS_Store" ]
 }
 
 @test "a recent checkout is pulled only with --refresh" {
@@ -614,6 +570,7 @@ make_fixture_repo() {
     printf 'tool\n' > "${FIXTURE}/stow/linux/.config/tool/rc"
     printf 'extra\n' > "${FIXTURE}/stow/extra/.config/extra/rc"
     printf '{}\n' > "${FIXTURE}/editors/code/settings.json"
+    write_test_persona "${FIXTURE}" yes
     git -C "${FIXTURE}" init -q
     git -C "${FIXTURE}" add -A
     git -C "${FIXTURE}" -c user.name=test -c user.email=test@example.com commit -q -m one

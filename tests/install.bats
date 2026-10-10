@@ -612,6 +612,7 @@ MOCK
         cp "'"${PROJECT_ROOT}"'/install.sh" "${REPO_COPY}/install.sh"
         cp "'"${PROJECT_ROOT}"'/scripts/common.sh" "${REPO_COPY}/scripts/common.sh"
         cp "'"${PROJECT_ROOT}"'/scripts/link.sh" "${REPO_COPY}/scripts/link.sh"
+        cp -R "'"${PROJECT_ROOT}"'/personas" "${REPO_COPY}/personas"
 
         cat > "${TEST_BIN}/hostname" <<'"'"'MOCK'"'"'
 #!/usr/bin/env bash

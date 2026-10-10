@@ -21,6 +21,7 @@ setup() {
         ln -s "${TEST_SOURCE_DIR}/stow/common/${relative}" "${HOME}/${relative}"
     done
     printf '[include]\n    path = ~/.config/git/config.local\n' > "${TEST_SOURCE_DIR}/stow/common/.config/git/config"
+    write_test_persona "${TEST_SOURCE_DIR}"
     mkdir -p "${HOME}/.config/agents/skills" "${HOME}/.agents/skills"
     for relative in .claude/skills .cursor/skills; do
         mkdir -p "$(dirname "${HOME}/${relative}")"
@@ -258,6 +259,7 @@ teardown() {
 
 @test "cleanup protects the source repository's parent directory" {
     mkdir -p "${HOME}/.sources/dotfiles/stow"
+    write_test_persona "${HOME}/.sources/dotfiles"
     run bash -c 'printf "all\n" | "$1/scripts/file-review.sh" --source "$2" --cleanup' _ "${PROJECT_ROOT}" "${HOME}/.sources/dotfiles"
     assert_success
     [[ -d "${HOME}/.sources/dotfiles" ]]

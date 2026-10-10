@@ -20,6 +20,7 @@ setup() {
     mkdir -p "${DOTFILES_DIR}/scripts" "${DOTFILES_DIR}/stow/common/.partly"
     cp "${PROJECT_ROOT}/scripts/link.sh" "${PROJECT_ROOT}/scripts/common.sh" "${DOTFILES_DIR}/scripts/"
     touch "${DOTFILES_DIR}/stow/common/.managed" "${DOTFILES_DIR}/stow/common/.partly/inner.conf"
+    write_test_persona "${DOTFILES_DIR}"
     printf '#!/usr/bin/env bash\n' > "${BIN_SANDBOX}/ownedtool"
     chmod +x "${BIN_SANDBOX}/ownedtool"
 

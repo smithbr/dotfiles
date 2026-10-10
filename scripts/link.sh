@@ -205,8 +205,7 @@ platform() {
     esac
 }
 
-# The persona in effect, set by load_persona. A repo without personas/ links
-# every package for the platform, as before personas existed.
+# The persona in effect, set by load_persona.
 PERSONA_NAME=""
 PERSONA_SOURCE=""
 PERSONA_LAYERS=""
@@ -216,9 +215,9 @@ PERSONA_AGENT_APPS="${AGENT_APPS}"
 PERSONA_SKILLS=core
 # Installs, for install.sh: Brewfiles installed in full, Brewfiles offered in
 # the macOS picker, and the Linux bootstrap's optional installs.
-PERSONA_BREW=core
-PERSONA_BREW_OPTIONAL=macos
-PERSONA_LINUX_OPTIONAL="docker tailscale"
+PERSONA_BREW=""
+PERSONA_BREW_OPTIONAL=""
+PERSONA_LINUX_OPTIONAL=""
 
 persona_state_file() {
     printf '%s/.local/state/dotfiles/persona\n' "${DEST}"
@@ -265,12 +264,6 @@ list_personas() {
 
 load_persona() {
     local name="" source file setting key value saved app bundle
-    if [[ ! -d "${REPO}/personas" ]]; then
-        PERSONA_LAYERS="common $(platform)"
-        select_agent_apps
-        return 0
-    fi
-
     if [[ -n "${PERSONA}" ]]; then
         name="${PERSONA}" source=flag
     elif [[ -n "${DOTFILES_PERSONA:-}" ]]; then
@@ -298,10 +291,6 @@ load_persona() {
 
     PERSONA_NAME="${name}"
     PERSONA_SOURCE="${source}"
-    PERSONA_LAYERS=""
-    PERSONA_BREW=""
-    PERSONA_BREW_OPTIONAL=""
-    PERSONA_LINUX_OPTIONAL=""
     while IFS= read -r setting; do
         key="${setting%%=*}"
         value="${setting#*=}"
@@ -383,6 +372,16 @@ save_persona() {
     done
     (umask 077 && mkdir -p "$(dirname "${file}")" && printf '%s\n' "${PERSONA_NAME}" > "${file}")
     printf 'Saved persona %s\n' "${PERSONA_NAME}"
+}
+
+# A persona layer with no stow/<layer> or stow/<layer>.<os> directory links
+# nothing; say so rather than skip it quietly.
+warn_missing_layers() {
+    local layer
+    for layer in ${PERSONA_LAYERS}; do
+        [[ -d "${REPO}/stow/${layer}" || -d "${REPO}/stow/${layer}.$(platform)" ]] \
+            || log_warn "Persona '${PERSONA_NAME}' lists layer '${layer}', which has no stow/${layer} or stow/${layer}.$(platform) directory"
+    done
 }
 
 # Package directories under $1 (stow or seed) for the persona's layers: each
@@ -476,7 +475,7 @@ is_repo_link() {
 # Relative paths of the links that belong here: this platform's stow files and
 # editor links.
 managed_links() {
-    local package relative entry
+    local package entry
     while IFS= read -r package; do
         package_files stow "${package}"
     done < <(packages_in stow)
@@ -764,34 +763,14 @@ link_agents() {
     done
 }
 
-# Skills used to sit directly in the agents repo's skills/. A pull that moved
-# them into bundles leaves behind any folder still holding untracked files
-# (.DS_Store, caches), so skills/ looks flat again. Name them; never delete.
-warn_flat_skill_leftovers() {
-    local checkout="${DEST}/.config/agents" dir
-    local -a leftovers=()
-    [[ -d "${checkout}/.git" ]] && command -v git >/dev/null 2>&1 || return 0
-    for dir in "${checkout}/skills/"*/; do
-        dir="${dir%/}"
-        [[ -d "${dir}" ]] || continue
-        if [[ -z "$(git -C "${checkout}" ls-files -- "skills/${dir##*/}" 2>/dev/null | head -n 1)" ]]; then
-            leftovers+=("${dir##*/}")
-        fi
-    done
-    [[ "${#leftovers[@]}" -gt 0 ]] || return 0
-    log_warn "${checkout}/skills has folders the agents repo does not track, likely left from the old flat layout: ${leftovers[*]}. Move them out once nothing in them is yours."
-}
-
 # ~/.agents/skills is machine-local: Stow links the persona's skill bundles
-# into it, and skills-add links more. The old layout linked it to the whole
-# library.
+# into it, and skills-add links more.
 link_skills() {
     local skills="${DEST}/${SKILLS_DIR}" bundles="${DEST}/.config/agents/skills"
     local relative target bundle
     local -a wanted=()
 
     [[ -d "${bundles}/core" ]] || return 0
-    warn_flat_skill_leftovers
     for bundle in ${PERSONA_SKILLS}; do
         if [[ -d "${bundles}/${bundle}" ]]; then
             wanted+=("${bundle}")
@@ -804,7 +783,6 @@ link_skills() {
         return 0
     fi
 
-    [[ -L "${skills}" ]] && rm "${skills}"
     mkdir -p "${skills}"
     if [[ "${#wanted[@]}" -gt 0 ]] && ! stow --dir "${bundles}" --target "${skills}" --restow --ignore '\.DS_Store' "${wanted[@]}"; then
         log_warn "Could not stow the skill bundles ${wanted[*]} into ${skills}; resolve the conflict above and rerun"
@@ -841,8 +819,7 @@ editor_links() {
 }
 
 # Same rules as the stow packages: an identical copy is replaced, anything
-# else is backed up first. A link into the repo's old stow/ copy of the file
-# is ours and is replaced quietly.
+# else is backed up first.
 link_editors() {
     local entry relative target source
     while IFS= read -r entry; do
@@ -851,8 +828,7 @@ link_editors() {
         target="${DEST}/${relative}"
         is_linked "${target}" "${source}" && continue
 
-        if is_repo_link "${target}" \
-            || [[ -L "${target}" && "$(readlink "${target}")" == */stow/"$(platform)/${relative}" ]]; then
+        if is_repo_link "${target}"; then
             [[ "${DRY_RUN}" -eq 0 ]] && rm -f "${target}"
         elif [[ -f "${target}" && ! -L "${target}" ]] && cmp -s "${target}" "${source}"; then
             [[ "${DRY_RUN}" -eq 0 ]] && rm -f "${target}"
@@ -906,7 +882,7 @@ path_prefixes() {
 }
 
 # Real files or folders where a layer this persona does not link would put its
-# files, such as ~/.config/restic on work. Each is the shallowest path no other
+# files, such as ~/.local/bin/cf-cert on work. Each is the shallowest path no other
 # layer uses, so shared parents like ~/.config or ~/.local/bin are never named.
 # Only reported; nothing is moved.
 unlinked_layer_paths() {
@@ -1247,7 +1223,6 @@ add_files() {
 }
 
 main() {
-    local entry
     parse_args "$@"
 
     if [[ ! -d "${REPO}/stow" ]]; then
@@ -1271,7 +1246,7 @@ main() {
     load_persona
 
     case "${COMMAND}" in
-        persona) printf '%s %s\n' "${PERSONA_NAME:-none}" "${PERSONA_SOURCE:-legacy}" ;;
+        persona) printf '%s %s\n' "${PERSONA_NAME}" "${PERSONA_SOURCE}" ;;
         installs)
             printf 'brew=%s\nbrew_optional=%s\nlinux_optional=%s\n' \
                 "${PERSONA_BREW}" "${PERSONA_BREW_OPTIONAL}" "${PERSONA_LINUX_OPTIONAL}"
@@ -1284,6 +1259,7 @@ main() {
                 log_warn "No persona chosen; linking as '${PERSONA_NAME}', the default for $(platform). Pick one with: install.sh --persona NAME"
             fi
             save_persona
+            warn_missing_layers
             prune_stale_links
             run_stow
             link_editors
