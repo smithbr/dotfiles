@@ -100,12 +100,8 @@ This is process-level isolation, not a real container or VM.
 
 [`brew.bats`](brew.bats)
 
-- Verifies Brewfile entry parsing
-- Tests `entry_is_brew_managed` behavior for formulas, casks, and taps
-- Verifies Linux cask filtering and OS detection logic
-- Checks `homebrew/Brewfile.core` for valid entry types and duplicates
-- Verifies Brewfile selection from the persona (`DOTFILES_BREWFILES`, `DOTFILES_BREW_OPTIONAL`), the standalone defaults, and failure on a missing Brewfile
-- Runs an isolated integration test for [`homebrew/brew.sh`](../homebrew/brew.sh) against a fake Homebrew environment
+- Checks `homebrew/Brewfile.core` for valid lines, duplicates, and casks kept to macOS
+- Runs [`homebrew/brew.sh`](../homebrew/brew.sh) against a mocked brew: bundling without upgrades, skipping an installed Brewfile, `--verbose`, trusting tap-qualified entries, the macOS picker over pending entries, and the persona's Brewfile selection (`DOTFILES_BREWFILES`, `DOTFILES_BREW_OPTIONAL`) with failure on a missing one
 
 [`common.bats`](common.bats)
 
