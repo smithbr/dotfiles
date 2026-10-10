@@ -35,5 +35,6 @@
     "diffEditor.maxComputationTime": 0,
     "[tsv]": {
         "editor.inlayHints.maximumLength": 0
-    }
+    },
+    "vscodeGoogleTranslate.preferredLanguage": "English"
 }
