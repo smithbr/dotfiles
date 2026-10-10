@@ -43,7 +43,10 @@
     },
     {
         "key": "ctrl+/",
-        "command": "editor.action.commentLine",
-        "when": "editorTextFocus && !editorReadonly"
+        "command": "editor.action.toggleWordWrap"
+    },
+    {
+        "key": "alt+z",
+        "command": "-editor.action.toggleWordWrap"
     }
 ]
