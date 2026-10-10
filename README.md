@@ -7,6 +7,12 @@ Every managed file in `~` is a symlink into this repo, so edit it in place and c
 git clone https://github.com/smithbr/dotfiles.git ~/.dotfiles
 ~/.dotfiles/install.sh --persona home
 ```
+On a brand-new VPS, lock it down first (admin user, key-only SSH over Tailscale, firewall), then install as that user:
+
+```bash
+ssh root@HOST 'bash -s -- --user NAME --allow 80 --allow 443' < ~/.dotfiles/scripts/bootstrap/linux/harden.sh
+```
+
 ## Personas
 Pick the persona that fits the machine:
 

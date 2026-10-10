@@ -420,6 +420,115 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
+# linux/harden.sh — dry runs against a scratch root with mocked system tools
+# ---------------------------------------------------------------------------
+
+# Runs harden.sh with HARDEN_ROOT pointing at a scratch tree. TS_UP=1 makes
+# the mocked tailscale report a connection; ROOT_KEYS=0 leaves root without
+# SSH keys. Arguments go to harden.sh.
+_run_harden() {
+    run bash -c '
+        set -euo pipefail
+        export HARDEN_ROOT="'"${TEST_TMPDIR}"'/root"
+        export TEST_BIN="'"${TEST_TMPDIR}"'/bin"
+        export PATH="${TEST_BIN}:/usr/bin:/bin"
+        mkdir -p "${TEST_BIN}" "${HARDEN_ROOT}/etc/ssh" "${HARDEN_ROOT}/root/.ssh"
+        printf "Include /etc/ssh/sshd_config.d/*.conf\n" > "${HARDEN_ROOT}/etc/ssh/sshd_config"
+        if [[ "${ROOT_KEYS:-1}" -eq 1 ]]; then
+            printf "ssh-ed25519 AAAA test\n" > "${HARDEN_ROOT}/root/.ssh/authorized_keys"
+        fi
+        cat > "${TEST_BIN}/getent" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+[[ "$2" == root ]] && printf "root:x:0:0::/root:/bin/bash\n" && exit 0
+exit 2
+MOCK
+        cat > "${TEST_BIN}/tailscale" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+[[ "${TS_UP:-0}" -eq 1 ]] || exit 1
+printf "100.64.0.1 box admin@ linux -\n"
+MOCK
+        cat > "${TEST_BIN}/curl" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+case "$*" in
+    *ips-v4) printf "173.245.48.0/20\n104.16.0.0/13" ;;
+    *ips-v6) printf "2400:cb00::/32" ;;
+esac
+MOCK
+        printf "#!/usr/bin/env bash\nexit 0\n" > "${TEST_BIN}/apt-get"
+        printf "#!/usr/bin/env bash\nexit 0\n" > "${TEST_BIN}/systemctl"
+        printf "#!/usr/bin/env bash\nexit 1\n" > "${TEST_BIN}/sshd"
+        chmod +x "${TEST_BIN}"/*
+        cd "'"${PROJECT_ROOT}"'"
+        ./scripts/bootstrap/linux/harden.sh '"$*"'
+    '
+}
+
+@test "harden.sh requires --user and rejects root and bad ports" {
+    _run_harden --dry-run
+    assert_failure
+    assert_output --partial "--user is required"
+
+    _run_harden --dry-run --user root
+    assert_failure
+    assert_output --partial "must not be root"
+
+    _run_harden --dry-run --user admin --allow http
+    assert_failure
+    assert_output --partial "Not a port: http"
+}
+
+@test "harden.sh refuses a real run without root" {
+    [[ "${EUID}" -ne 0 ]] || skip "running as root"
+    _run_harden --user admin
+    assert_failure
+    assert_output --partial "Run as root"
+}
+
+@test "harden.sh closes public SSH once Tailscale is connected" {
+    TS_UP=1 _run_harden --dry-run --user admin --allow 443
+    assert_success
+    assert_output --partial "would copy root's SSH keys to ${TEST_TMPDIR}/root/home/admin/.ssh/authorized_keys"
+    assert_output --partial "admin ALL=(ALL) NOPASSWD:ALL"
+    assert_output --partial "PermitRootLogin no"
+    assert_output --partial "PasswordAuthentication no"
+    assert_output --partial "AllowUsers admin"
+    assert_output --partial "would run: ufw allow in on tailscale0"
+    assert_output --partial "would run: ufw allow 443/tcp"
+    assert_output --partial "would run: ufw --force delete allow 22/tcp"
+    assert_output --partial "Public SSH closed"
+    refute_output --partial "ufw limit 22/tcp"
+    [[ ! -e "${TEST_TMPDIR}/root/etc/ssh/sshd_config.d/00-harden.conf" ]]
+    [[ ! -e "${TEST_TMPDIR}/root/home/admin" ]]
+}
+
+@test "harden.sh keeps public SSH while Tailscale is not connected" {
+    TS_UP=0 _run_harden --dry-run --user admin
+    assert_success
+    assert_output --partial "would run: tailscale up"
+    assert_output --partial "public SSH stays open"
+    assert_output --partial "would run: ufw limit 22/tcp"
+    refute_output --partial "Public SSH closed"
+}
+
+@test "harden.sh opens --allow ports only to Cloudflare with --cloudflare" {
+    TS_UP=1 _run_harden --dry-run --user admin --allow 443 --cloudflare
+    assert_success
+    assert_output --partial "would run: ufw allow proto tcp from 173.245.48.0/20 to any port 443"
+    assert_output --partial "would run: ufw allow proto tcp from 104.16.0.0/13 to any port 443"
+    assert_output --partial "would run: ufw allow proto tcp from 2400:cb00::/32 to any port 443"
+    refute_output --partial "would run: ufw allow 443/tcp"
+}
+
+@test "harden.sh stops before touching SSH when there is no key to copy" {
+    ROOT_KEYS=0 TS_UP=1 _run_harden --dry-run --user admin
+    assert_failure
+    assert_output --partial "No SSH keys for admin"
+    refute_output --partial "useradd"
+    refute_output --partial "PermitRootLogin"
+    refute_output --partial "would run: ufw"
+}
+
+# ---------------------------------------------------------------------------
 # claude-code.sh — native installer, shared by macOS and Linux
 # ---------------------------------------------------------------------------
 
@@ -638,6 +747,7 @@ MOCK
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/setup.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/docker.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/tailscale.sh" \
+            "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/harden.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/setup.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/claude-code.sh" \
             "'"${PROJECT_ROOT}"'/homebrew/brew.sh"; do
@@ -662,6 +772,7 @@ MOCK
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/setup.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/docker.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/tailscale.sh" \
+            "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/harden.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/setup.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/claude-code.sh" \
             "'"${PROJECT_ROOT}"'/homebrew/brew.sh"; do
@@ -688,6 +799,7 @@ MOCK
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/setup.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/docker.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/tailscale.sh" \
+            "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/harden.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/setup.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/claude-code.sh" \
             "'"${PROJECT_ROOT}"'/homebrew/brew.sh"; do
@@ -714,6 +826,7 @@ MOCK
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/setup.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/docker.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/tailscale.sh" \
+            "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/harden.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/setup.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/claude-code.sh" \
             "'"${PROJECT_ROOT}"'/homebrew/brew.sh"; do
