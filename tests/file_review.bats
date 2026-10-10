@@ -54,9 +54,7 @@ teardown() {
     assert_success
     assert_output --partial "Managed drift: none"
     assert_output --partial "Potential leftovers:"
-    # shellcheck disable=SC2088
-    assert_output --partial "$(printf '%s' '~/.config/agents')"
-    refute_output --partial "~/.config/agents/tools"
+    refute_output --partial "~/.config/agents"
     # shellcheck disable=SC2088
     assert_output --partial "$(printf '%s' '~/.local/bin')"
     # shellcheck disable=SC2088
@@ -87,7 +85,7 @@ teardown() {
     assert_output --partial "Managed drift:"
     # shellcheck disable=SC2088
     assert_output --partial "$(printf '%s' '~/.local/bin/ph-padd')"
-    assert_output --partial "action: diff the local file against the repo"
+    assert_output --partial "diff it against the repo"
 }
 
 @test "file review explains a ~/.gitconfig identity that overrides config.local" {
@@ -97,11 +95,11 @@ teardown() {
     assert_success
     # shellcheck disable=SC2088
     assert_output --partial "$(printf '%s' '~/.gitconfig')"
-    assert_output --partial "status: sets [user], which overrides ~/.config/git/config.local"
+    assert_output --partial "sets [user], which overrides ~/.config/git/config.local"
 }
 
 @test "file review finds home leftovers, broken links, and saved backups without changing them" {
-    mkdir -p "${HOME}/.old-tool" "${HOME}/.config/agents-backup.saved/agents"
+    mkdir -p "${HOME}/.old-tool"
     printf 'keep this\n' > "${HOME}/.old-tool/config"
     ln -s "${HOME}/missing-target" "${HOME}/.config/git/broken"
     printf 'managed\n' > "${TEST_SOURCE_DIR}/stow/common/.config/git/broken"
@@ -110,8 +108,6 @@ teardown() {
     assert_success
     assert_output --partial "~/.old-tool"
     assert_output --partial "~/.config/git/broken -> ${HOME}/missing-target"
-    assert_output --partial "~/.config/agents-backup.saved"
-    assert_output --partial "Agents checkout needs attention"
     [[ -L "${HOME}/.config/git/broken" ]]
     [[ "$(cat "${HOME}/.old-tool/config")" == 'keep this' ]]
     [[ ! -e "${HOME}/.local/state/dotfiles/cleanup" ]]

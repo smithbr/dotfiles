@@ -214,6 +214,21 @@ print_unique_roots() {
     done < <(collect_audit_roots | sort -u)
 }
 
+# What each link.sh status state means and what to do about it.
+drift_hint() {
+    case "$1" in
+        missing) printf 'not linked yet; run link.sh, or remove the repo file if it is obsolete' ;;
+        replaced) printf 'a real file sits where a link belongs (an app may have replaced it); diff it against the repo, keep wanted changes there, then run link.sh, which backs the file up' ;;
+        foreign) printf 'symlink points somewhere other than the repo; check it, then run link.sh to relink' ;;
+        stale) printf 'link into the repo for a file that moved, was removed, or no longer applies here; run link.sh to remove it' ;;
+        unlinked) printf 'belongs to a layer this persona does not link; keep it if this machine still uses it, else archive it with --cleanup' ;;
+        shadowed) printf 'sets [user], which overrides ~/.config/git/config.local; move what you need there, then archive this file' ;;
+        unset) printf 'no git user.email, so git will refuse to commit; set [user] here' ;;
+        unused) printf 'private agents checkout on a persona without agents; delete it if this machine should not keep it (link.sh never does)' ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
 print_status_section() {
     local status_output=""
     local line=""
@@ -237,51 +252,7 @@ print_status_section() {
             printf 'Managed drift:\n'
             printed_header=1
         fi
-        case "${state}" in
-            missing)
-                printf '  %s\n' "$(display_path "${path}")"
-                printf '    status: not linked yet\n'
-                printf '    action: run ~/.dotfiles/scripts/link.sh, or remove the repo file if it is obsolete\n'
-                ;;
-            replaced)
-                printf '  %s\n' "$(display_path "${path}")"
-                printf '    status: a real file sits where a link belongs; an app or editor may have replaced the link\n'
-                printf '    action: diff the local file against the repo, keep any wanted change in the repo, then run link.sh (it backs up the file first)\n'
-                ;;
-            foreign)
-                printf '  %s\n' "$(display_path "${path}")"
-                printf '    status: symlink points somewhere other than the repo\n'
-                printf '    action: check what it points to, then run link.sh to relink it\n'
-                ;;
-            stale)
-                printf '  %s\n' "$(display_path "${path}")"
-                printf '    status: link into the repo for a file that moved, was removed, or no longer applies here\n'
-                printf '    action: run ~/.dotfiles/scripts/link.sh to remove it\n'
-                ;;
-            unlinked)
-                printf '  %s\n' "$(display_path "${path}")"
-                printf '    status: belongs to a layer this persona does not link; it may be left from another persona\n'
-                printf '    action: keep it if this machine still uses it, otherwise archive it with --cleanup\n'
-                ;;
-            shadowed)
-                printf '  %s\n' "$(display_path "${path}")"
-                printf '    status: sets [user], which overrides ~/.config/git/config.local\n'
-                printf '    action: move anything you need into config.local, then archive this file\n'
-                ;;
-            unset)
-                printf '  %s\n' "$(display_path "${path}")"
-                printf '    status: no git user.email; git will refuse to commit\n'
-                printf '    action: set name and email under [user] in this file\n'
-                ;;
-            unused)
-                printf '  %s\n' "$(display_path "${path}")"
-                printf '    status: private agents checkout on a persona without agents\n'
-                printf '    action: delete it if this machine should not keep it; link.sh never does\n'
-                ;;
-            *)
-                printf '  %s\n' "${line}"
-                ;;
-        esac
+        printf '  %s: %s\n' "$(display_path "${path}")" "$(drift_hint "${state}")"
     done <<< "${status_output}"
 
     if [[ "${printed_header}" -eq 0 ]]; then
@@ -424,7 +395,7 @@ is_protected() {
         "${DEST_DIR}/.ssh" | "${DEST_DIR}/.ssh/"* | "${DEST_DIR}/.gnupg" | "${DEST_DIR}/.gnupg/"* | "${DEST_DIR}/.aws" | "${DEST_DIR}/.aws/"* | "${DEST_DIR}/.1password" | "${DEST_DIR}/.1password/"*) return 0 ;;
         "${DEST_DIR}/.netrc" | "${DEST_DIR}/.npmrc" | "${DEST_DIR}/.pypirc" | "${DEST_DIR}/.kube" | "${DEST_DIR}/.kube/"* | "${DEST_DIR}/.docker" | "${DEST_DIR}/.docker/"*) return 0 ;;
         "${DEST_DIR}/.agents" | "${DEST_DIR}/.agents/"* | "${DEST_DIR}/.claude" | "${DEST_DIR}/.claude/"* | "${DEST_DIR}/.codex" | "${DEST_DIR}/.codex/"* | "${DEST_DIR}/.cursor" | "${DEST_DIR}/.cursor/"* | "${DEST_DIR}/.claude.json" | "${DEST_DIR}/.config/agents" | "${DEST_DIR}/.config/agents/"*) return 0 ;;
-        "${DEST_DIR}/.local/state/dotfiles" | "${DEST_DIR}/.local/state/dotfiles/"* | "${DEST_DIR}/.config/agents-backup."*) return 0 ;;
+        "${DEST_DIR}/.local/state/dotfiles" | "${DEST_DIR}/.local/state/dotfiles/"*) return 0 ;;
         "${SOURCE_DIR}" | "${SOURCE_DIR}/"* | "${BASEDIR}" | "${BASEDIR}/"*) return 0 ;;
     esac
     return 1
@@ -644,7 +615,7 @@ print_installation_state() {
 
     printf '\nSaved migration backups:\n'
     found=0
-    for path in "${DEST_DIR}/.local/state/dotfiles/clobbered/"* "${DEST_DIR}/.local/state/dotfiles/cleanup/"* "${DEST_DIR}/.config/agents-backup."*; do
+    for path in "${DEST_DIR}/.local/state/dotfiles/clobbered/"* "${DEST_DIR}/.local/state/dotfiles/cleanup/"*; do
         [[ -e "${path}" || -L "${path}" ]] || continue
         printf '  %s\n' "$(display_path "${path}")"
         found=1
@@ -653,11 +624,6 @@ print_installation_state() {
         printf '  none\n'
     else
         printf '  action: compare with the current configuration and recover needed data before removing any backup\n'
-    fi
-
-    if [[ -d "${DEST_DIR}/.config/agents" && ! -e "${DEST_DIR}/.config/agents/.git" ]]; then
-        printf '\nAgents checkout needs attention: %s\n' "$(display_path "${DEST_DIR}/.config/agents")"
-        printf '  action: preserve this directory before replacing it with the configured private Git checkout\n'
     fi
 }
 
