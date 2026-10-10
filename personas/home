@@ -6,4 +6,4 @@ skills=core vault
 editors=yes
 brew=core home personal
 brew_optional=macos
-setup=
+setup=claude-code

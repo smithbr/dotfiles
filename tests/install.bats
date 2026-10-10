@@ -178,7 +178,7 @@ run_persona_prompt() {
 
     run bash "${PROJECT_ROOT}/install.sh" --dry-run --skip-system --skip-brew --skip-shell --persona home < /dev/null
     assert_success
-    refute_output --partial "] Setup"
+    assert_output --partial "Dry run: would offer claude-code"
 }
 
 @test "install.sh runs the chosen setup scripts and reports a failing one" {

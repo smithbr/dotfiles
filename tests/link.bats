@@ -1125,7 +1125,7 @@ plant_single_layer_links() {
     assert_success
     assert_output "brew=core work
 brew_optional=macos
-setup="
+setup=claude-code"
     run_link --persona home installs
     assert_line "brew=core home"
     DOTFILES_OS=linux run_link --persona server installs

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Claude Code native installation, for macOS (brew.sh picker) and Linux
-# (bootstrap/linux/setup.sh). Preferred over the Homebrew cask because the
-# native build updates itself in the background; the cask only moves on
-# `brew upgrade`.
+# Claude Code native installation, a setup script install.sh offers on both
+# OSes. Preferred over the Homebrew cask because the native build updates
+# itself in the background; the cask only moves on `brew upgrade`.
 # https://code.claude.com/docs/en/setup
 
 set -euo pipefail

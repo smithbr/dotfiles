@@ -1,477 +1,75 @@
 #!/usr/bin/env bats
-# Tests for homebrew/brew.sh — Brewfile parsing, entry_is_brew_managed, OS
-# platform detection, and cask filtering.
-# These tests extract and exercise individual functions without running brew.
+# Tests for homebrew/brew.sh — the Brewfiles themselves, and the script run
+# against a mocked brew: full installs, the optional picker, taps, and the
+# persona's selection.
 
 load test_helper
 
 setup() {
     setup_tmpdir
+    TEST_BIN="${TEST_TMPDIR}/bin"
+    TEST_LOG="${TEST_TMPDIR}/brew.log"
+    TEST_BUNDLE="${TEST_TMPDIR}/bundle.txt"
+    mkdir -p "${TEST_BIN}" "${TEST_TMPDIR}/home"
+    : > "${TEST_LOG}"
+    export TEST_BIN TEST_LOG TEST_BUNDLE
 }
 
 teardown() {
     teardown_tmpdir
 }
 
-# ---------------------------------------------------------------------------
-# Brewfile line-parsing regex (extracted from install_filtered_brewfile)
-# ---------------------------------------------------------------------------
-
-_parse_brewfile_line() {
-    local line="$1"
-    if [[ "${line}" =~ ^(brew|cask|tap|mas)[[:space:]]+\"([^\"]+)\" ]]; then
-        echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
-    elif [[ "${line}" =~ ^(brew|cask|tap|mas)[[:space:]]+\'([^\']+)\' ]]; then
-        echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
-    else
-        echo "SKIP"
-    fi
+# A brew that logs every call. `bundle check` fails unless BREW_CHECK_OK=1;
+# `bundle install` copies its Brewfile to TEST_BUNDLE; `list` prints
+# BREW_FORMULAE and BREW_CASKS; `trust` succeeds.
+write_brew_mock() {
+    cat > "${TEST_BIN}/brew" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'brew %s\n' "$*" >> "${TEST_LOG}"
+case "${1:-} ${2:-}" in
+    "--prefix ") printf '%s\n' "${TEST_TMPDIR}/prefix" ;;
+    "list --formula") printf '%s\n' ${BREW_FORMULAE:-} ;;
+    "list --cask") printf '%s\n' ${BREW_CASKS:-} ;;
+    "bundle check") [[ "${BREW_CHECK_OK:-0}" -eq 1 ]] || exit 1 ;;
+    "bundle install")
+        for arg in "$@"; do
+            [[ "${arg}" == --file=* ]] && cp "${arg#--file=}" "${TEST_BUNDLE}"
+        done
+        ;;
+esac
+exit 0
+MOCK
+    chmod +x "${TEST_BIN}/brew"
 }
 
-@test "parses brew \"package\" line" {
-    run _parse_brewfile_line 'brew "git"'
-    assert_success
-    assert_output "brew git"
-}
-
-@test "parses cask \"package\" line" {
-    run _parse_brewfile_line 'cask "1password-cli"'
-    assert_success
-    assert_output "cask 1password-cli"
-}
-
-@test "parses tap \"repo\" line" {
-    run _parse_brewfile_line 'tap "homebrew/cask-fonts"'
-    assert_success
-    assert_output "tap homebrew/cask-fonts"
-}
-
-@test "parses mas \"app\" line" {
-    run _parse_brewfile_line 'mas "Xcode"'
-    assert_success
-    assert_output "mas Xcode"
-}
-
-@test "parses single-quoted entries" {
-    run _parse_brewfile_line "brew 'ripgrep'"
-    assert_success
-    assert_output "brew ripgrep"
-}
-
-@test "skips comment lines" {
-    run _parse_brewfile_line '# This is a comment'
-    assert_success
-    assert_output "SKIP"
-}
-
-@test "skips blank lines" {
-    run _parse_brewfile_line ''
-    assert_success
-    assert_output "SKIP"
-}
-
-@test "parses brew entry with args" {
-    run _parse_brewfile_line 'brew "xdg-ninja", args:["--HEAD"]'
-    assert_success
-    assert_output "brew xdg-ninja"
+# Runs brew.sh with the mocked brew on PATH, as the given OS, stdin closed.
+run_brew_sh() {
+    local os="$1"
+    shift
+    write_brew_mock
+    run env PATH="${TEST_BIN}:/usr/bin:/bin" HOME="${TEST_TMPDIR}/home" OSTYPE="${os}" \
+        TEST_TMPDIR="${TEST_TMPDIR}" TEST_LOG="${TEST_LOG}" TEST_BUNDLE="${TEST_BUNDLE}" \
+        DOTFILES_PROMPT=read "$@" bash "${PROJECT_ROOT}/homebrew/brew.sh" < /dev/null
 }
 
 # ---------------------------------------------------------------------------
-# entry_is_brew_managed
+# The Brewfiles
 # ---------------------------------------------------------------------------
 
-@test "entry_is_brew_managed returns true for installed formula" {
-    run bash -c '
-        _installed_formulae=" git curl zsh "
-        _installed_casks=" 1password-cli "
-        _installed_taps=" homebrew/core "
-
-        _brew_has_formula() { [[ "${_installed_formulae}" == *" $1 "* ]]; }
-        _brew_has_cask()    { [[ "${_installed_casks}" == *" $1 "* ]]; }
-        _brew_has_tap()     { [[ "${_installed_taps}" == *" $1 "* ]]; }
-
-        entry_is_brew_managed() {
-            local pkg_type="$1" pkg_name="$2"
-            case "${pkg_type}" in
-                brew) _brew_has_formula "${pkg_name}" && return 0 ;;
-                cask) _brew_has_cask "${pkg_name}" && return 0 ;;
-                tap)  _brew_has_tap "${pkg_name}" && return 0 ;;
-            esac
-            return 1
-        }
-
-        entry_is_brew_managed brew git && echo "MANAGED" || echo "NOT_MANAGED"
-    '
-    assert_success
-    assert_output "MANAGED"
-}
-
-@test "entry_is_brew_managed returns false for missing formula" {
-    run bash -c '
-        _installed_formulae=" git curl "
-        _installed_casks=""
-        _installed_taps=""
-
-        _brew_has_formula() { [[ "${_installed_formulae}" == *" $1 "* ]]; }
-        _brew_has_cask()    { [[ "${_installed_casks}" == *" $1 "* ]]; }
-        _brew_has_tap()     { [[ "${_installed_taps}" == *" $1 "* ]]; }
-
-        entry_is_brew_managed() {
-            local pkg_type="$1" pkg_name="$2"
-            case "${pkg_type}" in
-                brew) _brew_has_formula "${pkg_name}" && return 0 ;;
-                cask) _brew_has_cask "${pkg_name}" && return 0 ;;
-                tap)  _brew_has_tap "${pkg_name}" && return 0 ;;
-            esac
-            return 1
-        }
-
-        entry_is_brew_managed brew ripgrep && echo "MANAGED" || echo "NOT_MANAGED"
-    '
-    assert_success
-    assert_output "NOT_MANAGED"
-}
-
-@test "entry_is_brew_managed detects installed cask" {
-    run bash -c '
-        _installed_formulae=""
-        _installed_casks=" 1password-cli font-hack-nerd-font "
-        _installed_taps=""
-
-        _brew_has_formula() { [[ "${_installed_formulae}" == *" $1 "* ]]; }
-        _brew_has_cask()    { [[ "${_installed_casks}" == *" $1 "* ]]; }
-        _brew_has_tap()     { [[ "${_installed_taps}" == *" $1 "* ]]; }
-
-        entry_is_brew_managed() {
-            local pkg_type="$1" pkg_name="$2"
-            case "${pkg_type}" in
-                brew) _brew_has_formula "${pkg_name}" && return 0 ;;
-                cask) _brew_has_cask "${pkg_name}" && return 0 ;;
-                tap)  _brew_has_tap "${pkg_name}" && return 0 ;;
-            esac
-            return 1
-        }
-
-        entry_is_brew_managed cask 1password-cli && echo "MANAGED" || echo "NOT_MANAGED"
-    '
-    assert_success
-    assert_output "MANAGED"
-}
-
-@test "entry_is_brew_managed matches fully-qualified casks by short name" {
-    run bash -c '
-        _installed_formulae=""
-        _installed_casks=" chezit "
-        _installed_taps=""
-
-        _brew_has_formula() { [[ "${_installed_formulae}" == *" $1 "* ]]; }
-        _brew_has_cask()    { [[ "${_installed_casks}" == *" $1 "* ]]; }
-        _brew_has_tap()     { [[ "${_installed_taps}" == *" $1 "* ]]; }
-        brew_entry_short_name() { printf "%s\n" "${1##*/}"; }
-
-        entry_is_brew_managed() {
-            local pkg_type="$1" pkg_name="$2"
-            case "${pkg_type}" in
-                brew) _brew_has_formula "${pkg_name}" && return 0 ;;
-                cask) _brew_has_cask "$(brew_entry_short_name "${pkg_name}")" && return 0 ;;
-                tap)  _brew_has_tap "${pkg_name}" && return 0 ;;
-            esac
-            return 1
-        }
-
-        entry_is_brew_managed cask daptify14/tap/chezit && echo "MANAGED" || echo "NOT_MANAGED"
-    '
-    assert_success
-    assert_output "MANAGED"
-}
-
-@test "entry_is_brew_managed detects installed tap" {
-    run bash -c '
-        _installed_formulae=""
-        _installed_casks=""
-        _installed_taps=" homebrew/core homebrew/cask "
-
-        _brew_has_formula() { [[ "${_installed_formulae}" == *" $1 "* ]]; }
-        _brew_has_cask()    { [[ "${_installed_casks}" == *" $1 "* ]]; }
-        _brew_has_tap()     { [[ "${_installed_taps}" == *" $1 "* ]]; }
-
-        entry_is_brew_managed() {
-            local pkg_type="$1" pkg_name="$2"
-            case "${pkg_type}" in
-                brew) _brew_has_formula "${pkg_name}" && return 0 ;;
-                cask) _brew_has_cask "${pkg_name}" && return 0 ;;
-                tap)  _brew_has_tap "${pkg_name}" && return 0 ;;
-            esac
-            return 1
-        }
-
-        entry_is_brew_managed tap homebrew/cask && echo "MANAGED" || echo "NOT_MANAGED"
-    '
-    assert_success
-    assert_output "MANAGED"
-}
-
-@test "optional entries only count as installed when Homebrew manages them" {
-    run bash -c '
-        set -euo pipefail
-
-        entry_is_brew_managed() {
-            local pkg_type="$1"
-            local pkg_name="$2"
-
-            [[ "${pkg_type}:${pkg_name}" == "cask:chatgpt" ]]
-        }
-
-        optional_entry_is_installed() {
-            local pkg_type="$1"
-            local pkg_name="$2"
-
-            if entry_is_brew_managed "${pkg_type}" "${pkg_name}"; then
-                return 0
-            fi
-
-            return 1
-        }
-
-        optional_entry_is_installed cask chatgpt && echo "INSTALLED" || echo "MISSING"
-        optional_entry_is_installed cask claude && echo "INSTALLED" || echo "MISSING"
-    '
-    assert_success
-    assert_output $'INSTALLED\nMISSING'
-}
-
-@test "optional_prompt_mode skips when no controlling terminal can be opened" {
-    run bash -c '
-        has_interactive_tty() {
-            local tty_device="${BREW_TTY_DEVICE:-/dev/tty}"
-            ( : < "${tty_device}" ) 2>/dev/null || return 1
-            ( : > "${tty_device}" ) 2>/dev/null || return 1
-            return 0
-        }
-
-        optional_prompt_mode() {
-            if ! has_interactive_tty; then
-                printf "skip\n"
-                return
-            fi
-
-            if command -v gum >/dev/null 2>&1; then
-                printf "gum\n"
-            else
-                printf "read\n"
-            fi
-        }
-
-        BREW_TTY_DEVICE="/nonexistent/tty" optional_prompt_mode
-    '
-    assert_success
-    assert_output "skip"
-}
-
-@test "optional_prompt_mode prompts when a terminal device is openable even if stdout is piped" {
-    run bash -c '
-        has_interactive_tty() {
-            local tty_device="${BREW_TTY_DEVICE:-/dev/tty}"
-            ( : < "${tty_device}" ) 2>/dev/null || return 1
-            ( : > "${tty_device}" ) 2>/dev/null || return 1
-            return 0
-        }
-
-        optional_prompt_mode() {
-            if ! has_interactive_tty; then
-                printf "skip\n"
-                return
-            fi
-
-            if command -v gum >/dev/null 2>&1; then
-                printf "gum\n"
-            else
-                printf "read\n"
-            fi
-        }
-
-        # /dev/null is always openable for read and write, standing in for a
-        # usable terminal device; stdout here is a pipe (bats run captures it).
-        PATH="/nonexistent" BREW_TTY_DEVICE="/dev/null" optional_prompt_mode
-    '
-    assert_success
-    assert_output "read"
-}
-
-# ---------------------------------------------------------------------------
-# Linux cask filtering
-# ---------------------------------------------------------------------------
-
-@test "Linux cask filtering skips non-font casks" {
-    run bash -c '
-        brew_entry_short_name() { printf "%s\n" "${1##*/}"; }
-        linux_cask_is_supported() {
-            local pkg_name="$1"
-            local short_name=""
-            short_name="$(brew_entry_short_name "${pkg_name}")"
-            case "${short_name}" in
-                font-*|chezit) return 0 ;;
-                *) return 1 ;;
-            esac
-        }
-        entry_is_supported_on_platform() {
-            local pkg_type="$1" pkg_name="$2"
-            if [[ "${os_name}" != "Linux" || "${pkg_type}" != "cask" ]]; then
-                return 0
-            fi
-            linux_cask_is_supported "${pkg_name}"
-        }
-
-        os_name="Linux"
-        if entry_is_supported_on_platform cask 1password-cli; then
-            echo "INCLUDED"
-        else
-            echo "SKIPPED"
-        fi
-    '
-    assert_success
-    assert_output "SKIPPED"
-}
-
-@test "Linux cask filtering allows font casks" {
-    run bash -c '
-        brew_entry_short_name() { printf "%s\n" "${1##*/}"; }
-        linux_cask_is_supported() {
-            local pkg_name="$1"
-            local short_name=""
-            short_name="$(brew_entry_short_name "${pkg_name}")"
-            case "${short_name}" in
-                font-*|chezit) return 0 ;;
-                *) return 1 ;;
-            esac
-        }
-        entry_is_supported_on_platform() {
-            local pkg_type="$1" pkg_name="$2"
-            if [[ "${os_name}" != "Linux" || "${pkg_type}" != "cask" ]]; then
-                return 0
-            fi
-            linux_cask_is_supported "${pkg_name}"
-        }
-
-        os_name="Linux"
-        if entry_is_supported_on_platform cask font-hack-nerd-font; then
-            echo "INCLUDED"
-        else
-            echo "SKIPPED"
-        fi
-    '
-    assert_success
-    assert_output "INCLUDED"
-}
-
-@test "Linux cask filtering allows fully-qualified chezit cask" {
-    run bash -c '
-        brew_entry_short_name() { printf "%s\n" "${1##*/}"; }
-        linux_cask_is_supported() {
-            local pkg_name="$1"
-            local short_name=""
-            short_name="$(brew_entry_short_name "${pkg_name}")"
-            case "${short_name}" in
-                font-*|chezit) return 0 ;;
-                *) return 1 ;;
-            esac
-        }
-        entry_is_supported_on_platform() {
-            local pkg_type="$1" pkg_name="$2"
-            if [[ "${os_name}" != "Linux" || "${pkg_type}" != "cask" ]]; then
-                return 0
-            fi
-            linux_cask_is_supported "${pkg_name}"
-        }
-
-        os_name="Linux"
-        if entry_is_supported_on_platform cask daptify14/tap/chezit; then
-            echo "INCLUDED"
-        else
-            echo "SKIPPED"
-        fi
-    '
-    assert_success
-    assert_output "INCLUDED"
-}
-
-@test "Darwin cask filtering includes all casks" {
-    run bash -c '
-        brew_entry_short_name() { printf "%s\n" "${1##*/}"; }
-        linux_cask_is_supported() {
-            local pkg_name="$1"
-            local short_name=""
-            short_name="$(brew_entry_short_name "${pkg_name}")"
-            case "${short_name}" in
-                font-*|chezit) return 0 ;;
-                *) return 1 ;;
-            esac
-        }
-        entry_is_supported_on_platform() {
-            local pkg_type="$1" pkg_name="$2"
-            if [[ "${os_name}" != "Linux" || "${pkg_type}" != "cask" ]]; then
-                return 0
-            fi
-            linux_cask_is_supported "${pkg_name}"
-        }
-
-        os_name="Darwin"
-        if entry_is_supported_on_platform cask 1password-cli; then
-            echo "INCLUDED"
-        else
-            echo "SKIPPED"
-        fi
-    '
-    assert_success
-    assert_output "INCLUDED"
-}
-
-# ---------------------------------------------------------------------------
-# Brewfile.core is well-formed
-# ---------------------------------------------------------------------------
-
-@test "Brewfile.core contains only valid entry types" {
-    local brewfile="${PROJECT_ROOT}/homebrew/Brewfile.core"
-    run bash -c '
-        while IFS= read -r raw_line; do
-            line="${raw_line#"${raw_line%%[![:space:]]*}"}"
-            line="${line%"${line##*[![:space:]]}"}"
-            [[ -z "${line}" ]] && continue
-            [[ "${line}" == \#* ]] && continue
-            if [[ ! "${line}" =~ ^(brew|cask|tap|mas)[[:space:]]+ ]]; then
-                echo "INVALID: ${line}"
-                exit 1
-            fi
-        done < "'"${brewfile}"'"
-        echo "ALL_VALID"
-    '
-    assert_success
-    assert_output "ALL_VALID"
+@test "Brewfile.core holds only entries, comments, and an OS.mac? block" {
+    run grep -vE '^\s*$|^\s*#|^\s*(brew|cask|tap|mas) "|^if OS\.mac\?$|^end$' "${PROJECT_ROOT}/homebrew/Brewfile.core"
+    assert_failure
 }
 
 @test "Brewfile.core has no duplicate entries" {
-    local brewfile="${PROJECT_ROOT}/homebrew/Brewfile.core"
-    run bash -c '
-        entries_file="$(mktemp)"
-        while IFS= read -r raw_line; do
-            line="${raw_line#"${raw_line%%[![:space:]]*}"}"
-            line="${line%"${line##*[![:space:]]}"}"
-            [[ -z "${line}" ]] && continue
-            [[ "${line}" == \#* ]] && continue
-            if [[ "${line}" =~ ^(brew|cask|tap|mas)[[:space:]]+\"([^\"]+)\" ]]; then
-                printf "%s:%s\n" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" >> "${entries_file}"
-            fi
-        done < "'"${brewfile}"'"
-        duplicate="$(sort "${entries_file}" | uniq -d | head -n 1)"
-        rm -f "${entries_file}"
-        if [[ -n "${duplicate}" ]]; then
-            echo "DUPLICATE: ${duplicate}"
-            exit 1
-        fi
-        echo "NO_DUPLICATES"
-    '
-    assert_success
-    assert_output "NO_DUPLICATES"
+    run bash -c "grep -oE '^\s*(brew|cask) \"[^\"]+\"' '${PROJECT_ROOT}/homebrew/Brewfile.core' | sed 's/^ *//' | sort | uniq -d"
+    assert_output ""
+}
+
+@test "Brewfile.core keeps its casks to macOS" {
+    run awk '/^if OS\.mac\?$/ { mac = 1 } /^end$/ { mac = 0 } /^\s*cask / && !mac { print }' "${PROJECT_ROOT}/homebrew/Brewfile.core"
+    assert_output ""
 }
 
 @test "Brewfile.macos leaves Claude Code to the native installer" {
@@ -489,15 +87,6 @@ _parse_brewfile_line() {
     assert_success
 }
 
-# ---------------------------------------------------------------------------
-# Config-referenced tools must be installed by a Brewfile
-#
-# Guards against silent drift: if git config invokes an external
-# tool, the install must provide it. Each row maps a config file + the binary
-# it references to the Homebrew formula that supplies that binary (the names
-# differ for difftastic -> difft).
-# ---------------------------------------------------------------------------
-
 # Every brew/cask package declared across all Brewfiles, one short name per line.
 _all_brewfile_packages() {
     local brewfile raw_line line
@@ -506,7 +95,6 @@ _all_brewfile_packages() {
         while IFS= read -r raw_line; do
             line="${raw_line#"${raw_line%%[![:space:]]*}"}"
             [[ "${line}" =~ ^(brew|cask)[[:space:]]+\"([^\"]+)\" ]] || continue
-            # Strip any tap prefix: superradcompany/tap/microsandbox -> microsandbox
             printf '%s\n' "${BASH_REMATCH[2]##*/}"
         done < "${brewfile}"
     done
@@ -514,11 +102,11 @@ _all_brewfile_packages() {
 
 # config-file (relative to repo) | binary referenced | formula expected to supply it
 _config_tool_map() {
-    cat <<'EOF'
+    cat <<'MAP'
 stow/common/.config/git/config|fzf|fzf
 stow/common/.config/git/config|git-lfs|git-lfs
 stow/common/.config/git/config|ghq|ghq
-EOF
+MAP
 }
 
 @test "tools referenced by git config are provided by a Brewfile" {
@@ -527,15 +115,10 @@ EOF
 
     while IFS='|' read -r config_file binary formula; do
         [[ -z "${config_file}" ]] && continue
-
-        # Keep the table honest: the binary must actually be referenced in the
-        # config, so this test fails loudly if a reference is renamed/removed.
         if ! grep -qF "${binary}" "${PROJECT_ROOT}/${config_file}"; then
             missing+="'${binary}' is no longer referenced in ${config_file}"$'\n'
             continue
         fi
-
-        # ...and some Brewfile must install the formula that provides it.
         if ! grep -qxF "${formula}" <<<"${packages}"; then
             missing+="${config_file} references '${binary}' but no Brewfile installs '${formula}'"$'\n'
         fi
@@ -548,503 +131,129 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# OS platform detection (from brew.sh case statement)
+# brew.sh
 # ---------------------------------------------------------------------------
 
-@test "brew.sh OSTYPE case recognizes linux-gnu" {
-    run bash -c '
-        OSTYPE="linux-gnu"
-        case "${OSTYPE}" in
-            darwin*) echo "Darwin" ;;
-            linux*)  echo "Linux" ;;
-            *)       echo "Unsupported" ;;
-        esac
-    '
+@test "brew_bin_dir knows macOS and Linux and rejects other systems" {
+    run bash -c 'source "$1"; OSTYPE=linux-gnu brew_bin_dir' _ "${PROJECT_ROOT}/homebrew/brew.sh"
     assert_success
-    assert_output "Linux"
-}
-
-@test "brew.sh OSTYPE case recognizes darwin23" {
-    run bash -c '
-        OSTYPE="darwin23"
-        case "${OSTYPE}" in
-            darwin*) echo "Darwin" ;;
-            linux*)  echo "Linux" ;;
-            *)       echo "Unsupported" ;;
-        esac
-    '
+    assert_output "/home/linuxbrew/.linuxbrew/bin"
+    run bash -c 'source "$1"; OSTYPE=darwin24 brew_bin_dir' _ "${PROJECT_ROOT}/homebrew/brew.sh"
     assert_success
-    assert_output "Darwin"
-}
-
-@test "brew.sh OSTYPE case rejects freebsd" {
-    run bash -c '
-        OSTYPE="freebsd14"
-        case "${OSTYPE}" in
-            darwin*) echo "Darwin" ;;
-            linux*)  echo "Linux" ;;
-            *)       echo "Unsupported"; exit 1 ;;
-        esac
-    '
+    assert_output --regexp "^/(opt/homebrew|usr/local)/bin$"
+    run bash -c 'source "$1"; OSTYPE=freebsd14 brew_bin_dir' _ "${PROJECT_ROOT}/homebrew/brew.sh"
     assert_failure
-    assert_output "Unsupported"
+    assert_output --partial "Unsupported OS: freebsd14"
 }
 
-# ---------------------------------------------------------------------------
-# End-to-end brew flow in an isolated sandbox
-# ---------------------------------------------------------------------------
-
-@test "brew.sh installs only pending entries inside an isolated brew sandbox" {
-    run bash -c '
-        set -euo pipefail
-
-        export HOME="'"${TEST_TMPDIR}"'/sandbox-home"
-        export TEST_ROOT="'"${TEST_TMPDIR}"'/brew-sandbox"
-        export TEST_BIN="${TEST_ROOT}/bin"
-        export TEST_LOG="${TEST_TMPDIR}/brew-actions.log"
-        export TEST_BUNDLE="${TEST_TMPDIR}/bundle.txt"
-        export PATH="${TEST_BIN}:/usr/bin:/bin"
-        export OSTYPE="linux-gnu"
-
-        mkdir -p "${HOME}" "${TEST_BIN}"
-        : > "${TEST_LOG}"
-
-        cat > "${TEST_BIN}/brew" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-set -euo pipefail
-
-printf "brew %s\n" "$*" >> "${TEST_LOG}"
-
-case "${1:-}" in
-    --prefix)
-        printf "%s\n" "${TEST_ROOT}"
-        ;;
-    list)
-        case "${2:-}" in
-            --formula)
-                printf "jq\n"
-                ;;
-            --cask)
-                exit 0
-                ;;
-        esac
-        ;;
-    tap)
-        exit 0
-        ;;
-    bundle)
-        if [[ "${2:-}" == "install" ]]; then
-            bundle_file="${3#--file=}"
-            cp "${bundle_file}" "${TEST_BUNDLE}"
-            exit 0
-        fi
-        ;;
-esac
-
-exit 0
-MOCK
-
-        chmod +x "${TEST_BIN}/brew"
-
-        cd "'"${PROJECT_ROOT}"'"
-        ./homebrew/brew.sh
-
-        [[ -f "${TEST_BUNDLE}" ]] || { echo "missing bundle file"; exit 1; }
-        grep -qx '"'"'brew "shellcheck"'"'"' "${TEST_BUNDLE}" || { echo "missing shellcheck"; exit 1; }
-        grep -qx '"'"'brew "gum"'"'"' "${TEST_BUNDLE}" || { echo "missing gum"; exit 1; }
-        grep -qx '"'"'cask "font-hack-nerd-font"'"'"' "${TEST_BUNDLE}" || { echo "missing font cask"; exit 1; }
-        if grep -qx '"'"'brew "jq"'"'"' "${TEST_BUNDLE}"; then
-            echo "installed formula was not filtered"
-            exit 1
-        fi
-        if grep -qx '"'"'cask "1password-cli"'"'"' "${TEST_BUNDLE}"; then
-            echo "linux should skip non-font casks"
-            exit 1
-        fi
-    '
-    assert_success
-    assert_output --partial "Installing core Homebrew packages..."
-}
-
-@test "is_font_cask recognizes font casks by short name" {
-    run bash -c '
-        brew_entry_short_name() { printf "%s\n" "${1##*/}"; }
-        is_font_cask() { [[ "$(brew_entry_short_name "$1")" == font-* ]]; }
-
-        is_font_cask "font-hack-nerd-font" && echo "FONT" || echo "NOT_FONT"
-        is_font_cask "daptify14/tap/chezit" && echo "FONT" || echo "NOT_FONT"
-    '
-    assert_success
-    assert_output $'FONT\nNOT_FONT'
-}
-
-@test "remove_conflicting_font_cask_files deletes only listed font artifacts" {
-    run bash -c '
-        set -euo pipefail
-
-        export HOME="'"${TEST_TMPDIR}"'/home"
-        export fonts_dir="${HOME}/Library/Fonts"
-        mkdir -p "${fonts_dir}"
-        touch "${fonts_dir}/0xProtoNerdFont-Bold.ttf"
-        touch "${fonts_dir}/KeepMe.ttf"
-
-        brew_entry_short_name() { printf "%s\n" "${1##*/}"; }
-        font_cask_fonts_dir() { printf "%s\n" "${fonts_dir}"; }
-        font_cask_font_basenames() { printf "%s\n" "0xProtoNerdFont-Bold.ttf"; }
-        log_warn() { printf "warn: %s\n" "$*"; }
-
-        remove_conflicting_font_cask_files() {
-            local cask="$1"
-            local font_basename=""
-            local target_dir=""
-
-            target_dir="$(font_cask_fonts_dir)"
-            while IFS= read -r font_basename; do
-                [[ -n "${font_basename}" ]] || continue
-                [[ -e "${target_dir}/${font_basename}" ]] || continue
-                log_warn "Removing conflicting font ${target_dir}/${font_basename} before installing ${cask}"
-                rm -f "${target_dir}/${font_basename}"
-            done < <(font_cask_font_basenames "${cask}")
-        }
-
-        remove_conflicting_font_cask_files "font-0xproto-nerd-font"
-
-        [[ ! -e "${fonts_dir}/0xProtoNerdFont-Bold.ttf" ]]
-        [[ -e "${fonts_dir}/KeepMe.ttf" ]]
-    '
-    assert_success
-}
-
-@test "prepare_font_casks_for_install skips brew-managed font casks" {
-    run bash -c '
-        set -euo pipefail
-
-        export removed=0
-        brew_entry_short_name() { printf "%s\n" "${1##*/}"; }
-        is_font_cask() { [[ "$(brew_entry_short_name "$1")" == font-* ]]; }
-        entry_is_brew_managed() { [[ "$2" == "font-hack-nerd-font" ]]; }
-        remove_conflicting_font_cask_files() { removed=1; }
-
-        prepare_font_casks_for_install() {
-            local pkg_name=""
-            for pkg_name in "$@"; do
-                [[ -n "${pkg_name}" ]] || continue
-                is_font_cask "${pkg_name}" || continue
-                if entry_is_brew_managed cask "${pkg_name}"; then
-                    continue
-                fi
-                remove_conflicting_font_cask_files "${pkg_name}"
-            done
-        }
-
-        prepare_font_casks_for_install "font-hack-nerd-font" "font-0xproto-nerd-font"
-        [[ "${removed}" -eq 1 ]]
-    '
-    assert_success
-}
-
-@test "brew.sh --help prints usage and exits without touching brew" {
-    run bash -c '
-        cd "'"${PROJECT_ROOT}"'"
-        ./homebrew/brew.sh --help
-    '
+@test "brew.sh --help prints usage and rejects unknown options without touching brew" {
+    run bash "${PROJECT_ROOT}/homebrew/brew.sh" --help
     assert_success
     assert_output --partial "Usage: brew.sh"
-    assert_output --partial "--verbose"
-}
-
-@test "brew.sh rejects unknown options" {
-    run bash -c '
-        cd "'"${PROJECT_ROOT}"'"
-        ./homebrew/brew.sh --bogus-flag
-    '
+    run bash "${PROJECT_ROOT}/homebrew/brew.sh" --bogus-flag
     assert_failure
     assert_output --partial "Unknown option: --bogus-flag"
+    [[ ! -s "${TEST_LOG}" ]]
 }
 
-@test "brew.sh --verbose passes --verbose through to brew bundle install and skips the spinner" {
-    run bash -c '
-        set -euo pipefail
+@test "brew.sh bundles the core Brewfile without upgrades and cleans up, offering nothing on Linux" {
+    run_brew_sh linux-gnu
+    assert_success
+    assert_output --partial "Installing core Homebrew packages..."
+    refute_output --partial "Optional Homebrew packages"
+    run grep -x "brew bundle install --no-upgrade --file=${PROJECT_ROOT}/homebrew/Brewfile.core" "${TEST_LOG}"
+    assert_success
+    run grep -x "brew cleanup --prune=all" "${TEST_LOG}"
+    assert_success
+    run grep -c "brew bundle install" "${TEST_LOG}"
+    assert_output "1"
+}
 
-        export HOME="'"${TEST_TMPDIR}"'/sandbox-home"
-        export TEST_ROOT="'"${TEST_TMPDIR}"'/brew-verbose"
-        export TEST_BIN="${TEST_ROOT}/bin"
-        export TEST_LOG="${TEST_TMPDIR}/brew-verbose.log"
-        export TEST_BUNDLE="${TEST_TMPDIR}/bundle-verbose.txt"
-        export PATH="${TEST_BIN}:/usr/bin:/bin"
-        export OSTYPE="linux-gnu"
+@test "brew.sh skips a Brewfile whose packages are all installed" {
+    run_brew_sh linux-gnu BREW_CHECK_OK=1
+    assert_success
+    assert_output --partial "All core Homebrew packages already installed"
+    refute_line --regexp "^brew bundle install"
+    run grep "bundle install" "${TEST_LOG}"
+    assert_failure
+}
 
-        mkdir -p "${HOME}" "${TEST_BIN}"
-        : > "${TEST_LOG}"
-
-        cat > "${TEST_BIN}/gum" <<'"'"'MOCK'"'"'
+@test "brew.sh --verbose passes --verbose to bundle and cleanup and skips the spinner" {
+    cat > "${TEST_BIN}/gum" <<'MOCK'
 #!/usr/bin/env bash
 echo "gum $*"
 MOCK
-        chmod +x "${TEST_BIN}/gum"
-
-        cat > "${TEST_BIN}/brew" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-set -euo pipefail
-
-printf "brew %s\n" "$*" >> "${TEST_LOG}"
-
-case "${1:-}" in
-    --prefix)
-        printf "%s\n" "${TEST_ROOT}"
-        ;;
-    list)
-        case "${2:-}" in
-            --formula)
-                printf "git\n"
-                ;;
-            --cask)
-                exit 0
-                ;;
-        esac
-        ;;
-    tap)
-        exit 0
-        ;;
-    bundle)
-        if [[ "${2:-}" == "install" ]]; then
-            bundle_file="${3#--file=}"
-            cp "${bundle_file}" "${TEST_BUNDLE}"
-            [[ "${4:-}" == "--verbose" ]] || { echo "missing --verbose on bundle install" >&2; exit 1; }
-            exit 0
-        fi
-        ;;
-esac
-
-exit 0
-MOCK
-
-        chmod +x "${TEST_BIN}/brew"
-
-        cd "'"${PROJECT_ROOT}"'"
-        ./homebrew/brew.sh --verbose
-
-        [[ -f "${TEST_BUNDLE}" ]] || { echo "missing bundle file"; exit 1; }
-    '
+    chmod +x "${TEST_BIN}/gum"
+    write_brew_mock
+    run env PATH="${TEST_BIN}:/usr/bin:/bin" HOME="${TEST_TMPDIR}/home" OSTYPE=linux-gnu \
+        TEST_TMPDIR="${TEST_TMPDIR}" TEST_LOG="${TEST_LOG}" TEST_BUNDLE="${TEST_BUNDLE}" \
+        bash "${PROJECT_ROOT}/homebrew/brew.sh" --verbose < /dev/null
     assert_success
     refute_output --partial "gum spin"
-}
-
-@test "brew.sh links the 1Password SSH agent socket on macOS when op is available" {
-    run bash -c '
-        set -euo pipefail
-
-        export HOME="'"${TEST_TMPDIR}"'/sandbox-home"
-        export TEST_ROOT="'"${TEST_TMPDIR}"'/brew-macos"
-        export TEST_BIN="${TEST_ROOT}/bin"
-        export TEST_LOG="${TEST_TMPDIR}/brew-macos.log"
-        export PATH="${TEST_BIN}:/usr/bin:/bin"
-        export OSTYPE="darwin24"
-        # Force the no-controlling-terminal path so the optional picker is
-        # skipped deterministically regardless of how the test harness is run.
-        export BREW_TTY_DEVICE="/nonexistent/tty"
-
-        mkdir -p "${HOME}" "${TEST_BIN}"
-        : > "${TEST_LOG}"
-
-        cat > "${TEST_BIN}/brew" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-set -euo pipefail
-
-printf "brew %s\n" "$*" >> "${TEST_LOG}"
-
-case "${1:-}" in
-    --prefix)
-        printf "%s\n" "${TEST_ROOT}"
-        ;;
-    list)
-        exit 0
-        ;;
-    tap)
-        exit 0
-        ;;
-    info)
-        printf "{}\n"
-        ;;
-    bundle)
-        exit 0
-        ;;
-    cleanup)
-        exit 0
-        ;;
-    --cache)
-        printf "%s\n" "${TEST_ROOT}/cache"
-        ;;
-esac
-MOCK
-
-        cat > "${TEST_BIN}/op" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-exit 0
-MOCK
-
-        chmod +x "${TEST_BIN}/brew" "${TEST_BIN}/op"
-
-        cd "'"${PROJECT_ROOT}"'"
-        ./homebrew/brew.sh
-
-        link_path="${HOME}/.1password/agent.sock"
-        expected_target="${HOME}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
-
-        [[ -L "${link_path}" ]] || { echo "missing agent symlink"; exit 1; }
-        [[ "$(readlink "${link_path}")" == "${expected_target}" ]] || {
-            echo "unexpected symlink target"
-            exit 1
-        }
-    '
+    run grep -x "brew bundle install --no-upgrade --file=${PROJECT_ROOT}/homebrew/Brewfile.core --verbose" "${TEST_LOG}"
     assert_success
-    assert_output --partial "Linked 1Password SSH agent socket"
-    assert_output --partial "Skipping optional Homebrew package selection because no interactive terminal was detected"
-}
-
-@test "brew.sh optional picker reports installed packages and labels apps installed outside Homebrew" {
-    command -v jq >/dev/null 2>&1 || skip "jq is required to read cask metadata"
-
-    run bash -c '
-        set -euo pipefail
-
-        export HOME="'"${TEST_TMPDIR}"'/sandbox-home"
-        export TEST_ROOT="'"${TEST_TMPDIR}"'/brew-picker"
-        export TEST_BIN="${TEST_ROOT}/bin"
-        export TEST_LOG="${TEST_TMPDIR}/brew-picker.log"
-        export TEST_BUNDLE="${TEST_TMPDIR}/bundle-picker.txt"
-        export TEST_CHOOSE="${TEST_TMPDIR}/gum-choose-args.txt"
-        other_bin="${TEST_TMPDIR}/other-bin"
-        export PATH="${TEST_BIN}:${other_bin}:/usr/bin:/bin"
-        export OSTYPE="darwin24"
-        # A regular file stands in for the terminal so the gum picker runs.
-        export BREW_TTY_DEVICE="${TEST_TMPDIR}/fake-tty"
-        export BREW_APP_DIRS="${HOME}/Applications"
-
-        mkdir -p "${HOME}/Applications/Claude.app" "${HOME}/Applications/Tailscale.app" \
-            "${TEST_BIN}" "${other_bin}"
-        : > "${TEST_LOG}"
-        : > "${BREW_TTY_DEVICE}"
-        ln -s "$(command -v jq)" "${TEST_BIN}/jq"
-        # wget installed by something other than Homebrew.
-        printf "#!/bin/sh\n" > "${other_bin}/wget"
-        chmod +x "${other_bin}/wget"
-
-        cat > "${TEST_BIN}/gum" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-case "${1:-}" in
-    choose)
-        printf "%s\n" "$@" > "${TEST_CHOOSE}"
-        printf "claude\n"
-        ;;
-    log)
-        shift 3
-        echo "$*"
-        ;;
-esac
-MOCK
-
-        cat > "${TEST_BIN}/brew" <<'"'"'MOCK'"'"'
-#!/usr/bin/env bash
-set -euo pipefail
-
-printf "brew %s\n" "$*" >> "${TEST_LOG}"
-
-case "${1:-}" in
-    --prefix)
-        printf "%s\n" "${TEST_ROOT}"
-        ;;
-    list)
-        case "${2:-}" in
-            --formula) printf "git\nhtop\n" ;;
-            --cask) printf "chatgpt\nclaude-code@latest\n" ;;
-        esac
-        ;;
-    info)
-        if [[ "$*" == *"--json=v2"* ]]; then
-            cat <<'"'"'JSON'"'"'
-{"casks":[
-  {"token":"claude","name":["Claude"],"artifacts":[{"app":["Claude.app"]}]},
-  {"token":"tailscale-app","name":["Tailscale"],"artifacts":[{"pkg":["Tailscale.pkg"]}]},
-  {"token":"firefox","name":["Mozilla Firefox"],"artifacts":[{"app":["Firefox.app"]}]}
-]}
-JSON
-        else
-            printf "{}\n"
-        fi
-        ;;
-    bundle)
-        if [[ "${2:-}" == "install" ]]; then
-            cp "${3#--file=}" "${TEST_BUNDLE}"
-        fi
-        ;;
-    --cache)
-        printf "%s\n" "${TEST_ROOT}/cache"
-        ;;
-esac
-exit 0
-MOCK
-
-        chmod +x "${TEST_BIN}/gum" "${TEST_BIN}/brew"
-
-        cd "'"${PROJECT_ROOT}"'"
-        ./homebrew/brew.sh --verbose
-
-        echo "--- choose"
-        cat "${TEST_CHOOSE}"
-        echo "--- bundle"
-        cat "${TEST_BUNDLE}"
-    '
+    run grep -x "brew cleanup --prune=all --verbose" "${TEST_LOG}"
     assert_success
-    assert_output --partial "Already installed via Homebrew: htop, chatgpt, claude-code"
-    assert_output --regexp $'claude +installed outside Homebrew: [^\n]*/sandbox-home/Applications/Claude.app\tclaude'
-    assert_output --regexp $'tailscale-app +installed outside Homebrew: [^\n]*/sandbox-home/Applications/Tailscale.app\ttailscale-app'
-    assert_output --regexp $'wget +installed outside Homebrew: [^\n]*/other-bin/wget\twget'
-    assert_output --partial $'firefox\tfirefox'
-    refute_output --regexp $'\nclaude-code\t'
-    assert_output --partial $'--- bundle\ncask "claude"'
 }
 
-# ---------------------------------------------------------------------------
-# Brewfile selection follows the persona
-# ---------------------------------------------------------------------------
-
-# Runs brew.sh's Brewfile selection and required-install loop with
-# install_filtered_brewfile stubbed, against a scratch homebrew/ directory.
-_run_brewfile_selection() {
-    local brew_sh="${PROJECT_ROOT}/homebrew/brew.sh"
-    mkdir -p "${TEST_TMPDIR}/repo/homebrew"
-    touch "${TEST_TMPDIR}/repo/homebrew/Brewfile.core" "${TEST_TMPDIR}/repo/homebrew/Brewfile.work"
-    run bash -c "
-        set -euo pipefail
-        BASEDIR='${TEST_TMPDIR}/repo'
-        log_error() { printf 'ERROR %s\\n' \"\$*\"; }
-        install_filtered_brewfile() { printf 'INSTALL %s (%s)\\n' \"\${1##*/}\" \"\$2\"; }
-        $(sed -n '/^read -r -a BREWFILES/,/^read -r -a OPTIONAL_BREWFILES/p' "${brew_sh}")
-        $(sed -n '/^for brewfile_name in \${BREWFILES/,/^done$/p' "${brew_sh}")
-        printf 'OPTIONAL %s\\n' \"\${OPTIONAL_BREWFILES[*]:-none}\"
-    "
-}
-
-@test "brew.sh installs core and offers macos when run on its own" {
-    unset DOTFILES_BREWFILES DOTFILES_BREW_OPTIONAL
-    _run_brewfile_selection
+@test "brew.sh trusts each tap-qualified entry before bundling it" {
+    mkdir -p "${TEST_TMPDIR}/repo/homebrew" "${TEST_TMPDIR}/repo/scripts"
+    cp "${PROJECT_ROOT}/homebrew/brew.sh" "${TEST_TMPDIR}/repo/homebrew/"
+    cp "${PROJECT_ROOT}/scripts/common.sh" "${TEST_TMPDIR}/repo/scripts/"
+    printf 'brew "jq"\nbrew "some/tap/tool"\ncask "other/tap/app"\n' > "${TEST_TMPDIR}/repo/homebrew/Brewfile.core"
+    write_brew_mock
+    run env PATH="${TEST_BIN}:/usr/bin:/bin" HOME="${TEST_TMPDIR}/home" OSTYPE=linux-gnu \
+        TEST_TMPDIR="${TEST_TMPDIR}" TEST_LOG="${TEST_LOG}" TEST_BUNDLE="${TEST_BUNDLE}" \
+        bash "${TEST_TMPDIR}/repo/homebrew/brew.sh" < /dev/null
     assert_success
-    assert_output "INSTALL Brewfile.core (core Homebrew package)
-OPTIONAL macos"
-}
-
-@test "brew.sh installs every Brewfile the persona lists" {
-    DOTFILES_BREWFILES="core work" DOTFILES_BREW_OPTIONAL="" _run_brewfile_selection
+    run grep -x "brew trust --formula some/tap/tool" "${TEST_LOG}"
     assert_success
-    assert_line "INSTALL Brewfile.core (core Homebrew package)"
-    assert_line "INSTALL Brewfile.work (work Homebrew package)"
-    assert_line "OPTIONAL none"
-}
-
-@test "brew.sh fails on a Brewfile the persona names but the repo lacks" {
-    DOTFILES_BREWFILES="core missing" _run_brewfile_selection
+    run grep -x "brew trust --cask other/tap/app" "${TEST_LOG}"
+    assert_success
+    run grep "brew trust.*jq" "${TEST_LOG}"
     assert_failure
-    assert_line "INSTALL Brewfile.core (core Homebrew package)"
+}
+
+@test "brew.sh offers the pending macos entries and bundles the chosen ones" {
+    run_brew_sh darwin24 BREW_FORMULAE="htop tree" BREW_CASKS="chatgpt claude" DOTFILES_BREWFILES="" BREW_CHECK_OK=1
+    assert_success
+    assert_output --partial "No macos Homebrew packages selected"
+    run grep "bundle install" "${TEST_LOG}"
+    assert_failure
+
+    : > "${TEST_LOG}"
+    write_brew_mock
+    run env PATH="${TEST_BIN}:/usr/bin:/bin" HOME="${TEST_TMPDIR}/home" OSTYPE=darwin24 \
+        TEST_TMPDIR="${TEST_TMPDIR}" TEST_LOG="${TEST_LOG}" TEST_BUNDLE="${TEST_BUNDLE}" \
+        DOTFILES_PROMPT=read DOTFILES_BREWFILES="" BREW_FORMULAE="htop tree" BREW_CASKS="chatgpt claude" \
+        bash "${PROJECT_ROOT}/homebrew/brew.sh" <<< "1 2"
+    assert_success
+    assert_output --partial "Installing 2 optional Homebrew package(s)..."
+    # htop and tree are installed, so wget and the first cask are the first two offered.
+    run cat "${TEST_BUNDLE}"
+    assert_output 'brew "wget"
+brew "agent-browser"'
+    run grep -c "bundle install" "${TEST_LOG}"
+    assert_output "1"
+}
+
+@test "brew.sh says so when every optional entry is installed" {
+    local all
+    all="$(grep -oE '^(brew|cask) "[^"]+"' "${PROJECT_ROOT}/homebrew/Brewfile.macos" | sed -E 's/^[a-z]+ "([^"]+)"/\1/' | tr '\n' ' ')"
+    run_brew_sh darwin24 BREW_FORMULAE="${all}" BREW_CASKS="${all}" DOTFILES_BREWFILES="" BREW_CHECK_OK=1
+    assert_success
+    assert_output --partial "All macos Homebrew packages already installed"
+}
+
+@test "brew.sh installs every Brewfile the persona lists and fails on one the repo lacks" {
+    run_brew_sh linux-gnu DOTFILES_BREWFILES="core work" DOTFILES_BREW_OPTIONAL=""
+    assert_success
+    run grep -c "brew bundle install --no-upgrade --file=" "${TEST_LOG}"
+    assert_output "2"
+    run grep -x "brew bundle install --no-upgrade --file=${PROJECT_ROOT}/homebrew/Brewfile.work" "${TEST_LOG}"
+    assert_success
+
+    run_brew_sh linux-gnu DOTFILES_BREWFILES="core missing"
+    assert_failure
     assert_output --partial "No homebrew/Brewfile.missing"
 }
