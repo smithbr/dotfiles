@@ -28,11 +28,6 @@
 #   st TEAM/AGENT       the same, when two teams have an agent of that name
 #   st TEAM --dry-run   print the commands instead of opening iTerm2
 
-# st app: one tab, Claude Code as the lead.
-[app]
-dir = "~/Projects/my-app"
-args = ["--agent", "lead"]
-
 # st df: the lead and a plain session side by side; dev clears the team args.
 [df]
 dir = "~/.dotfiles"
