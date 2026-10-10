@@ -1,4 +1,3 @@
-# Throwaway VM, container or CI: shared shell config only, nothing private.
 os=darwin,linux
 layers=common
 agents=no

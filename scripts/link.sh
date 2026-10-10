@@ -103,7 +103,7 @@ Commands:
   status    Report missing, replaced, foreign, broken and stale links
   persona   Print the persona in effect and where it came from
             (flag, env, saved or default)
-  personas  List the personas this OS can use, with their descriptions
+  personas  List the personas this OS can use
   installs  Print the persona's brew, brew_optional and linux_optional lists
   add PATH...
             Start managing files from the home directory: copy each one into
@@ -254,13 +254,12 @@ persona_allows_platform() {
 }
 
 list_personas() {
-    local file description
+    local file
     [[ -d "${REPO}/personas" ]] || return 0
     for file in "${REPO}/personas"/*; do
         [[ -f "${file}" ]] || continue
         persona_allows_platform "${file}" || continue
-        description="$(sed -n 's/^# *//p' "${file}" | head -1)"
-        printf '%s\t%s\n' "$(basename "${file}")" "${description}"
+        basename "${file}"
     done
 }
 
@@ -289,11 +288,11 @@ load_persona() {
 
     file="${REPO}/personas/${name}"
     if [[ ! "${name}" =~ ^[a-z][a-z0-9-]*$ || ! -f "${file}" ]]; then
-        log_error "Unknown persona '${name}'. Choose one of: $(list_personas | cut -f1 | tr '\n' ' ')"
+        log_error "Unknown persona '${name}'. Choose one of: $(list_personas | tr '\n' ' ')"
         exit 2
     fi
     if ! persona_allows_platform "${file}"; then
-        log_error "Persona '${name}' is not for $(platform). Choose one of: $(list_personas | cut -f1 | tr '\n' ' ')"
+        log_error "Persona '${name}' is not for $(platform). Choose one of: $(list_personas | tr '\n' ' ')"
         exit 2
     fi
 

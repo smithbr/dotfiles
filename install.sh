@@ -426,27 +426,21 @@ select_files_to_archive() {
 # picker can draw. A closed stdin, EOF or an empty answer keeps the default
 # (the saved choice, else the OS default).
 prompt_persona() {
-    local default="$1" name description reply="" choice=""
-    local -a names=() items=()
+    local default="$1" name reply="" choice=""
+    local -a names=()
 
-    while IFS=$'\t' read -r name description; do
+    while IFS= read -r name; do
         names+=("${name}")
-        items+=("${name}: ${description}")
     done < <(bash "${LINK_SCRIPT}" personas)
     [[ "${#names[@]}" -gt 0 ]] || { printf '%s\n' "${default}"; return 0; }
 
     if [[ "${HAS_GUM}" == true ]]; then
-        local selected=""
-        for description in "${items[@]}"; do
-            [[ "${description}" == "${default}:"* ]] && selected="${description}"
-        done
-        reply="$(gum choose --header "Which persona is this machine?" --selected "${selected}" "${items[@]}" </dev/tty)" || reply=""
-        choice="${reply%%:*}"
+        choice="$(gum choose --header "Which persona is this machine?" --selected "${default}" "${names[@]}" </dev/tty)" || choice=""
     else
         local i=1
         printf 'Which persona is this machine?\n' >&2
-        for description in "${items[@]}"; do
-            printf '  %d) %s\n' "${i}" "${description}" >&2
+        for name in "${names[@]}"; do
+            printf '  %d) %s\n' "${i}" "${name}" >&2
             i=$((i + 1))
         done
         if ! read -r -p "Persona [${default}]: " reply; then

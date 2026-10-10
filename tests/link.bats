@@ -845,13 +845,13 @@ persona_state() {
 @test "lists the personas this OS can use" {
     run_link personas
     assert_success
-    assert_line --partial "home"$'\t'
-    assert_line --partial "work"$'\t'
+    assert_line "home"
+    assert_line "work"
     DOTFILES_OS=linux run_link personas
     assert_success
-    refute_line --partial "home"$'\t'
-    assert_line --partial "server"$'\t'
-    assert_line --partial "sandbox"$'\t'
+    refute_line "home"
+    assert_line "server"
+    assert_line "sandbox"
 }
 
 @test "uses the OS default until a persona is chosen, and says so" {

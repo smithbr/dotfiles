@@ -1,4 +1,3 @@
-# Work Mac: like home, plus Cursor, work-only files and Brewfile.work.
 os=darwin
 layers=common tools desktop work
 agents=yes
