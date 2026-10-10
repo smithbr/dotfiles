@@ -1,12 +1,7 @@
 # zmodload zsh/zprof
 
-export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${HOME}/.cache}"
-export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
-export XDG_DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-${HOME}/.local/run}"
-export XDG_BIN_HOME="${XDG_BIN_HOME:-${HOME}/.local/bin}"
-export XDG_STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
-export PATH="${XDG_BIN_HOME}:${PATH}"
+# Homebrew, when this shell did not go through .zprofile.
+[[ -n "${HOMEBREW_PREFIX:-}" ]] || source "${ZDOTDIR}/.zprofile"
 
 export ANTIDOTE_HOME="${XDG_CACHE_HOME}/antidote"
 export AWS_CLI_HISTORY_FILE="${XDG_STATE_HOME}/aws/cli/history.db"
@@ -14,14 +9,11 @@ export AWS_CONFIG_FILE="${XDG_CONFIG_HOME}/aws/config"
 export AWS_DATA_PATH="${XDG_DATA_HOME}/aws/models"
 export AWS_SDK_LOAD_CONFIG=1
 export AWS_SHARED_CREDENTIALS_FILE="${XDG_CONFIG_HOME}/aws/credentials"
-export DOCKER_BIN="${XDG_BIN_HOME}/docker"
 export DOCKER_CONFIG="${XDG_CONFIG_HOME}/docker"
 export GNUPGHOME="${XDG_DATA_HOME}/gnupg"
 export GOBIN="${XDG_BIN_HOME}"
 export HISTFILE="${XDG_STATE_HOME}/zsh/history"
-export MACHINE_STORAGE_PATH="${XDG_DATA_HOME}/docker-machine"
 export NODE_REPL_HISTORY="${XDG_STATE_HOME}/node/repl_history"
-export NPM_PREFIX="${XDG_DATA_HOME}/npm"
 export NPM_CONFIG_CACHE="${XDG_CACHE_HOME}/npm"
 export NPM_CONFIG_INIT_MODULE="${XDG_CONFIG_HOME}/npm/config/npm-init.js"
 export NPM_CONFIG_USERCONFIG="${XDG_CONFIG_HOME}/npm/npmrc"
@@ -29,7 +21,6 @@ export NVM_DIR="${XDG_CONFIG_HOME}/nvm"
 export RUSTUP_HOME="${XDG_DATA_HOME}/rustup"
 export STARSHIP_CACHE="${XDG_CACHE_HOME}/starship/cache"
 export STARSHIP_CONFIG="${XDG_CONFIG_HOME}/starship/starship.toml"
-export ZDOTDIR="${XDG_CONFIG_HOME}/zsh"
 
 # History
 export HISTSIZE=20000
@@ -38,14 +29,11 @@ setopt APPEND_HISTORY HIST_EXPIRE_DUPS_FIRST HIST_FIND_NO_DUPS HIST_IGNORE_ALL_D
 setopt HIST_IGNORE_DUPS HIST_IGNORE_SPACE HIST_REDUCE_BLANKS HIST_SAVE_NO_DUPS
 setopt HIST_VERIFY SHARE_HISTORY
 
-[[ -d "${HOME}/.zfunc" ]] && fpath=("${HOME}/.zfunc" "${fpath[@]}")
-
 [[ -f "${XDG_CONFIG_HOME}/shell/aliases" ]] && source "${XDG_CONFIG_HOME}/shell/aliases"
 [[ -f "${XDG_CONFIG_HOME}/shell/functions" ]] && source "${XDG_CONFIG_HOME}/shell/functions"
 
 # nvm: Homebrew installs nvm.sh under its prefix; NVM_DIR only holds versions.
-for nvm_sh in "${NVM_DIR}/nvm.sh" ${HOMEBREW_PREFIX:+"${HOMEBREW_PREFIX}/opt/nvm/nvm.sh"} \
-    /opt/homebrew/opt/nvm/nvm.sh /usr/local/opt/nvm/nvm.sh /home/linuxbrew/.linuxbrew/opt/nvm/nvm.sh; do
+for nvm_sh in "${NVM_DIR}/nvm.sh" ${HOMEBREW_PREFIX:+"${HOMEBREW_PREFIX}/opt/nvm/nvm.sh"}; do
     [[ -f "${nvm_sh}" ]] && { source "${nvm_sh}" --no-use; break; }
 done
 unset nvm_sh
@@ -56,33 +44,13 @@ op_target="${HOME}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.soc
 [[ "${OSTYPE}" == darwin* ]] && [[ ! -S "${op_sock}" ]] && [[ -S "${op_target}" ]] && mkdir -p "${HOME}/.1password" && ln -sf "${op_target}" "${op_sock}"
 [[ -S "${op_sock}" ]] && export SSHKEY_IDENTITY_AGENT="${op_sock}" SSH_AUTH_SOCK="${op_sock}"
 
-# Homebrew
-if ! command -v brew >/dev/null 2>&1; then
-  for d in /opt/homebrew /usr/local /home/linuxbrew/.linuxbrew; do
-    [[ -x "${d}/bin/brew" ]] && eval "$("${d}/bin/brew" shellenv)" && break
-  done
-fi
-
 # Local overrides
-if [[ -f "${ZDOTDIR}/.zshrc.local" ]]; then
-  source "${ZDOTDIR}/.zshrc.local"
-elif [[ -f "${HOME}/.zshrc.local" ]]; then
-  source "${HOME}/.zshrc.local"
-fi
+[[ -f "${ZDOTDIR}/.zshrc.local" ]] && source "${ZDOTDIR}/.zshrc.local"
 
 # Antidote
 zsh_plugins_file="${ZDOTDIR}/.zsh_plugins.txt"
 zsh_plugins_static="${XDG_CACHE_HOME}/zsh/.zsh_plugins.zsh"
-antidote_zsh=""
-for candidate in \
-  /opt/homebrew/opt/antidote/share/antidote/antidote.zsh \
-  /usr/local/opt/antidote/share/antidote/antidote.zsh \
-  /home/linuxbrew/.linuxbrew/opt/antidote/share/antidote/antidote.zsh; do
-  if [[ -f "${candidate}" ]]; then
-    antidote_zsh="${candidate}"
-    break
-  fi
-done
+antidote_zsh="${HOMEBREW_PREFIX:-/nonexistent}/opt/antidote/share/antidote/antidote.zsh"
 
 # Always source antidote when installed so `antidote bundle`, `antidote load`, etc. work in this shell.
 # (If we only sourced the static bundle below, startup would skip antidote.zsh and those commands would not exist.)

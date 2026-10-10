@@ -125,6 +125,23 @@ run_nvm_block() {
     teardown_tmpdir
 }
 
+@test "bash keeps its history under XDG_STATE_HOME and creates the folder" {
+    setup_tmpdir
+    local home="${TEST_TMPDIR}/home"
+    mkdir -p "${home}"
+    cp "${PROJECT_ROOT}/stow/common/.bashrc" "${PROJECT_ROOT}/stow/common/.bash_profile" "${home}/"
+
+    run env -i HOME="${home}" PATH="/usr/bin:/bin" bash -lc 'printf "%s\n" "${HISTFILE}"'
+    assert_success
+    assert_output "${home}/.local/state/bash/history"
+    [[ -d "${home}/.local/state/bash" ]]
+
+    run env -i HOME="${home}" PATH="/usr/bin:/bin" XDG_STATE_HOME="${TEST_TMPDIR}/state" bash -lc 'printf "%s\n" "${HISTFILE}"'
+    assert_success
+    assert_output "${TEST_TMPDIR}/state/bash/history"
+    teardown_tmpdir
+}
+
 @test "na appends an alias to the repo aliases file and defines it" {
     command -v zsh >/dev/null || skip "zsh not installed"
     setup_tmpdir

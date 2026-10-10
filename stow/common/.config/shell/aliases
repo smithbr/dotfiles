@@ -8,10 +8,6 @@ alias xc="cd ~/.config"
 alias xdn="xdg-ninja --skip-ok --skip-unsupported"
 
 # shell
-alias dfl="~/.dotfiles/scripts/link.sh"
-alias dflr="~/.dotfiles/scripts/link.sh --refresh"
-alias dfs="~/.dotfiles/scripts/link.sh status"
-alias ddf="cd ~/.dotfiles"
 alias ff="fastfetch -c all"
 alias fish="asciiquarium"
 alias rl="exec ${SHELL} -l"
@@ -19,7 +15,6 @@ alias skill-drop="~/.config/agents/scripts/skills-add -D"
 alias skills-add="~/.config/agents/scripts/skills-add"
 
 # system
-alias df="df -HT"
 alias top="btm"
 
 # brew
@@ -39,19 +34,21 @@ alias dns="cat /etc/resolv.conf"
 alias ip_public="dig +short myip.opendns.com @resolver1.opendns.com"
 case "${OSTYPE}" in
     darwin*)
+        alias df="df -H"
         alias ip_local="ipconfig getifaddr en0"
         alias flushdns="dscacheutil -flushcache"
         ;;
     linux*)
+        alias df="df -HT"
         alias ip_local="hostname -I"
-        alias flushdns="sudo systemd-resolve --flush-caches"
-        alias nethogs="sudo /home/linuxbrew/.linuxbrew/sbin/nethogs"
+        alias flushdns="sudo resolvectl flush-caches"
+        alias nethogs="sudo nethogs"
         ;;
 esac
 
 # remove junk files
 alias cleanupds="find . -type f -name '*.DS_Store' -ls -delete"
-alias emptyfolders="du -a --max-depth=1 | sort -n"
+alias emptyfolders="find . -type d -empty"
 
 # domain lookup
 alias tld="domain-check --preset startup --pretty"
