@@ -1,0 +1,11 @@
+# scripts/bootstrap/
+
+OS bootstrap that runs before anything is linked: `macos/`, `linux/`, and installers both share (`claude-code.sh`). The installation rules in the [root `AGENTS.md`](../../AGENTS.md) apply here first of all: no reliance on the current PATH, closed stdin never hangs or opts in, and every run is safe to repeat. Which manager installs a package, including system daemons that come through a vendor script here, is in [`homebrew/README.md`](../../homebrew/README.md).
+
+## Linux
+
+- `linux/harden.sh` locks down a brand-new Debian/Ubuntu server or VPS before `install.sh` runs there. Run it as root on the server. It needs nothing else from the repo, so it can be piped over SSH: `ssh root@HOST 'bash -s -- --user NAME --allow 80 --allow 443' < scripts/bootstrap/linux/harden.sh` (`--cloudflare` opens the `--allow` ports only to Cloudflare's ranges, `--keep-public-ssh` keeps SSH open to the internet with rate limiting, `-n` is a dry run, and `TS_AUTHKEY` joins the tailnet without a login URL). It upgrades packages, creates the admin user with passwordless sudo and the keys you logged in with (root's, or `SUDO_USER`'s), installs and connects Tailscale, writes `/etc/ssh/sshd_config.d/00-harden.conf` (keys only, no root login, only that user; checked with `sshd -t` and put back if it fails), sets ufw to deny all inbound except `tailscale0`, Tailscale's UDP port, and the `--allow` ports, and turns on unattended upgrades. It stops before changing anything when there is no key to give the user, and it leaves public SSH open until Tailscale is connected. Running it again only changes what differs. Docker-published ports bypass ufw.
+
+## macOS
+
+- Settings outside profiles go in `scripts/bootstrap/macos/iterm2.sh`, which the macOS bootstrap runs: it enables the Python API (needed for Claude Code's split-pane teammates), makes the repo's `dotfiles` profile the default by its `Guid`, and adds each repo `.itermcolors` file to iTerm2's `Custom Color Presets` (so it appears under Color Presets) under its file name, read from the repo so it works before linking. It writes only keys and presets that are missing or differ, and leaves other presets alone. Keep the `Guid` in both files the same. The profile itself is described in [`stow/README.md`](../../stow/README.md).

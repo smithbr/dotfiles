@@ -152,3 +152,8 @@ This is process-level isolation, not a real container or VM.
 - Bootstraps Bats dependencies from Homebrew
 - Exports `BATS_LIB_PATH`
 - Runs all `*.bats` files in this directory
+
+## Writing tests
+
+- Use the temporary-directory helpers in `tests/test_helper.bash` and isolate destination paths and external commands. Tests must not install software, change services, or modify the real home directory as part of exercising the code under test.
+- The ShellCheck runner selects tracked shell files and managed bin scripts. Explicitly lint newly created, untracked shell files and changed shell entrypoints outside that selection, such as `.githooks/pre-push`; a passing runner does not cover them automatically.

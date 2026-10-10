@@ -31,4 +31,4 @@ df-link                            # After adding a file under `stow/`
 df-deploy pihole                   # After pushing: pull and relink on other machines
 ```
 
-See [AGENTS.md](AGENTS.md) for maintenance and quality rules.
+See [AGENTS.md](AGENTS.md) for maintenance and quality rules. Each part of the repo has its own README: [scripts](scripts/README.md) (linking, file review), [bootstrap](scripts/bootstrap/README.md) (OS setup, `harden.sh` options), [stow](stow/README.md) (layers), [homebrew](homebrew/README.md) (where packages go), and [tests](tests/README.md).
