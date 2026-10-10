@@ -980,7 +980,7 @@ persona_state() {
     DOTFILES_OS=linux run_link --persona server
     assert_success
     [ -L "${DEST}/.local/bin/ph-update" ]
-    [ -L "${DEST}/.local/bin/ph-agent-setup" ]
+    [ -L "${DEST}/.local/bin/ph-backup" ]
     [ -L "${DEST}/.local/bin/sshkey" ]
     [ -L "${DEST}/.local/bin/cf-cert" ]
     [ -L "${DEST}/.local/bin/ts-test" ]
@@ -1113,7 +1113,7 @@ unlinked ${DEST}/.local/bin/cf-cert"
 plant_single_layer_links() {
     local name
     mkdir -p "${DEST}/.local/bin" "${DEST}/.config/ghostty"
-    for name in sshkey ph-update ph-agent-setup; do
+    for name in sshkey ph-update ph-backup; do
         ln -s "${PROJECT_ROOT}/stow/common/.local/bin/${name}" "${DEST}/.local/bin/${name}"
     done
     ln -s "${PROJECT_ROOT}/stow/common/.config/ghostty/config" "${DEST}/.config/ghostty/config"
@@ -1129,7 +1129,7 @@ plant_single_layer_links() {
         || [ "$(cd "${DEST}/.local/bin" && cd -P "$(dirname "$(readlink sshkey)")" && pwd)" = "${PROJECT_ROOT}/stow/tools/.local/bin" ]
     [ -e "${DEST}/.config/ghostty/config" ]
     [ ! -L "${DEST}/.local/bin/ph-update" ]
-    [ ! -L "${DEST}/.local/bin/ph-agent-setup" ]
+    [ ! -L "${DEST}/.local/bin/ph-backup" ]
     [ ! -e "${DEST}/.local/state/dotfiles/clobbered" ]
 
     DEST="${TEST_TMPDIR}/pi-home"
@@ -1138,7 +1138,7 @@ plant_single_layer_links() {
     assert_success
     refute_output --partial "Backed up"
     [ -e "${DEST}/.local/bin/ph-update" ]
-    [ -e "${DEST}/.local/bin/ph-agent-setup" ]
+    [ -e "${DEST}/.local/bin/ph-backup" ]
     [ ! -L "${DEST}/.config/ghostty/config" ]
     [ ! -e "${DEST}/.local/state/dotfiles/clobbered" ]
     DOTFILES_OS=linux run_link status

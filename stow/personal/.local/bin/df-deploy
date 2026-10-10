@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Bring other machines' dotfiles up to date after pushing from this one: pull, relink, and
-# reinstall the root-owned ph-agent-setup copy where one is installed and the repo's changed.
+# Bring other machines' dotfiles up to date after pushing from this one: pull and relink.
 
 set -euo pipefail
 
@@ -9,8 +8,7 @@ usage() {
 Usage: df-deploy [-n|--dry-run] [HOST...]
 
 Over SSH, on each HOST in turn: pull ~/.dotfiles (fast-forward only) and run
-scripts/link.sh. Where /usr/local/bin/ph-agent-setup is installed and differs from
-the repo's copy, also run 'ph-agent-setup user', which asks for sudo.
+scripts/link.sh.
 
 With no HOST, updates the hosts in $DF_DEPLOY_HOSTS (space-separated).
 
@@ -46,24 +44,14 @@ warn_unpushed() {
     fi
 }
 
-# Runs on each host. PH_AGENT_BIN_DIR matches ph-agent-setup's own override.
+# Runs on each host.
 remote_script() {
     cat <<'EOF'
 set -euo pipefail
 repo="${HOME}/.dotfiles"
-installed="${PH_AGENT_BIN_DIR:-/usr/local/bin}/ph-agent-setup"
-repo_copy="${repo}/stow/server.linux/.local/bin/ph-agent-setup"
 git -C "${repo}" pull --ff-only --quiet
 printf '==> %s at %s\n' "$(hostname)" "$(git -C "${repo}" log -1 --format='%h %s')"
 "${repo}/scripts/link.sh"
-if [[ ! -e "${installed}" ]]; then
-    :
-elif cmp -s "${repo_copy}" "${installed}"; then
-    printf '==> ph-agent-setup is up to date\n'
-else
-    printf '==> ph-agent-setup changed; reinstalling (sudo)\n'
-    "${repo_copy}" user
-fi
 EOF
 }
 
@@ -98,7 +86,7 @@ main() {
     fi
     warn_unpushed
     for host in "${hosts[@]}"; do
-        # -t gives the sudo prompt a terminal. One host failing doesn't stop the rest.
+        # -t keeps link.sh's prompts interactive. One host failing doesn't stop the rest.
         if ! ssh -t "${host}" "${command}"; then
             printf 'df-deploy: %s failed\n' "${host}" >&2
             failed=1
