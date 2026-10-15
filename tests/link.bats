@@ -1174,7 +1174,7 @@ install=claude-code	claude-code	tool_installed claude"
     assert_line --index 0 "docker	default	tool_installed docker"
     assert_line --index 1 "tailscale	default	tool_installed tailscale"
     assert_line --index 2 "claude-code	default	tool_installed claude"
-    assert_line "pihole	optional	[[ -x /usr/bin/pihole-FTL && -x /usr/local/bin/pihole ]]"
+    assert_line "pihole	optional	[[ -x /usr/bin/pihole-FTL && -x /usr/local/bin/pihole && -x /usr/sbin/unbound && -f /etc/unbound/unbound.conf.d/pi-hole.conf ]]"
     DOTFILES_OS=linux run_link --persona vps offered
     assert_line --index 0 "docker	default	tool_installed docker"
     refute_line --partial pihole
@@ -1211,7 +1211,7 @@ zed	default	command -v zed"
     assert_success
     assert_line "installs=tailscale pihole"
     assert_line "installs_source=env"
-    assert_line "install=pihole	pihole	[[ -x /usr/bin/pihole-FTL && -x /usr/local/bin/pihole ]]"
+    assert_line "install=pihole	pihole	[[ -x /usr/bin/pihole-FTL && -x /usr/local/bin/pihole && -x /usr/sbin/unbound && -f /etc/unbound/unbound.conf.d/pi-hole.conf ]]"
     # The pihole role brings the pihole layer; without it a Linux server has no ph-* tools.
     DOTFILES_OS=linux DOTFILES_INSTALLS="pihole" run_link --persona server managed
     assert_line "${DEST}/.local/bin/ph-update"
