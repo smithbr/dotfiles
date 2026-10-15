@@ -381,6 +381,63 @@ _run_pihole() {
 }
 
 # ---------------------------------------------------------------------------
+# bootstrap.sh — the entry point for a machine without the repo
+# ---------------------------------------------------------------------------
+
+# Runs bootstrap.sh with a git and sudo that log their calls; the clone
+# creates a fake install.sh that prints its arguments.
+run_bootstrap() {
+    local bin="${TEST_TMPDIR}/bin"
+    mkdir -p "${bin}" "${TEST_TMPDIR}/home"
+    cat > "${bin}/git" <<'MOCK'
+#!/usr/bin/env bash
+printf 'git %s\n' "$*" >> "${TEST_TMPDIR}/log"
+[[ "$1" == clone ]] || exit 0
+mkdir -p "${@: -1}/.git"
+printf '#!/usr/bin/env bash\nprintf "install.sh %%s\\n" "$*"\n' > "${@: -1}/install.sh"
+MOCK
+    cat > "${bin}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+printf 'sudo %s\n' "$*" >> "${TEST_TMPDIR}/log"
+while [[ "$1" == -* ]]; do [[ "$1" == -u ]] && shift; shift; done
+"$@"
+MOCK
+    chmod +x "${bin}/git" "${bin}/sudo"
+    : > "${TEST_TMPDIR}/log"
+    run env PATH="${bin}:/usr/bin:/bin" HOME="${TEST_TMPDIR}/home" TEST_TMPDIR="${TEST_TMPDIR}" \
+        DOTFILES_REPO="file://${TEST_TMPDIR}/origin" bash "${PROJECT_ROOT}/bootstrap.sh" "$@" < /dev/null
+}
+
+@test "bootstrap.sh clones the repo and runs install.sh with the rest of its arguments" {
+    run_bootstrap --persona vps --no-install docker
+    assert_success
+    assert_output "install.sh --persona vps --no-install docker"
+    run grep -x "git clone --quiet file://${TEST_TMPDIR}/origin ${TEST_TMPDIR}/home/.dotfiles" "${TEST_TMPDIR}/log"
+    assert_success
+
+    # A second run finds the clone and skips straight to install.sh.
+    run_bootstrap
+    assert_success
+    assert_line "INFO Dotfiles already at ${TEST_TMPDIR}/home/.dotfiles"
+    assert_line "install.sh "
+    run grep -c "git clone" "${TEST_TMPDIR}/log"
+    assert_output "0"
+}
+
+@test "bootstrap.sh as root needs --user and continues as that user" {
+    # The root branch, with git already there and OSTYPE as on a VPS.
+    sed -e 's/^if \[\[ "${EUID}" -eq 0 \]\]; then/if true; then/' -e 's/^ensure_git$/:/' \
+        "${PROJECT_ROOT}/bootstrap.sh" > "${TEST_TMPDIR}/root-bootstrap.sh"
+    run env PATH="/usr/bin:/bin" HOME="${TEST_TMPDIR}" OSTYPE=linux-gnu bash "${TEST_TMPDIR}/root-bootstrap.sh" --persona vps < /dev/null
+    assert_failure 2
+    assert_output --partial "Running as root: name the admin user with --user NAME"
+
+    run bash "${PROJECT_ROOT}/bootstrap.sh" --user
+    assert_failure 2
+    assert_output --partial "--user needs a name"
+}
+
+# ---------------------------------------------------------------------------
 # linux/tailscale.sh — idempotency guard
 # ---------------------------------------------------------------------------
 

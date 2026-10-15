@@ -7,6 +7,12 @@ Every managed file in `~` is a symlink into this repo, so edit it in place and c
 git clone https://github.com/smithbr/dotfiles.git ~/.dotfiles
 ~/.dotfiles/install.sh
 ```
+On a machine with nothing yet, one line does the clone and the install (as root on a new VPS, `--user NAME` first creates and hardens for that admin user):
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/smithbr/dotfiles/main/bootstrap.sh) --persona vps
+```
+
 The install asks what the machine is once, up front (persona, installs, optional packages), remembers the answers, and then only changes what differs, so it is safe to run on a machine already set up. `--persona NAME`, `--install NAME`, and `--no-install NAME` answer without a terminal, `--reconfigure` asks again, and `-n` prints what would change. On a Linux `server` or `vps` that is not yet hardened, the install first offers to harden it (key-only SSH over Tailscale, firewall, unattended upgrades; `scripts/bootstrap/linux/harden-test.sh` is the check, and runs on its own against any Linux box). Installs are applied last: Docker and Tailscale (Linux) and Claude Code (both), which every persona offers pre-checked and skips when the tool is already there through Homebrew or natively, and the persona's roles, such as a Pi-hole with Unbound as its upstream (`--install pihole` on a `server`).
 
 ## Personas and roles
