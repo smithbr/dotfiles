@@ -29,6 +29,27 @@ load test_helper
     assert_success
 }
 
+@test "inner zshenv sets XDG_CONFIG_HOME when zsh enters through ZDOTDIR" {
+    command -v zsh >/dev/null || skip "zsh not installed"
+    setup_tmpdir
+    local home="${TEST_TMPDIR}/home" zdotdir="${TEST_TMPDIR}/home/.config/zsh"
+    mkdir -p "${zdotdir}"
+    cp "${PROJECT_ROOT}/stow/common/.config/zsh/.zshenv" "${zdotdir}/"
+
+    # A system /etc/zshenv that sets ZDOTDIR skips ~/.zshenv, so the inner
+    # file must not rely on the top-level shim having set XDG_CONFIG_HOME.
+    run env -i HOME="${home}" ZDOTDIR="${zdotdir}" PATH="/usr/bin:/bin" \
+        zsh -c 'printf "%s\n" "${XDG_CONFIG_HOME}"'
+    assert_success
+    assert_output "${home}/.config"
+
+    run env -i HOME="${home}" ZDOTDIR="${zdotdir}" PATH="/usr/bin:/bin" \
+        XDG_CONFIG_HOME="${TEST_TMPDIR}/config" zsh -c 'printf "%s\n" "${XDG_CONFIG_HOME}"'
+    assert_success
+    assert_output "${TEST_TMPDIR}/config"
+    teardown_tmpdir
+}
+
 @test "zprofile bootstraps brew for macOS and Linux" {
     run bash -c '
         set -euo pipefail
