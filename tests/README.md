@@ -73,7 +73,7 @@ This is process-level isolation, not a real container or VM.
 
 - Validates `scripts/bootstrap/linux/apt-packages.txt`
 - Verifies Linux bootstrap guard clauses for missing `apt-get`
-- Verifies idempotency guards for `docker` and `tailscale`
+- Runs `docker.sh` and `tailscale.sh` to verify they skip a tool on PATH or in Homebrew's bin, and `claude-code.sh` to verify the native installer runs only when Claude Code is in neither place
 - Dry-runs `harden.sh` against a scratch root (`HARDEN_ROOT`) with mocked system tools: required arguments, closing public SSH only once Tailscale is connected, Cloudflare-only ports, and stopping before user or SSH changes when there is no key to copy
 - Verifies the macOS iTerm2 step enables the Python API, makes the repo profile the default, adds the Catppuccin color presets (rewriting a stale one, keeping the user's own), and rewrites nothing on a second run
 - Verifies that `harden.sh` re-runs itself through sudo for the user who ran it
@@ -107,7 +107,7 @@ This is process-level isolation, not a real container or VM.
 
 - Tests logging helpers in [`scripts/common.sh`](../scripts/common.sh)
 - Verifies `gum` and non-`gum` behavior
-- Tests `require_non_root`, `sudo_cmd`, and `spin`
+- Tests `require_non_root`, `sudo_cmd`, `spin`, and `tool_installed` (a tool on PATH, in `~/.local/bin`, or under `HOMEBREW_PREFIX`, with Homebrew's usual prefixes as the fallback)
 
 [`file_review.bats`](file_review.bats)
 

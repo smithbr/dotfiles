@@ -185,6 +185,30 @@ sudo_cmd() {
     fi
 }
 
+# Where a tool sits before the shell config puts it on PATH: the native
+# ~/.local/bin, and Homebrew's bin (HOMEBREW_PREFIX when set, else its usual
+# prefixes on macOS and Linux).
+tool_bin_dirs() {
+    printf '%s\n' "${HOME}/.local/bin"
+    if [[ -n "${HOMEBREW_PREFIX:-}" ]]; then
+        printf '%s/bin\n' "${HOMEBREW_PREFIX}"
+    else
+        printf '%s\n' /opt/homebrew/bin /usr/local/bin /home/linuxbrew/.linuxbrew/bin
+    fi
+}
+
+# True when NAME is installed through either manager: on PATH, or in one of
+# tool_bin_dirs. An optional install's detect line uses it so a tool that
+# came through Homebrew, or natively, is not installed again the other way.
+tool_installed() {
+    local dir
+    command -v "$1" >/dev/null 2>&1 && return 0
+    while IFS= read -r dir; do
+        [[ -x "${dir}/$1" ]] && return 0
+    done < <(tool_bin_dirs)
+    return 1
+}
+
 spin() {
     local title="$1"
     shift

@@ -153,22 +153,33 @@ MOCK
 # linux/docker.sh — idempotency guard
 # ---------------------------------------------------------------------------
 
-@test "docker.sh skips when docker is already installed" {
-    # Create a mock docker binary
-    mkdir -p "${TEST_TMPDIR}/bin"
-    printf '#!/usr/bin/env bash\necho "Docker mock"' > "${TEST_TMPDIR}/bin/docker"
-    chmod +x "${TEST_TMPDIR}/bin/docker"
-
+# Runs a vendor install script (docker.sh, tailscale.sh) with a scratch HOME
+# and Homebrew prefix, no apt-get, and only the mocks in TEST_TMPDIR/bin on
+# PATH; $1 prepares them.
+_run_vendor_script() {
+    local script="$1"
     run bash -c '
-        export PATH="'"${TEST_TMPDIR}/bin"':${PATH}"
-        if command -v docker >/dev/null 2>&1; then
-            echo "SKIPPED"
-            exit 0
-        fi
-        echo "WOULD_INSTALL"
+        export HOME="'"${TEST_TMPDIR}"'/home" HOMEBREW_PREFIX="'"${TEST_TMPDIR}"'/brew"
+        export PATH="'"${TEST_TMPDIR}"'/bin:/usr/bin:/bin"
+        mkdir -p "${HOME}" "'"${TEST_TMPDIR}"'/bin"
+        '"$2"'
+        "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/'"${script}"'"
     '
+}
+
+@test "docker.sh skips when docker is on PATH, or came through Homebrew" {
+    _run_vendor_script docker.sh 'printf "#!/bin/sh\n" > "'"${TEST_TMPDIR}"'/bin/docker"; chmod +x "'"${TEST_TMPDIR}"'/bin/docker"'
     assert_success
-    assert_output "SKIPPED"
+    assert_output --partial "Docker already installed, skipping"
+
+    _run_vendor_script docker.sh 'mkdir -p "${HOMEBREW_PREFIX}/bin"; printf "#!/bin/sh\n" > "${HOMEBREW_PREFIX}/bin/docker"; chmod +x "${HOMEBREW_PREFIX}/bin/docker"'
+    assert_success
+    assert_output --partial "Docker already installed, skipping"
+
+    # Neither: on a box without apt-get the install stops there.
+    _run_vendor_script docker.sh 'rm -f "'"${TEST_TMPDIR}"'/bin/docker" "${HOMEBREW_PREFIX}/bin/docker"'
+    assert_success
+    assert_output --partial "apt-get not found; skipping Docker install"
 }
 
 @test "docker.sh skips when apt-get is absent and docker is missing" {
@@ -337,6 +348,7 @@ _run_claude_code_script() {
         set -euo pipefail
 
         export HOME="'"${TEST_TMPDIR}"'/home"
+        export HOMEBREW_PREFIX="'"${TEST_TMPDIR}"'/brew"
         export TEST_BIN="'"${TEST_TMPDIR}"'/bin"
         export TEST_LOG="'"${TEST_TMPDIR}"'/claude.log"
         export PATH="${TEST_BIN}:/usr/bin:/bin"
@@ -369,13 +381,21 @@ MOCK
 @test "claude-code.sh skips when the native build is already installed" {
     _run_claude_code_script 'mkdir -p "${HOME}/.local/bin"; printf "#!/usr/bin/env bash\n" > "${HOME}/.local/bin/claude"; chmod +x "${HOME}/.local/bin/claude"'
     assert_success
-    assert_output --partial "Claude Code already installed, skipping"
+    assert_output --partial "already installed at ${TEST_TMPDIR}/home/.local/bin/claude"
+    refute_output --partial "curl "
+}
+
+@test "claude-code.sh skips when Claude Code came through Homebrew" {
+    _run_claude_code_script 'mkdir -p "${HOMEBREW_PREFIX}/bin"; printf "#!/usr/bin/env bash\n" > "${HOMEBREW_PREFIX}/bin/claude"; chmod +x "${HOMEBREW_PREFIX}/bin/claude"'
+    assert_success
+    assert_output --partial "already installed outside ${TEST_TMPDIR}/home/.local/bin/claude"
     refute_output --partial "curl "
 }
 
 @test "claude-code.sh warns when the Homebrew cask is still installed" {
     _run_claude_code_script 'mkdir -p "${HOME}/.local/bin"; printf "#!/usr/bin/env bash\n" > "${HOME}/.local/bin/claude"; chmod +x "${HOME}/.local/bin/claude"; printf "#!/usr/bin/env bash\n[[ \"\$*\" == \"list --cask claude-code@latest\" ]]\n" > "${TEST_BIN}/brew"; chmod +x "${TEST_BIN}/brew"'
     assert_success
+    assert_output --partial "Homebrew's claude-code@latest cask is still installed"
     assert_output --partial "brew uninstall --cask claude-code@latest"
 }
 

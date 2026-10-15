@@ -15,6 +15,46 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# tool_installed: on PATH, in ~/.local/bin, or in Homebrew's bin
+# ---------------------------------------------------------------------------
+
+@test "tool_installed finds a tool on PATH, in ~/.local/bin, or under HOMEBREW_PREFIX, and nothing else" {
+    local home="${TEST_TMPDIR}/home" brew="${TEST_TMPDIR}/brew"
+    mkdir -p "${home}/.local/bin" "${brew}/bin" "${TEST_TMPDIR}/bin"
+    printf '#!/bin/sh\n' > "${TEST_TMPDIR}/bin/onpath"
+    printf '#!/bin/sh\n' > "${home}/.local/bin/native"
+    printf '#!/bin/sh\n' > "${brew}/bin/brewed"
+    printf '#!/bin/sh\n' > "${brew}/bin/unexecutable"
+    chmod +x "${TEST_TMPDIR}/bin/onpath" "${home}/.local/bin/native" "${brew}/bin/brewed"
+    run bash -c '
+        export HOME="'"${home}"'" HOMEBREW_PREFIX="'"${brew}"'" PATH="'"${TEST_TMPDIR}"'/bin:/usr/bin:/bin"
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        for name in onpath native brewed unexecutable absent; do
+            tool_installed "${name}" && echo "${name}: yes" || echo "${name}: no"
+        done
+    '
+    assert_success
+    assert_line "onpath: yes"
+    assert_line "native: yes"
+    assert_line "brewed: yes"
+    assert_line "unexecutable: no"
+    assert_line "absent: no"
+}
+
+@test "tool_bin_dirs falls back to Homebrew's usual prefixes on both OSes" {
+    run bash -c '
+        export HOME="'"${TEST_TMPDIR}"'/home"; unset HOMEBREW_PREFIX
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        tool_bin_dirs
+    '
+    assert_success
+    assert_output "${TEST_TMPDIR}/home/.local/bin
+/opt/homebrew/bin
+/usr/local/bin
+/home/linuxbrew/.linuxbrew/bin"
+}
+
+# ---------------------------------------------------------------------------
 # _check_gum / gum detection
 # ---------------------------------------------------------------------------
 

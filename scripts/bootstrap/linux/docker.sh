@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Docker Engine installation for Debian-based systems.
+# Docker Engine installation for Debian-based systems, an optional install.
 # https://docs.docker.com/engine/install/debian/
+# detect: tool_installed docker
 
 set -euo pipefail
 
 BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 source "${BASEDIR}/scripts/common.sh"
 
-if command -v docker >/dev/null 2>&1; then
+if tool_installed docker; then
     log_info "Docker already installed, skipping"
     exit 0
 fi
