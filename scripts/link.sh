@@ -64,6 +64,7 @@ ADD_LAYER=""
 ADD_PLATFORM=0
 ADD_SEED=0
 REMOVE_DELETE=0
+MOVE_NO_PLATFORM=0
 declare -a path_args=()
 declare -a stow_args=()
 
@@ -131,6 +132,9 @@ Commands:
             Stop managing linked files: replace each link with a real copy
             of its repo file and git rm that file (a directory removes every
             managed link in it)
+  mv PATH...
+            Move linked files to another layer: git mv each repo file there,
+            then relink it (a directory moves every managed link in it)
 
 Options:
   -n, --dry-run           Report what would change without touching anything
@@ -139,10 +143,12 @@ Options:
       --refresh           Pull the agents checkout even if it is fresh
       --repo PATH         Dotfiles repo to read (default: this script's repo)
       --destination PATH  Home directory to link into (default: $HOME)
-      --layer NAME        add: the layer to put the files in (asked on a
-                          terminal when missing)
-      --platform          add: use the layer's part for this OS only
+      --layer NAME        add, mv: the layer to put the files in (asked on
+                          a terminal when missing)
+      --platform          add, mv: use the layer's part for this OS only
                           (stow/<layer>.<os>)
+      --no-platform       mv: use the layer itself, not its part for this OS
+                          (mv keeps the files' current choice otherwise)
       --seed              add: copy once as a seed file the app then owns,
                           instead of linking
       --delete            rm: drop the files from the home directory too,
@@ -161,6 +167,7 @@ parse_args() {
             --platform) ADD_PLATFORM=1 ;;
             --seed) ADD_SEED=1 ;;
             --delete) REMOVE_DELETE=1 ;;
+            --no-platform) MOVE_NO_PLATFORM=1 ;;
             --repo|--destination|--persona|--layer)
                 if [[ $# -lt 2 ]]; then
                     log_error "$1 requires a value"
@@ -174,7 +181,7 @@ parse_args() {
                 esac
                 shift
                 ;;
-            apply|managed|status|persona|personas|offered|installs|add|rm) COMMAND="$1" ;;
+            apply|managed|status|persona|personas|offered|installs|add|rm|mv) COMMAND="$1" ;;
             -h|--help) usage; exit 0 ;;
             --)
                 shift
@@ -187,7 +194,7 @@ parse_args() {
                 exit 2
                 ;;
             *)
-                if [[ "${COMMAND}" != add && "${COMMAND}" != rm ]]; then
+                if [[ "${COMMAND}" != add && "${COMMAND}" != rm && "${COMMAND}" != mv ]]; then
                     log_error "Unknown argument: $1"
                     usage >&2
                     exit 2
@@ -198,12 +205,24 @@ parse_args() {
         shift
     done
 
-    if [[ ( "${COMMAND}" == add || "${COMMAND}" == rm ) && "${#path_args[@]}" -eq 0 ]]; then
+    if [[ ( "${COMMAND}" == add || "${COMMAND}" == rm || "${COMMAND}" == mv ) && "${#path_args[@]}" -eq 0 ]]; then
         log_error "${COMMAND} needs at least one path"
         exit 2
     fi
-    if [[ "${COMMAND}" != add && ( -n "${ADD_LAYER}" || "${ADD_PLATFORM}" -eq 1 || "${ADD_SEED}" -eq 1 ) ]]; then
-        log_error "--layer, --platform and --seed only apply to add"
+    if [[ "${COMMAND}" != add && "${COMMAND}" != mv && ( -n "${ADD_LAYER}" || "${ADD_PLATFORM}" -eq 1 ) ]]; then
+        log_error "--layer and --platform only apply to add and mv"
+        exit 2
+    fi
+    if [[ "${COMMAND}" != add && "${ADD_SEED}" -eq 1 ]]; then
+        log_error "--seed only applies to add"
+        exit 2
+    fi
+    if [[ "${COMMAND}" != mv && "${MOVE_NO_PLATFORM}" -eq 1 ]]; then
+        log_error "--no-platform only applies to mv"
+        exit 2
+    fi
+    if [[ "${ADD_PLATFORM}" -eq 1 && "${MOVE_NO_PLATFORM}" -eq 1 ]]; then
+        log_error "--platform and --no-platform contradict each other"
         exit 2
     fi
     if [[ "${COMMAND}" != rm && "${REMOVE_DELETE}" -eq 1 ]]; then
@@ -1285,13 +1304,35 @@ add_refusal() {
     return 0
 }
 
+# Who links a layer: the personas whose layers= name it ("every persona" when
+# all do), else the roles that bring it. Empty when nothing links it.
+layer_owners() {
+    local layer="$1" file owners="" total=0 linked=0
+    for file in "${REPO}/personas"/*; do
+        [[ -f "${file}" ]] || continue
+        total=$((total + 1))
+        [[ " $(persona_settings "${file}" | sed -n 's/^layers=//p') " == *" ${layer} "* ]] || continue
+        linked=$((linked + 1))
+        owners="${owners:+${owners}, }$(basename "${file}")"
+    done
+    [[ "${linked}" -eq 0 || "${linked}" -lt "${total}" ]] || owners="every persona"
+    if [[ -z "${owners}" ]]; then
+        for file in "${REPO}/roles"/*; do
+            [[ -f "${file}" && "$(basename "${file}")" != README.md ]] || continue
+            [[ " $(persona_settings "${file}" | sed -n 's/^layers=//p') " == *" ${layer} "* ]] || continue
+            owners="${owners:+${owners}, }the $(basename "${file}") role"
+        done
+    fi
+    printf '%s\n' "${owners}"
+}
+
 # What a layer holds, read from the tree so nothing is kept by hand: its
 # top-level paths (dot-directories one level down, a few script names for
 # .local/bin), the personas whose layers= name it (else the role that brings
 # it), and the platform when it exists only as a platform part.
 #   layer_description LAYER WIDTH
 layer_description() {
-    local layer="$1" width="$2" dir entry paths="" item owners="" platform="" file total=0 linked=0
+    local layer="$1" width="$2" dir entry paths="" item owners platform="" file
     local -a entries=() names=()
     for dir in "${REPO}/stow/${layer}" "${REPO}/stow/${layer}.darwin" "${REPO}/stow/${layer}.linux"; do
         [[ -d "${dir}" ]] || continue
@@ -1316,21 +1357,7 @@ layer_description() {
         paths="${paths:+${paths}, }${item}"
     done
 
-    for file in "${REPO}/personas"/*; do
-        [[ -f "${file}" ]] || continue
-        total=$((total + 1))
-        [[ " $(persona_settings "${file}" | sed -n 's/^layers=//p') " == *" ${layer} "* ]] || continue
-        linked=$((linked + 1))
-        owners="${owners:+${owners}, }$(basename "${file}")"
-    done
-    [[ "${linked}" -eq 0 || "${linked}" -lt "${total}" ]] || owners="every persona"
-    if [[ -z "${owners}" ]]; then
-        for file in "${REPO}/roles"/*; do
-            [[ -f "${file}" && "$(basename "${file}")" != README.md ]] || continue
-            [[ " $(persona_settings "${file}" | sed -n 's/^layers=//p') " == *" ${layer} "* ]] || continue
-            owners="${owners:+${owners}, }the $(basename "${file}") role"
-        done
-    fi
+    owners="$(layer_owners "${layer}")"
     if [[ ! -d "${REPO}/stow/${layer}" ]]; then
         if [[ -d "${REPO}/stow/${layer}.darwin" && ! -d "${REPO}/stow/${layer}.linux" ]]; then
             platform="macOS only"
@@ -1341,11 +1368,11 @@ layer_description() {
     printf '%-*s  %s (%s%s)' "${width}" "${layer}" "${paths:-nothing yet}" "${owners:-no persona}" "${platform:+; ${platform}}"
 }
 
-# Pick the layer for add: --layer, else a choice on a terminal, each layer
-# described from the tree. Only layers this persona links qualify, so the
-# added file is linked right here.
+# Pick the layer for add or mv: --layer, else a choice on a terminal titled
+# $1, each layer described from the tree. Only layers this persona links
+# qualify, so the files stay linked right here.
 choose_add_layer() {
-    local layer width=0
+    local title="${1:-Layer for the new files}" layer width=0
     local -a layers=() choices=()
     read -r -a layers <<< "${PERSONA_LAYERS}"
 
@@ -1353,7 +1380,7 @@ choose_add_layer() {
         for layer in "${layers[@]}"; do
             [[ "${layer}" == "${ADD_LAYER}" ]] && return 0
         done
-        log_error "Persona '${PERSONA_NAME}' does not link layer '${ADD_LAYER}'. Choose one of: ${PERSONA_LAYERS}"
+        log_error "Persona '${PERSONA_NAME}' does not link layer '${ADD_LAYER}' (linked by $(layer_owners "${ADD_LAYER}" | sed 's/^$/no persona/')). Choose one of: ${PERSONA_LAYERS}"
         exit 2
     fi
     if [[ ! -t 0 ]]; then
@@ -1366,9 +1393,9 @@ choose_add_layer() {
     for layer in "${layers[@]}"; do
         choices+=("$(layer_description "${layer}" "${width}")"$'\t'"${layer}")
     done
-    ADD_LAYER="$(choose_one "Layer for the new files" "" "${choices[@]}")"
+    ADD_LAYER="$(choose_one "${title}" "" "${choices[@]}")"
     if [[ -z "${ADD_LAYER}" ]]; then
-        log_error "No layer chosen; nothing added"
+        log_error "No layer chosen; nothing changed"
         exit 1
     fi
 }
@@ -1475,8 +1502,8 @@ stow_link_source() {
     printf '%s\n' "${destination#"${REPO}"/}"
 }
 
-# Why rm will not take a path that is not a link into the repo's stow/.
-remove_refusal() {
+# Why rm and mv will not take a path that is not a link into the repo's stow/.
+link_refusal() {
     local path="$1" relative="$2" dir
     if [[ ! -L "${path}" ]]; then
         for dir in "${REPO}"/seed/*/; do
@@ -1497,11 +1524,11 @@ remove_refusal() {
     fi
 }
 
-# relative|source for each file to stop managing: a link into the repo's
-# stow/, or every such link under a directory. Every other path is refused,
-# each one reported before any change.
-collect_remove_files() {
-    local path absolute link source real_dest relative refused=0
+# relative|source for each file rm or mv takes: a link into the repo's stow/,
+# or every such link under a directory. Every other path is refused, each one
+# reported (Not $1 ~/PATH) before any change.
+collect_linked_files() {
+    local verb="$1" path absolute link source real_dest relative refused=0
     real_dest="$(cd -P "${DEST}" && pwd)"
     for path in "${path_args[@]}"; do
         if [[ ! -e "${path}" && ! -L "${path}" ]]; then
@@ -1528,7 +1555,7 @@ collect_remove_files() {
         elif source="$(stow_link_source "${absolute}")"; then
             printf '%s|%s\n' "${relative}" "${source}"
         else
-            log_error "Not removing ~/${relative}: $(remove_refusal "${absolute}" "${relative}")"
+            log_error "Not ${verb} ~/${relative}: $(link_refusal "${absolute}" "${relative}")"
             refused=1
         fi
     done
@@ -1554,16 +1581,28 @@ remove_archive() {
     fi
 }
 
+# True when git tracks a repo-relative path.
+repo_tracks() {
+    command -v git >/dev/null 2>&1 \
+        && git -C "${REPO}" ls-files --error-unmatch -- "$1" >/dev/null 2>&1
+}
+
 # Take one file out of the repo: git rm when it is tracked, then the folders
 # that leaves empty inside its package.
 drop_repo_file() {
-    local source="$1" package dir
-    if command -v git >/dev/null 2>&1 \
-        && git -C "${REPO}" ls-files --error-unmatch -- "${source}" >/dev/null 2>&1; then
+    local source="$1"
+    if repo_tracks "${source}"; then
         git -C "${REPO}" rm -q -f -- "${source}"
     else
         rm -f "${REPO}/${source}"
     fi
+    prune_package_dirs "${source}"
+}
+
+# Remove the folders left empty above a repo file (stow/<package>/...) that
+# is gone, up to but not including the package itself.
+prune_package_dirs() {
+    local source="$1" package dir
     package="${source#stow/}"
     package="${REPO}/stow/${package%%/*}"
     dir="$(dirname "${REPO}/${source}")"
@@ -1579,7 +1618,7 @@ remove_files() {
     local files entry relative source target tmp
     local -a entries=()
 
-    files="$(collect_remove_files)" || exit 1
+    files="$(collect_linked_files removing)" || exit 1
     while IFS= read -r entry; do
         [[ -n "${entry}" ]] && entries+=("${entry}")
     done < <(printf '%s\n' "${files}" | LC_ALL=C sort -u)
@@ -1629,6 +1668,113 @@ remove_files() {
     printf 'Other machines drop these links on their next df-link or df-deploy, and the files go with them; to keep one there, run df-rm on it before pulling.\n'
 }
 
+# ---------------------------------------------------------------------------
+# mv: move linked files to another layer
+# ---------------------------------------------------------------------------
+
+# The text for a link at TARGET that now points at stow/NEW/RELATIVE instead
+# of stow/OLD/RELATIVE, written like the old one (a relative link stays
+# relative), or the absolute path when the old text does not end that way.
+#   moved_link_text TARGET OLD NEW RELATIVE
+moved_link_text() {
+    local text suffix="$2/$4"
+    text="$(readlink "$1")"
+    if [[ "${text}" == */"${suffix}" ]]; then
+        printf '%s%s/%s\n' "${text%"${suffix}"}" "$3" "$4"
+    else
+        printf '%s/stow/%s/%s\n' "${REPO}" "$3" "$4"
+    fi
+}
+
+move_files() {
+    local files entry relative source dest old new inner target tmp refused=0 refs owners
+    local -a entries=() moves=()
+
+    files="$(collect_linked_files moving)" || exit 1
+    while IFS= read -r entry; do
+        [[ -n "${entry}" ]] && entries+=("${entry}")
+    done < <(printf '%s\n' "${files}" | LC_ALL=C sort -u)
+    if [[ "${#entries[@]}" -eq 0 ]]; then
+        log_error "No managed files to move"
+        exit 1
+    fi
+    choose_add_layer "Layer to move the files to"
+
+    # Each file keeps its path inside the package; the package changes to the
+    # layer, or its part for this OS when asked or when the file is in one.
+    for entry in "${entries[@]}"; do
+        relative="${entry%%|*}" source="${entry#*|}"
+        old="${source#stow/}"
+        old="${old%%/*}"
+        inner="${source#stow/"${old}"/}"
+        if [[ "${ADD_PLATFORM}" -eq 1 ]]; then
+            new="${ADD_LAYER}.$(platform)"
+        elif [[ "${MOVE_NO_PLATFORM}" -eq 0 && "${old}" == *.* ]]; then
+            new="${ADD_LAYER}.${old#*.}"
+        else
+            new="${ADD_LAYER}"
+        fi
+        dest="stow/${new}/${inner}"
+        if [[ "${new}" == "${old}" ]]; then
+            log_error "Not moving ~/${relative}: already in stow/${old}"
+            refused=1
+        elif [[ -e "${REPO}/${dest}" || -L "${REPO}/${dest}" ]]; then
+            log_error "Not moving ~/${relative}: ${dest} already exists"
+            refused=1
+        else
+            moves+=("${relative}|${source}|${dest}")
+        fi
+    done
+    [[ "${refused}" -eq 0 ]] || exit 1
+
+    if [[ "${DRY_RUN}" -eq 1 ]]; then
+        for entry in "${moves[@]}"; do
+            IFS='|' read -r relative source dest <<< "${entry}"
+            printf 'Would move %s to %s and relink ~/%s\n' "${source}" "${dest}" "${relative}"
+        done
+        return 0
+    fi
+
+    # The new copy exists before the link is swapped to it, and the swap is a
+    # rename, so the file in ~ never goes missing.
+    for entry in "${moves[@]}"; do
+        IFS='|' read -r relative source dest <<< "${entry}"
+        old="${source#stow/}" new="${dest#stow/}"
+        target="${DEST}/${relative}"
+        mkdir -p "$(dirname "${REPO}/${dest}")"
+        cp -p "${REPO}/${source}" "${REPO}/${dest}"
+        tmp="$(dirname "${target}")/.df-mv.$$"
+        ln -s "$(moved_link_text "${target}" "${old%%/*}" "${new%%/*}" "${source#stow/*/}")" "${tmp}"
+        mv -f "${tmp}" "${target}"
+        if repo_tracks "${source}"; then
+            git -C "${REPO}" mv -f -- "${source}" "${dest}"
+        else
+            mv -f "${REPO}/${source}" "${REPO}/${dest}"
+        fi
+        prune_package_dirs "${source}"
+        printf 'Moved %s to %s; ~/%s links there\n' "${source}" "${dest}" "${relative}"
+    done
+
+    if command -v git >/dev/null 2>&1; then
+        for entry in "${moves[@]}"; do
+            IFS='|' read -r relative source dest <<< "${entry}"
+            refs="$(git -C "${REPO}" grep -n -F -e "${source}" 2>/dev/null || true)"
+            [[ -n "${refs}" ]] || continue
+            printf 'References to %s, left for you to update:\n' "${source}"
+            printf '  %s\n' "${refs//$'\n'/$'\n'  }"
+        done
+    fi
+
+    printf 'Moved %d file(s) to layer %s. Commit with: git -C %s commit\n' "${#moves[@]}" "${ADD_LAYER}" "${REPO}"
+    owners="$(layer_owners "${ADD_LAYER}")"
+    if [[ "${owners}" == "every persona" ]]; then
+        printf "Other machines follow the new layer on their next df-link or df-deploy; every persona links '%s'.\n" "${ADD_LAYER}"
+    else
+        printf "Other machines follow the new layer on their next df-link or df-deploy; one whose persona does not link '%s' (linked by %s) loses the file there.\n" \
+            "${ADD_LAYER}" "${owners:-no persona}"
+    fi
+}
+
 main() {
     local name
     parse_args "$@"
@@ -1668,6 +1814,7 @@ main() {
         status) print_status ;;
         add) add_files ;;
         rm) remove_files ;;
+        mv) move_files ;;
         apply)
             if [[ "${PERSONA_SOURCE}" == default ]]; then
                 log_warn "No persona chosen; linking as '${PERSONA_NAME}', the default for $(platform). Pick one with: install.sh --persona NAME"

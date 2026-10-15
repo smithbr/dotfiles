@@ -1022,6 +1022,190 @@ fixture_untracks() {
 }
 
 # ---------------------------------------------------------------------------
+# Moving files between layers
+# ---------------------------------------------------------------------------
+
+# The linked fixture with home linking common and extra, server also linking
+# solo, a layer home does not, and work linking only common.
+make_move_fixture() {
+    make_linked_fixture
+    local name layers
+    for name in home server work; do
+        case "${name}" in
+            home) layers="common extra" ;;
+            server) layers="common extra solo" ;;
+            work) layers="common" ;;
+        esac
+        printf 'os=darwin,linux\nlayers=%s\nagents=yes\nagent_apps=claude cursor codex\nskills=core\neditors=yes\nbrew=\nbrew_optional=\nroles=\n' \
+            "${layers}" > "${FIXTURE}/personas/${name}"
+    done
+    git -C "${FIXTURE}" add -A
+    git -C "${FIXTURE}" -c user.name=test -c user.email=test@example.com commit -q -m four
+    run_fixture_link
+    assert_success
+}
+
+# Where a link in the destination points inside the fixture's stow/.
+linked_package_path() {
+    local text
+    text="$(readlink "$1")"
+    printf '%s\n' "stow/${text##*/stow/}"
+}
+
+@test "mv moves a file to another layer and keeps it linked" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_move_fixture
+
+    run_fixture_link mv --layer extra "${DEST}/.local/bin/tool" < /dev/null
+    assert_success
+    assert_output --partial "Moved stow/common/.local/bin/tool to stow/extra/.local/bin/tool; ~/.local/bin/tool links there"
+    assert_output --partial "/fixture commit"
+    assert_output --partial "one whose persona does not link 'extra' (linked by home, server) loses the file there"
+
+    [ -L "${DEST}/.local/bin/tool" ] && [ -x "${DEST}/.local/bin/tool" ]
+    [ "$(cat "${DEST}/.local/bin/tool")" = "$(printf '#!/bin/sh\necho tool')" ]
+    [ "$(linked_package_path "${DEST}/.local/bin/tool")" = stow/extra/.local/bin/tool ]
+    [[ "$(readlink "${DEST}/.local/bin/tool")" != /* ]]
+    [ ! -e "${FIXTURE}/stow/common/.local" ]
+    run git -C "${FIXTURE}" diff --cached -M --name-status
+    assert_output "$(printf 'R100\tstow/common/.local/bin/tool\tstow/extra/.local/bin/tool')"
+    [ -z "$(find "${DEST}/.local/bin" -name '.df-mv.*')" ]
+
+    # The next link run keeps the new link and backs nothing up.
+    run_fixture_link
+    assert_success
+    [ "$(linked_package_path "${DEST}/.local/bin/tool")" = stow/extra/.local/bin/tool ]
+    [ ! -e "${DEST}/.local/state/dotfiles/clobbered" ]
+}
+
+@test "mv --platform moves into this OS's part, keeps it by default, and --no-platform moves out" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_move_fixture
+
+    run_fixture_link mv --layer common --platform "${DEST}/.local/bin/tool" < /dev/null
+    assert_success
+    assert_output --partial "every persona links 'common'"
+    [ "$(linked_package_path "${DEST}/.local/bin/tool")" = stow/common.darwin/.local/bin/tool ]
+
+    run_fixture_link mv --layer extra "${DEST}/.local/bin/tool" < /dev/null
+    assert_success
+    [ "$(linked_package_path "${DEST}/.local/bin/tool")" = stow/extra.darwin/.local/bin/tool ]
+    [ ! -e "${FIXTURE}/stow/common.darwin/.local" ]
+
+    run_fixture_link mv --layer extra --no-platform "${DEST}/.local/bin/tool" < /dev/null
+    assert_success
+    [ "$(linked_package_path "${DEST}/.local/bin/tool")" = stow/extra/.local/bin/tool ]
+    [ "$(cat "${DEST}/.local/bin/tool")" = "$(printf '#!/bin/sh\necho tool')" ]
+    [ -f "${FIXTURE}/stow/extra/.local/bin/tool" ]
+    [ ! -e "${FIXTURE}/stow/extra.darwin/.local" ]
+}
+
+@test "mv takes a directory and moves every managed link in it" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_move_fixture
+    printf 'mine\n' > "${DEST}/.config/app/local"
+    ln -s /etc/hosts "${DEST}/.config/app/hosts"
+
+    cd "${DEST}/.config"
+    run_fixture_link mv --layer extra app < /dev/null
+    assert_success
+    [ "$(linked_package_path "${DEST}/.config/app/config")" = stow/extra/.config/app/config ]
+    [ "$(linked_package_path "${DEST}/.config/app/themes/dark")" = stow/extra/.config/app/themes/dark ]
+    [ "$(cat "${DEST}/.config/app/themes/dark")" = b ]
+    [ "$(readlink "${DEST}/.config/app/hosts")" = /etc/hosts ]
+    [ "$(cat "${DEST}/.config/app/local")" = mine ]
+    [ ! -e "${FIXTURE}/stow/common/.config/app" ]
+    [ "$(linked_package_path "${DEST}/.local/bin/tool")" = stow/common/.local/bin/tool ]
+}
+
+@test "mv asks for the layer on a terminal and needs one without it" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_move_fixture
+
+    run_fixture_link mv "${DEST}/.local/bin/tool" < /dev/null
+    assert_failure
+    assert_output --partial "Name the layer with --layer (one of: common extra)"
+
+    run_fixture_link_on_tty extra mv "${DEST}/.local/bin/tool"
+    assert_success
+    assert_output --partial "Layer to move the files to"
+    [ "$(linked_package_path "${DEST}/.local/bin/tool")" = stow/extra/.local/bin/tool ]
+}
+
+@test "mv refuses bad paths, unlinked layers, the same place, and taken destinations with nothing changed" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_move_fixture
+    mkdir -p "${FIXTURE}/seed/common/.config/seeded" "${DEST}/.config/seeded" "${FIXTURE}/stow/extra/.config/app"
+    printf 'seed\n' > "${FIXTURE}/seed/common/.config/seeded/state"
+    printf 'seed\n' > "${DEST}/.config/seeded/state"
+    printf 'taken\n' > "${FIXTURE}/stow/extra/.config/app/config"
+    printf 'real\n' > "${DEST}/.real"
+    ln -s /etc/hosts "${DEST}/.hosts"
+    ln -s "${DEST}/.config/agents/AGENTS.md" "${DEST}/.agents-md"
+    printf 'outside\n' > "${TEST_TMPDIR}/outside"
+    local before
+    before="$(git -C "${FIXTURE}" status --porcelain)"
+
+    for path in .real .hosts .agents-md .config/seeded/state "Library/Application Support/Code/User/settings.json"; do
+        run_fixture_link mv --layer extra "${DEST}/.local/bin/tool" "${DEST}/${path}" < /dev/null
+        assert_failure
+        assert_output --partial "Not moving ~/${path}"
+        refute_output --partial "Moved"
+    done
+    run_fixture_link mv --layer extra "${DEST}/.local/bin/tool" "${TEST_TMPDIR}/outside" < /dev/null
+    assert_failure
+    assert_output --partial "Not inside"
+
+    run_fixture_link mv --layer solo "${DEST}/.local/bin/tool" < /dev/null
+    assert_failure
+    assert_output --partial "does not link layer 'solo' (linked by server)"
+    run_fixture_link mv --layer common "${DEST}/.local/bin/tool" < /dev/null
+    assert_failure
+    assert_output --partial "Not moving ~/.local/bin/tool: already in stow/common"
+    run_fixture_link mv --layer extra "${DEST}/.local/bin/tool" "${DEST}/.config/app" < /dev/null
+    assert_failure
+    assert_output --partial "Not moving ~/.config/app/config: stow/extra/.config/app/config already exists"
+    run_fixture_link mv --layer extra --platform --no-platform "${DEST}/.local/bin/tool" < /dev/null
+    assert_failure
+    assert_output --partial "contradict"
+    run_fixture_link rm --no-platform "${DEST}/.local/bin/tool" < /dev/null
+    assert_failure
+    assert_output --partial "--no-platform only applies to mv"
+
+    [ "$(linked_package_path "${DEST}/.local/bin/tool")" = stow/common/.local/bin/tool ]
+    [ "$(linked_package_path "${DEST}/.config/app/themes/dark")" = stow/common/.config/app/themes/dark ]
+    [ "$(git -C "${FIXTURE}" status --porcelain)" = "${before}" ]
+    [ "$(cat "${FIXTURE}/stow/extra/.config/app/config")" = taken ]
+}
+
+@test "mv dry run changes nothing" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_move_fixture
+
+    run_fixture_link --dry-run mv --layer extra "${DEST}/.local/bin/tool" < /dev/null
+    assert_success
+    assert_output --partial "Would move stow/common/.local/bin/tool to stow/extra/.local/bin/tool and relink ~/.local/bin/tool"
+    [ "$(linked_package_path "${DEST}/.local/bin/tool")" = stow/common/.local/bin/tool ]
+    [ ! -e "${FIXTURE}/stow/extra/.local" ]
+    [ -z "$(git -C "${FIXTURE}" status --porcelain)" ]
+}
+
+@test "mv lists references to the old repo path without editing them" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_move_fixture
+    mkdir -p "${FIXTURE}/tests"
+    printf 'first\nrun stow/common/.local/bin/tool here\n' > "${FIXTURE}/tests/check"
+    git -C "${FIXTURE}" add -A
+    git -C "${FIXTURE}" -c user.name=test -c user.email=test@example.com commit -q -m refs
+
+    run_fixture_link mv --layer extra "${DEST}/.local/bin/tool" < /dev/null
+    assert_success
+    assert_output --partial "References to stow/common/.local/bin/tool, left for you to update:"
+    assert_output --partial "  tests/check:2:run stow/common/.local/bin/tool here"
+    grep -q 'stow/common/.local/bin/tool' "${FIXTURE}/tests/check"
+}
+
+# ---------------------------------------------------------------------------
 # Personas
 # ---------------------------------------------------------------------------
 

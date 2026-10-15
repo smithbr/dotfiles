@@ -28,6 +28,7 @@ Pick the persona that fits the machine, then the installs it should have: Docker
 df-add stow ~/.config/tool/config  # adds file and symlinks it
 df-add brew llmfit                 # installs it and adds it to a Brewfile
 df-rm ~/.config/tool/config        # stops managing it and keeps the file
+df-mv ~/.config/tool/config        # moves it to another layer
 df-link status                     # shows drift
 df-file-review                     # shows leftovers to archive
 df-link                            # After adding a file under `stow/`

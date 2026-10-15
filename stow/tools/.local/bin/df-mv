@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Move managed files to another layer of the dotfiles: link.sh mv.
+
+set -euo pipefail
+
+# The script lives at <repo>/stow/tools/.local/bin/df-mv, reached through its stow link.
+repo="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../../.." && pwd)"
+if [[ ! -f "${repo}/scripts/link.sh" ]]; then
+    printf 'df-mv: cannot find scripts/link.sh in %s\n' "${repo}" >&2
+    exit 1
+fi
+exec bash "${repo}/scripts/link.sh" mv "$@"
