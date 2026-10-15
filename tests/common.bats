@@ -451,6 +451,43 @@ run_picker() {
 Choice [green]: "
 }
 
+@test "choose_many --selected marks the values, keeps them on Enter, and drops them on none" {
+    run_picker "" choose_many --selected "green" "Pick" red green blue
+    assert_success
+    assert_output "green"
+    run_picker none choose_many --selected "green" "Pick" red green blue
+    assert_success
+    assert_output ""
+    run_picker "1 3" choose_many --selected "green" "Pick" $'Red\tred' $'Green\tgreen' $'Blue\tblue'
+    assert_output "red
+blue"
+    run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"'"
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        DOTFILES_PROMPT=read choose_many --selected "green" "Pick" red green 2>&1 >/dev/null
+    ' < /dev/null
+    assert_success
+    assert_output "Pick
+  1) [ ] red
+  2) [x] green
+Numbers separated by spaces, all, none, or Enter to keep the [x] marks: "
+}
+
+@test "choose_many passes the selected labels to gum" {
+    mkdir -p "${TEST_TMPDIR}/bin"
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "${TEST_TMPDIR}/gum.args"\nprintf "green\\n"\n' > "${TEST_TMPDIR}/bin/gum"
+    chmod +x "${TEST_TMPDIR}/bin/gum"
+    run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"':/usr/bin:/bin" TEST_TMPDIR="'"${TEST_TMPDIR}"'"
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        DOTFILES_PROMPT=gum choose_many --selected "green blue" "Pick" $'"'"'Red\tred'"'"' $'"'"'Green\tgreen'"'"' $'"'"'Blue\tblue'"'"' 2>/dev/null
+    ' < /dev/null
+    assert_success
+    assert_output "green"
+    run grep -x -- "--selected=Green,Blue" "${TEST_TMPDIR}/gum.args"
+    assert_success
+}
+
 @test "choose_many takes numbers or all, and none on Enter, end of input, or a bad number" {
     run_picker "1 3" choose_many "Pick" red green blue
     assert_success

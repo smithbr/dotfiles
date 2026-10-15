@@ -310,12 +310,20 @@ choose_one() {
 # Any number of the ITEMs, by gum multi-select or numbers on stdin ("1 3",
 # all, or Enter for none), printed one per line. An ITEM may be
 # LABEL<tab>VALUE: the label is shown, the value printed. Esc, end of input,
-# or an invalid number picks none and returns 1.
-#   choose_many HEADER ITEM...
+# or an invalid number picks none and returns 1. With --selected, those
+# values start selected (ticked in gum, [x] in the list) and Enter keeps
+# them; "none" then picks none.
+#   choose_many [--selected "VALUE..."] HEADER ITEM...
 choose_many() {
-    local header="$1" item reply="" token index=1 height
+    local header selected="" item reply="" token index=1 height mark
+    local -a items=() labels=() values=() options=() preselected=()
+    if [[ "${1:-}" == --selected ]]; then
+        selected=" $2 "
+        shift 2
+    fi
+    header="$1"
     shift
-    local -a items=("$@") labels=() values=() options=()
+    items=("$@")
 
     for item in "${items[@]}"; do
         labels+=("${item%%$'\t'*}")
@@ -327,7 +335,12 @@ choose_many() {
         (( height < 3 )) && height=3
         for index in "${!items[@]}"; do
             options+=("${labels[${index}]}"$'\t'"${values[${index}]}")
+            # gum matches --selected against labels.
+            [[ "${selected}" != *" ${values[${index}]} "* ]] || preselected+=("${labels[${index}]}")
         done
+        if [[ "${#preselected[@]}" -gt 0 ]]; then
+            options=(--selected="$(IFS=,; printf '%s' "${preselected[*]}")" "${options[@]}")
+        fi
         log_info "Use tab or x to select, ctrl+a for all, enter to continue, or esc to skip." >&2
         # Esc exits non-zero; whatever gum printed before that is no choice.
         reply="$(gum_choose_multiselect "${header}" "${height}" --label-delimiter=$'\t' "${options[@]}")" || return 1
@@ -336,13 +349,28 @@ choose_many() {
     fi
 
     printf '%s\n' "${header}" >&2
-    for item in "${labels[@]}"; do
-        printf '  %d) %s\n' "${index}" "${item}" >&2
-        index=$((index + 1))
+    for index in "${!items[@]}"; do
+        mark=""
+        if [[ -n "${selected}" ]]; then
+            mark="[ ] "
+            [[ "${selected}" != *" ${values[${index}]} "* ]] || mark="[x] "
+        fi
+        printf '  %d) %s%s\n' "$((index + 1))" "${mark}" "${labels[${index}]}" >&2
     done
-    printf 'Numbers separated by spaces, all, or Enter for none: ' >&2
+    if [[ -n "${selected}" ]]; then
+        printf 'Numbers separated by spaces, all, none, or Enter to keep the [x] marks: ' >&2
+    else
+        printf 'Numbers separated by spaces, all, or Enter for none: ' >&2
+    fi
     IFS= read -r reply || reply=""
-    [[ -n "${reply//[[:space:]]/}" ]] || return 1
+    if [[ -z "${reply//[[:space:]]/}" ]]; then
+        [[ -n "${selected}" ]] || return 1
+        for index in "${!items[@]}"; do
+            [[ "${selected}" != *" ${values[${index}]} "* ]] || printf '%s\n' "${values[${index}]}"
+        done
+        return 0
+    fi
+    [[ "${reply}" != none ]] || return 0
     if [[ "${reply}" == all ]]; then
         printf '%s\n' "${values[@]}"
         return 0
