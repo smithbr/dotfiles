@@ -896,16 +896,16 @@ fixture_untracks() {
     ! fixture_tracks "$1"
 }
 
-@test "remove keeps the file as a real copy with its mode and takes it out of the layer and the index" {
+@test "rm keeps the file as a real copy with its mode and takes it out of the layer and the index" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     make_linked_fixture
 
-    run_fixture_link remove "${DEST}/.local/bin/tool" < /dev/null
+    run_fixture_link rm "${DEST}/.local/bin/tool" < /dev/null
     assert_success
     assert_output --partial "Kept ~/.local/bin/tool as a real file"
     assert_output --partial "Removed stow/common/.local/bin/tool from the repo"
     assert_output --partial "/fixture commit"
-    assert_output --partial "run df-remove on it before pulling"
+    assert_output --partial "run df-rm on it before pulling"
 
     [ -f "${DEST}/.local/bin/tool" ] && [ ! -L "${DEST}/.local/bin/tool" ]
     [ "$(cat "${DEST}/.local/bin/tool")" = "$(printf '#!/bin/sh\necho tool')" ]
@@ -914,7 +914,7 @@ fixture_untracks() {
     [ ! -e "${FIXTURE}/stow/common/.local" ]
     [ -d "${FIXTURE}/stow/common" ]
     fixture_untracks stow/common/.local/bin/tool
-    [ -z "$(find "${DEST}/.local/bin" -name '.df-remove.*')" ]
+    [ -z "$(find "${DEST}/.local/bin" -name '.df-rm.*')" ]
 
     # The next link run leaves the real file alone.
     run_fixture_link
@@ -922,14 +922,14 @@ fixture_untracks() {
     [ -f "${DEST}/.local/bin/tool" ] && [ ! -L "${DEST}/.local/bin/tool" ]
 }
 
-@test "remove takes a directory and removes every managed link in it" {
+@test "rm takes a directory and removes every managed link in it" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     make_linked_fixture
     printf 'mine\n' > "${DEST}/.config/app/local"
     ln -s /etc/hosts "${DEST}/.config/app/hosts"
 
     cd "${DEST}/.config"
-    run_fixture_link remove app < /dev/null
+    run_fixture_link rm app < /dev/null
     assert_success
     [ "$(cat "${DEST}/.config/app/config")" = a ] && [ ! -L "${DEST}/.config/app/config" ]
     [ "$(cat "${DEST}/.config/app/themes/dark")" = b ] && [ ! -L "${DEST}/.config/app/themes/dark" ]
@@ -942,7 +942,7 @@ fixture_untracks() {
     fixture_tracks stow/common/.local/bin/tool
 }
 
-@test "remove refuses real files, foreign and non-repo links, and outside paths before changing anything" {
+@test "rm refuses real files, foreign and non-repo links, and outside paths before changing anything" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     make_linked_fixture
     mkdir -p "${FIXTURE}/seed/common/.config/seeded" "${DEST}/.config/seeded"
@@ -956,22 +956,22 @@ fixture_untracks() {
     before="$(git -C "${FIXTURE}" status --porcelain)"
 
     for path in .real .hosts .agents-md .config/seeded/state "Library/Application Support/Code/User/settings.json"; do
-        run_fixture_link remove "${DEST}/.local/bin/tool" "${DEST}/${path}" < /dev/null
+        run_fixture_link rm "${DEST}/.local/bin/tool" "${DEST}/${path}" < /dev/null
         assert_failure
         assert_output --partial "Not removing ~/${path}"
         refute_output --partial "Kept"
     done
-    run_fixture_link remove "${DEST}/.config/seeded/state" < /dev/null
+    run_fixture_link rm "${DEST}/.config/seeded/state" < /dev/null
     assert_output --partial "a seed file"
-    run_fixture_link remove "${DEST}/.hosts" < /dev/null
+    run_fixture_link rm "${DEST}/.hosts" < /dev/null
     assert_output --partial "links outside the repo"
-    run_fixture_link remove "${DEST}/.local/bin/tool" "${TEST_TMPDIR}/outside" < /dev/null
+    run_fixture_link rm "${DEST}/.local/bin/tool" "${TEST_TMPDIR}/outside" < /dev/null
     assert_failure
     assert_output --partial "Not inside"
-    run_fixture_link remove "${DEST}" < /dev/null
+    run_fixture_link rm "${DEST}" < /dev/null
     assert_failure
     assert_output --partial "Not inside"
-    run_fixture_link remove "${DEST}/.config/seeded" < /dev/null
+    run_fixture_link rm "${DEST}/.config/seeded" < /dev/null
     assert_failure
     assert_output --partial "No managed files to remove"
 
@@ -982,14 +982,14 @@ fixture_untracks() {
     [ "$(cat "${DEST}/.real")" = real ]
 }
 
-@test "remove dry run changes nothing" {
+@test "rm dry run changes nothing" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     make_linked_fixture
 
-    run_fixture_link --dry-run remove "${DEST}/.local/bin/tool" < /dev/null
+    run_fixture_link --dry-run rm "${DEST}/.local/bin/tool" < /dev/null
     assert_success
     assert_output --partial "Would replace the link ~/.local/bin/tool with a copy of stow/common/.local/bin/tool"
-    run_fixture_link --dry-run remove --delete "${DEST}/.local/bin/tool" < /dev/null
+    run_fixture_link --dry-run rm --delete "${DEST}/.local/bin/tool" < /dev/null
     assert_success
     assert_output --partial "Would move ~/.local/bin/tool to ${DEST}/.local/state/dotfiles/cleanup/"
 
@@ -1000,11 +1000,11 @@ fixture_untracks() {
     [ ! -e "${DEST}/.local/state/dotfiles/cleanup" ]
 }
 
-@test "remove --delete moves the file to the cleanup folder instead of keeping it" {
+@test "rm --delete moves the file to the cleanup folder instead of keeping it" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     make_linked_fixture
 
-    run_fixture_link remove --delete "${DEST}/.local/bin/tool" < /dev/null
+    run_fixture_link rm --delete "${DEST}/.local/bin/tool" < /dev/null
     assert_success
     assert_output --partial "Moved ~/.local/bin/tool to ${DEST}/.local/state/dotfiles/cleanup/"
     [ ! -e "${DEST}/.local/bin/tool" ] && [ ! -L "${DEST}/.local/bin/tool" ]
@@ -1018,7 +1018,7 @@ fixture_untracks() {
 
     run_fixture_link --delete status
     assert_failure
-    assert_output --partial "--delete only applies to remove"
+    assert_output --partial "--delete only applies to rm"
 }
 
 # ---------------------------------------------------------------------------

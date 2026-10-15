@@ -127,7 +127,7 @@ Commands:
   add PATH...
             Start managing files from the home directory: copy each one into
             a layer, then link it (a directory adds every file in it)
-  remove PATH...
+  rm PATH...
             Stop managing linked files: replace each link with a real copy
             of its repo file and git rm that file (a directory removes every
             managed link in it)
@@ -145,7 +145,7 @@ Options:
                           (stow/<layer>.<os>)
       --seed              add: copy once as a seed file the app then owns,
                           instead of linking
-      --delete            remove: drop the files from the home directory too,
+      --delete            rm: drop the files from the home directory too,
                           moving them to ~/.local/state/dotfiles/cleanup/
   -h, --help              Show this help and exit
 
@@ -174,7 +174,7 @@ parse_args() {
                 esac
                 shift
                 ;;
-            apply|managed|status|persona|personas|offered|installs|add|remove) COMMAND="$1" ;;
+            apply|managed|status|persona|personas|offered|installs|add|rm) COMMAND="$1" ;;
             -h|--help) usage; exit 0 ;;
             --)
                 shift
@@ -187,7 +187,7 @@ parse_args() {
                 exit 2
                 ;;
             *)
-                if [[ "${COMMAND}" != add && "${COMMAND}" != remove ]]; then
+                if [[ "${COMMAND}" != add && "${COMMAND}" != rm ]]; then
                     log_error "Unknown argument: $1"
                     usage >&2
                     exit 2
@@ -198,7 +198,7 @@ parse_args() {
         shift
     done
 
-    if [[ ( "${COMMAND}" == add || "${COMMAND}" == remove ) && "${#path_args[@]}" -eq 0 ]]; then
+    if [[ ( "${COMMAND}" == add || "${COMMAND}" == rm ) && "${#path_args[@]}" -eq 0 ]]; then
         log_error "${COMMAND} needs at least one path"
         exit 2
     fi
@@ -206,8 +206,8 @@ parse_args() {
         log_error "--layer, --platform and --seed only apply to add"
         exit 2
     fi
-    if [[ "${COMMAND}" != remove && "${REMOVE_DELETE}" -eq 1 ]]; then
-        log_error "--delete only applies to remove"
+    if [[ "${COMMAND}" != rm && "${REMOVE_DELETE}" -eq 1 ]]; then
+        log_error "--delete only applies to rm"
         exit 2
     fi
 
@@ -1462,7 +1462,7 @@ add_files() {
 }
 
 # ---------------------------------------------------------------------------
-# remove: stop managing files, keeping them in the home directory
+# rm: stop managing files, keeping them in the home directory
 # ---------------------------------------------------------------------------
 
 # The repo file a link in the home directory stands for, relative to the repo
@@ -1475,7 +1475,7 @@ stow_link_source() {
     printf '%s\n' "${destination#"${REPO}"/}"
 }
 
-# Why remove will not take a path that is not a link into the repo's stow/.
+# Why rm will not take a path that is not a link into the repo's stow/.
 remove_refusal() {
     local path="$1" relative="$2" dir
     if [[ ! -L "${path}" ]]; then
@@ -1535,7 +1535,7 @@ collect_remove_files() {
     [[ "${refused}" -eq 0 ]]
 }
 
-# A private folder for files remove --delete takes out of the home directory,
+# A private folder for files rm --delete takes out of the home directory,
 # beside the file review's cleanup archives and never reached through a
 # symlinked parent.
 REMOVE_ARCHIVE=""
@@ -1611,7 +1611,7 @@ remove_files() {
             rm -f "${target}"
             printf 'Moved ~/%s to %s\n' "${relative}" "${REMOVE_ARCHIVE}/${relative}"
         else
-            tmp="$(mktemp "$(dirname "${target}")/.df-remove.XXXXXX")"
+            tmp="$(mktemp "$(dirname "${target}")/.df-rm.XXXXXX")"
             if ! cp -p "${REPO}/${source}" "${tmp}" || ! mv -f "${tmp}" "${target}"; then
                 rm -f "${tmp}"
                 log_error "Could not replace the link ~/${relative}; it is left in place"
@@ -1626,7 +1626,7 @@ remove_files() {
     done
 
     printf 'Removed %d file(s) from the repo. Commit with: git -C %s commit\n' "${#entries[@]}" "${REPO}"
-    printf 'Other machines drop these links on their next df-link or df-deploy, and the files go with them; to keep one there, run df-remove on it before pulling.\n'
+    printf 'Other machines drop these links on their next df-link or df-deploy, and the files go with them; to keep one there, run df-rm on it before pulling.\n'
 }
 
 main() {
@@ -1667,7 +1667,7 @@ main() {
         managed) print_managed ;;
         status) print_status ;;
         add) add_files ;;
-        remove) remove_files ;;
+        rm) remove_files ;;
         apply)
             if [[ "${PERSONA_SOURCE}" == default ]]; then
                 log_warn "No persona chosen; linking as '${PERSONA_NAME}', the default for $(platform). Pick one with: install.sh --persona NAME"
