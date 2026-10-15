@@ -73,6 +73,7 @@ This is process-level isolation, not a real container or VM.
 
 - Validates `scripts/bootstrap/linux/apt-packages.txt`
 - Verifies Linux bootstrap guard clauses for missing `apt-get`
+- Runs `pihole.sh` against a scratch root (`PIHOLE_ROOT`) with mocked `apt-get`, `systemctl`, `sysctl`, `unbound-checkconf`, `dig`, `curl`, and `pihole-FTL`: a fresh install writes Unbound's Pi-hole config, disables the resolvconf hook, raises the receive buffer, restarts Unbound, seeds `pihole.toml` and runs the installer unattended; a rerun changes nothing but sets Pi-hole's upstreams and DNSSEC back; a rejected Unbound config stops before Pi-hole
 - Runs `docker.sh` and `tailscale.sh` to verify they skip a tool on PATH or in Homebrew's bin, and `claude-code.sh` to verify the native installer runs only when Claude Code is in neither place
 - Dry-runs `harden.sh` against a scratch root (`HARDEN_ROOT`) with mocked system tools: required arguments, closing public SSH only once Tailscale is connected, Cloudflare-only ports, and stopping before user or SSH changes when there is no key to copy
 - Verifies the macOS iTerm2 step enables the Python API, makes the repo profile the default, adds the Catppuccin color presets (rewriting a stale one, keeping the user's own), and rewrites nothing on a second run
@@ -85,7 +86,7 @@ This is process-level isolation, not a real container or VM.
 
 [`bin_scripts.bats`](bin_scripts.bats)
 
-- Covers scripts in [`stow/tools/.local/bin`](../stow/tools/.local/bin), [`stow/personal/.local/bin`](../stow/personal/.local/bin), and [`stow/server.linux/.local/bin`](../stow/server.linux/.local/bin)
+- Covers scripts in [`stow/tools/.local/bin`](../stow/tools/.local/bin), [`stow/personal/.local/bin`](../stow/personal/.local/bin), and [`stow/pihole.linux/.local/bin`](../stow/pihole.linux/.local/bin)
 - Runs `st` (in `stow/desktop.darwin/.local/bin`) under plain Python: team listing and dry runs, a team without agents as one tab, the missing-teams-file hint, every team in the tracked `teams.toml.example`, a directory or the current directory as a one-tab team, a team winning over a same-named directory, and each tab running its command as the tab's program
 - Verifies help output, startup probing, and the Unbound rows for `ph-padd`
 - Runs `cf-cert` against a mocked acme.sh: argument checks, issue-only runs, the combined-pem install and chained reload command, stopping on a failed issue, a missing token on closed stdin, and `--pihole` refusing to run without root
@@ -133,12 +134,12 @@ This is process-level isolation, not a real container or VM.
 
 - Runs the real [`scripts/link.sh`](../scripts/link.sh) and GNU Stow against a scratch home and a local agents repo fixture
 - Verifies linking per platform, shared editor settings, backups of changed copies and foreign links, removal of stale repo links (files that moved, were deleted, or belong to an unused package) while real files and foreign links stay, persona choice (flag, environment, saved state, OS default, unknown or wrong-OS names), personas without agents or editors, idempotency, and dry runs
-- Covers agent links (clone, backup of real agent config, unreachable repo), seed files (the gh login only for personas with the `personal` layer), the `managed` and `status` reports, and the git identity: only `personal` sets `user.email`, `config.local` overrides it, and a missing email or a `[user]` in `~/.gitconfig` is warned about and reported; `status` names real files a layer the persona does not link would own (not shared parents or the empty folders a persona switch leaves) and never moves them
+- Covers agent links (clone, backup of real agent config, unreachable repo), seed files (the gh login only for personas with the `personal` layer), the `managed` and `status` reports, the installs (`offered` and `installs`: the optional installs read from setup scripts' detect lines, the OS directory first, a role requiring one, `DOTFILES_INSTALLS`, the saved choice, and a persona switch dropping what it does not offer), and the git identity: only `personal` sets `user.email`, `config.local` overrides it, and a missing email or a `[user]` in `~/.gitconfig` is warned about and reported; `status` names real files a layer the persona does not link would own (not shared parents or the empty folders a persona switch leaves) and never moves them
 - Runs `add` against a fixture repo: a file becomes a link with no backup and keeps its executable bit; directories, `--platform`, relative paths, `--seed`, dry runs; refusals of secrets, private keys, `.local` overrides, agent and editor paths, repo files, outside paths, symlinks, banned words (without naming them), a layer the persona does not link, and a missing layer on closed stdin
 
 [`install.bats`](install.bats)
 
-- Tests `install.sh` argument parsing, including `--persona`, the persona picker (number, name, empty answer, EOF), rejecting an unknown persona before any change, and the closing setup step (offered on a terminal, named otherwise, a failing script reported)
+- Tests `install.sh` argument parsing, including `--persona`, `--install`, and `--no-install`, the persona picker (number, name, empty answer, EOF), rejecting an unknown persona or install before any change, and the closing installs step (the default install applied on a fresh machine, a chosen role, the saved choice, an applied one skipped, a failing script reported)
 - Verifies SSH key helper behavior
 - Tests error handling when `HOME` is unset
 - Runs an isolated integration test for [`install.sh`](../install.sh) with sandboxed home and mocked external commands

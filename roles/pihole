@@ -1,0 +1,7 @@
+# A Pi-hole with Unbound as its upstream, plus the pihole layer (ph-* tools),
+# reached over the tailnet, so the tailscale install joins even when unticked.
+# Applied until both are installed and Unbound has its Pi-hole config.
+os=linux
+layers=pihole
+requires=tailscale
+detect=[[ -x /usr/bin/pihole-FTL && -x /usr/local/bin/pihole && -x /usr/sbin/unbound && -f /etc/unbound/unbound.conf.d/pi-hole.conf ]]

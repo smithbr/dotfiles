@@ -26,33 +26,33 @@ teardown() {
 }
 
 @test "ph-sec-audit defaults to a plan without applying changes" {
-    run bash "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-sec-audit"
+    run bash "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-sec-audit"
     assert_success
     assert_output --partial "Without --apply"
     refute_output --partial "Backups:"
 
-    run bash "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-sec-audit" --upgrade-packages
+    run bash "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-sec-audit" --upgrade-packages
     assert_success
     assert_output --partial "Without --apply"
     refute_output --partial "Backups:"
 }
 
 @test "ph-sec-audit requires a target and rejects malformed arguments" {
-    run bash "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-sec-audit" --apply
+    run bash "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-sec-audit" --apply
     assert_failure
     assert_output --partial "requires an explicit valid --user and --host"
 
-    run bash "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-sec-audit" --apply --user --host
+    run bash "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-sec-audit" --apply --user --host
     assert_failure
     assert_output --partial "Missing value"
 
-    run bash "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-sec-audit" --unknown
+    run bash "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-sec-audit" --unknown
     assert_failure
     assert_output --partial "Unknown argument"
 }
 
 @test "ph-sec-audit refuses a different host before making changes" {
-    run bash "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-sec-audit" \
+    run bash "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-sec-audit" \
         --apply --user operator --host "$(hostname)-wrong-target"
     assert_failure
     assert_output --partial "Host mismatch; no changes made"
@@ -86,7 +86,7 @@ PROBE
         /^restore_web_ports\(\) \{/ { copy=1 }
         copy { print }
         /^trap - ERR HUP INT TERM$/ { exit }
-    ' "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-sec-audit" >> "${probe_script}"
+    ' "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-sec-audit" >> "${probe_script}"
 
     run env PROBE_FAILURE="${1}" bash "${probe_script}"
 }
@@ -179,7 +179,7 @@ run_padd_dns_unbound_probe() {
 }
 
 @test "ph-padd displays help" {
-    run sh "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-padd" --help
+    run sh "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-padd" --help
     assert_success
     assert_output --partial "PADD displays stats about your Pi-hole"
     assert_output --partial "--api"
@@ -194,7 +194,7 @@ exit 0
 MOCK
     chmod +x "${BIN_SANDBOX}/dig"
 
-    run_padd_api_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-padd"
+    run_padd_api_probe "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-padd"
     assert_failure
     assert_output --partial "API not available at: localhost"
 
@@ -238,7 +238,7 @@ MOCK
     export PH_PADD_UNBOUND_MAIN_CONF="${main_conf}"
     export PH_PADD_UNBOUND_CONF="${include_conf}"
 
-    run_padd_dns_unbound_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-padd"
+    run_padd_dns_unbound_probe "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-padd"
 
     assert_success
     assert_output --partial "status=Running"
@@ -266,7 +266,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/unbound-control"
 
     PH_PADD_UNBOUND_MAIN_CONF="${TEST_TMPDIR}/missing.conf" \
-        run_padd_dns_unbound_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-padd"
+        run_padd_dns_unbound_probe "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-padd"
 
     assert_success
     assert_output --partial "cache=No stats"
@@ -327,7 +327,7 @@ MOCK
 
     for script in ph-padd; do
         PADD_PROBE_MAIN='API_URL=https://127.0.0.1/api/; GetPADDData; convertUptime "$(GetPADDValue system.uptime)"; echo; convertUptime 90061' \
-            run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}"
+            run_padd_main_probe "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/${script}"
         assert_success
         assert_output --partial "0 days, 00 hours, 00 minutes"
         assert_output --partial "1 days, 01 hours, 01 minutes"
@@ -342,7 +342,7 @@ MOCK
 
     for script in ph-padd; do
         PADD_PROBE_MAIN='API_URL=https://127.0.0.1/api/; GetPADDData; printf "host=%s|uptime=%s\n" "$(GetPADDValue node_name)" "$(GetPADDValue system.uptime)"' \
-            run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}"
+            run_padd_main_probe "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/${script}"
         assert_success
         assert_output "host=evil]0;tsystem.uptime=5|uptime="
     done
@@ -356,7 +356,7 @@ MOCK
     PADD_PROBE_MAIN='TestAPIAvailability; printf "api=%s\n" "${API_URL}"'
 
     for script in ph-padd; do
-        run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --server 192.0.2.10
+        run_padd_main_probe "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/${script}" --server 192.0.2.10
         assert_success
         assert_output --partial "api=https://192.0.2.10/api/"
         run cat "${TEST_TMPDIR}/curl-args"
@@ -364,18 +364,18 @@ MOCK
         refute_output --partial "--insecure"
         refute_output --regexp '(^| )-[a-zA-Z]*k'
 
-        run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --server 192.0.2.10 --cacert "${TEST_TMPDIR}/ca.pem"
+        run_padd_main_probe "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/${script}" --server 192.0.2.10 --cacert "${TEST_TMPDIR}/ca.pem"
         assert_success
         run cat "${TEST_TMPDIR}/curl-args"
         assert_output --partial "--cacert ${TEST_TMPDIR}/ca.pem"
         refute_output --partial "--insecure"
 
-        run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --server 192.0.2.10 --insecure
+        run_padd_main_probe "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/${script}" --server 192.0.2.10 --insecure
         assert_success
         run cat "${TEST_TMPDIR}/curl-args"
         assert_output --partial "--insecure"
 
-        run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --server 127.0.0.1
+        run_padd_main_probe "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/${script}" --server 127.0.0.1
         assert_success
         assert_output --partial "api=https://127.0.0.1/api/"
         run cat "${TEST_TMPDIR}/curl-args"
@@ -390,12 +390,12 @@ MOCK
     PADD_PROBE_MAIN='TestAPIAvailability; printf "api=%s\n" "${API_URL}"'
 
     for script in ph-padd; do
-        run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --server 192.0.2.10
+        run_padd_main_probe "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/${script}" --server 192.0.2.10
         assert_failure
         assert_output --partial "Refusing plain http:// API URL http://192.0.2.10:80/api/"
         assert [ ! -e "${TEST_TMPDIR}/curl-args" ]
 
-        run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --api http://192.0.2.10/api/
+        run_padd_main_probe "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/${script}" --api http://192.0.2.10/api/
         assert_failure
         assert_output --partial "Refusing API URL http://192.0.2.10/api/"
         assert [ ! -e "${TEST_TMPDIR}/curl-args" ]
@@ -409,7 +409,7 @@ MOCK
     PADD_PROBE_MAIN='API_URL=https://192.0.2.10/api/; Authenticate; printf "valid=%s\n" "${validSession}"; GetFTLData info/ftl >/dev/null'
 
     for script in ph-padd; do
-        PADD_PASSWORD='hunter2"\x' run_padd_main_probe "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}"
+        PADD_PASSWORD='hunter2"\x' run_padd_main_probe "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/${script}"
         assert_success
         assert_output --partial "valid=true"
 
@@ -427,16 +427,16 @@ MOCK
     local script
 
     for script in ph-padd; do
-        run sh "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --secret hunter2
+        run sh "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/${script}" --secret hunter2
         assert_failure
         assert_output --partial "PADD_PASSWORD"
 
         # -u never downloads: the file comes from the repo
-        run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" sh "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --update
+        run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" sh "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/${script}" --update
         assert_success
         assert_output "ph-padd is managed by ~/.dotfiles; update it there."
 
-        run sh "${PROJECT_ROOT}/stow/server.linux/.local/bin/${script}" --help
+        run sh "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/${script}" --help
         assert_output --partial "--cacert"
         assert_output --partial "--insecure"
         refute_output --partial "--secret"
@@ -719,7 +719,7 @@ MOCK
 }
 
 @test "ph-update displays help" {
-    run "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update" --help
+    run "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-update" --help
     assert_success
     assert_output --partial "Usage:"
     assert_output --partial "ph-update"
@@ -751,11 +751,11 @@ MOCK
     chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/apt-get" "${BIN_SANDBOX}/pihole" "${BIN_SANDBOX}/ph-padd"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update"
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-update"
     assert_success
     assert_output --partial "sudo apt-get update"
     refute_output --partial "PATH="
-    assert_output --partial "sudo PH_UPDATE_SKIP_OS_UPDATE=1 ${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update"
+    assert_output --partial "sudo PH_UPDATE_SKIP_OS_UPDATE=1 ${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-update"
 }
 
 @test "ph-update preserves -r through self-elevating sudo" {
@@ -782,7 +782,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/apt-get" "${BIN_SANDBOX}/pihole" "${BIN_SANDBOX}/ph-padd"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update" -r
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-update" -r
     assert_success
     assert_output --partial "PH_UPDATE_SKIP_OS_UPDATE=1"
     assert_output --partial "ph-update -r"
@@ -790,7 +790,7 @@ MOCK
 
 @test "ph-update rejects -r on non-linux hosts" {
     run env OSTYPE="darwin23" \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update" -r
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-update" -r
     assert_failure
     assert_output --partial "-r/--restart is only supported on Linux"
 }
@@ -800,7 +800,7 @@ MOCK
     ln -sf "${PROJECT_ROOT}/stow/tools/.local/bin/os-update" "${TEST_TMPDIR}/os-update"
 
     sed 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update" > "${probe_script}"
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-update" > "${probe_script}"
     chmod +x "${probe_script}"
 
     cat > "${BIN_SANDBOX}/pihole" <<'MOCK'
@@ -841,7 +841,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/apt-get"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update"
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-update"
     assert_failure
     assert_output --partial "pihole command is unavailable"
     [[ "${output}" != *"sudo apt-get update"* ]]
@@ -855,7 +855,7 @@ MOCK
     # Take the root branch without being root; stay out of os-update and sudo.
     sed -e 's/^if (( EUID == 0 )); then$/if true; then/' \
         -e 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-update" > "${probe_script}"
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-update" > "${probe_script}"
     chmod +x "${probe_script}"
 
     local cmd
@@ -872,7 +872,7 @@ MOCK
 }
 
 @test "ph-test displays help" {
-    run "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test" --help
+    run "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-test" --help
     assert_success
     assert_output --partial "Usage:"
     assert_output --partial "ph-test [dns-server-ip]"
@@ -887,10 +887,10 @@ MOCK
     chmod +x "${BIN_SANDBOX}/sudo"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test" 192.0.2.53
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-test" 192.0.2.53
     assert_success
     refute_output --partial "PATH="
-    assert_output --partial "sudo ${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test 192.0.2.53"
+    assert_output --partial "sudo ${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-test 192.0.2.53"
 }
 
 @test "ph-test finds unbound commands through supplemental sbin paths" {
@@ -952,7 +952,7 @@ MOCK
         "${unbound_sbin}/unbound-control"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" PH_TEST_SBIN_PATHS="${unbound_sbin}" \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test"
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-test"
     assert_success
     [[ "${output}" != *"Missing dependency: unbound-control"* ]]
     [[ "${output}" != *"Missing dependency: unbound-checkconf"* ]]
@@ -1005,7 +1005,7 @@ MOCK
         PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
         PH_TEST_UNBOUND_CONF="${primary_conf}" \
         PH_TEST_UNBOUND_MAIN_CONF="${main_conf}" \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test"
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-test"
     assert_success
     assert_output --partial "UNBOUND_CONF=${primary_conf}"
     assert_output --partial "interface=127.0.0.1"
@@ -1102,7 +1102,7 @@ MOCK
         PH_TEST_DIG_LOG="${dig_log}" \
         PH_TEST_UNBOUND_CONF="${conf_file}" \
         PH_TEST_UNBOUND_MAIN_CONF="${conf_file}" \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test"
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-test"
     assert_success
     assert_output --partial "AD flag not exposed on direct query to 127.0.0.1:5335"
     assert_output --partial "Re-test the direct resolver socket: dig @127.0.0.1 -p 5335 google.com +dnssec +adflag"
@@ -1287,7 +1287,7 @@ MOCK
         PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
         PH_TEST_UNBOUND_CONF="${conf_file}" \
         PH_TEST_UNBOUND_MAIN_CONF="${conf_file}" \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test"
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-test"
     assert_failure
     assert_output --partial "Summary"
     assert_output --partial "Could not retrieve stats"
@@ -1470,7 +1470,7 @@ MOCK
         PH_TEST_TIMEOUT_SECONDS=1 \
         PH_TEST_UNBOUND_CONF="${conf_file}" \
         PH_TEST_UNBOUND_MAIN_CONF="${conf_file}" \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test"
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-test"
     assert_failure
     assert_output --partial "Summary"
     assert_output --partial "Could not retrieve stats (timed out after 1s)"
@@ -1655,7 +1655,7 @@ MOCK
         PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
         PH_TEST_UNBOUND_CONF="${conf_file}" \
         PH_TEST_UNBOUND_MAIN_CONF="${conf_file}" \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test"
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-test"
     assert_success
     assert_output --partial "Summary"
     assert_output --partial "total.num.queries: 42"
@@ -1672,7 +1672,7 @@ MOCK
 
     # Take the root branch without being root.
     sed 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-test" > "${probe_script}"
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-test" > "${probe_script}"
     chmod +x "${probe_script}"
 
     local cmd
@@ -1688,7 +1688,7 @@ MOCK
 }
 
 @test "ph-backup displays help" {
-    run "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-backup" --help
+    run "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-backup" --help
     assert_success
     assert_output --partial "Usage:"
     assert_output --partial "ph-backup [-o|--output DIR]"
@@ -1704,7 +1704,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/sudo"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-backup" --bogus
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-backup" --bogus
     assert_failure
     assert_output --partial "Unknown argument: --bogus"
     refute_output --partial "sudo "
@@ -1712,7 +1712,7 @@ MOCK
 
 @test "ph-backup refuses to run off Linux" {
     run env OSTYPE="darwin23" \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-backup"
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-backup"
     assert_failure
     assert_output --partial "only runs on the Linux host"
 }
@@ -1726,10 +1726,10 @@ MOCK
     chmod +x "${BIN_SANDBOX}/sudo"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-backup" -o /mnt/nas/pihole
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-backup" -o /mnt/nas/pihole
     assert_success
     refute_output --partial "PATH="
-    assert_output --partial "sudo ${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-backup -o /mnt/nas/pihole"
+    assert_output --partial "sudo ${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-backup -o /mnt/nas/pihole"
 }
 
 # ph-backup must run as root, so tests exercise a copy with the self-elevation
@@ -1825,7 +1825,7 @@ MOCK
         skip && /^fi$/ { skip = 0; next }
         skip { next }
         { print }
-    ' "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-backup" > "${TEST_TMPDIR}/ph-backup"
+    ' "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-backup" > "${TEST_TMPDIR}/ph-backup"
 
     chmod +x "${TEST_TMPDIR}/ph-backup"
 }
@@ -2069,7 +2069,7 @@ MOCK
 
     # Take the root branch without being root.
     sed 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
-        "${PROJECT_ROOT}/stow/server.linux/.local/bin/ph-backup" > "${probe_script}"
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-backup" > "${probe_script}"
     chmod +x "${probe_script}"
 
     local cmd

@@ -10,12 +10,13 @@
 # Run as root on a new machine with only a root login, it needs nothing else
 # from this repo:
 #   ssh root@HOST 'bash -s -- --user NAME --allow 80 --allow 443' < scripts/bootstrap/linux/harden.sh
-# Run from the repo as the admin user (install.sh offers it as the "harden"
-# setup script), it re-runs itself through sudo for that user. Set TS_AUTHKEY
-# to join the tailnet unattended; otherwise `tailscale up` prints a login URL
-# and waits (skipped without a terminal). Safe to run again. It is never run
-# unasked: on a server already in use it would close every port but the
-# tailnet's and allow only one SSH user.
+# Run from the repo as the admin user (install.sh offers it first, before
+# anything is installed, on a server or VPS a basic check finds unhardened),
+# it re-runs itself through sudo for that user. Set TS_AUTHKEY to join the
+# tailnet unattended; otherwise `tailscale up` prints a login URL and waits
+# (skipped without a terminal). Safe to run again. It is never run unasked:
+# on a server already in use it would close every port but the tailnet's and
+# allow only one SSH user.
 
 set -euo pipefail
 

@@ -42,9 +42,9 @@ run_link() {
 make_bare_repo() {
     BARE="${TEST_TMPDIR}/bare-repo"
     mkdir -p "${BARE}/scripts"
-    cp -R "${PROJECT_ROOT}/stow" "${PROJECT_ROOT}/editors" "${PROJECT_ROOT}/seed" "${PROJECT_ROOT}/personas" "${BARE}/"
+    cp -R "${PROJECT_ROOT}/stow" "${PROJECT_ROOT}/editors" "${PROJECT_ROOT}/seed" "${PROJECT_ROOT}/personas" "${PROJECT_ROOT}/roles" "${BARE}/"
     cp "${PROJECT_ROOT}/scripts/link.sh" "${PROJECT_ROOT}/scripts/common.sh" "${BARE}/scripts/"
-    printf 'os=darwin,linux\nlayers=common\nagents=no\nagent_apps=\nskills=\neditors=no\nbrew=\nbrew_optional=\nsetup=\n' > "${BARE}/personas/bare"
+    printf 'os=darwin,linux\nlayers=common\nagents=no\nagent_apps=\nskills=\neditors=no\nbrew=\nbrew_optional=\nroles=\n' > "${BARE}/personas/bare"
 }
 
 run_bare_link() {
@@ -948,8 +948,13 @@ persona_state() {
         [ ! -e "${DEST}/${path}" ]
     done
 
+    # The Pi-hole tools come with the pihole role, not the server persona.
     DEST="${TEST_TMPDIR}/pi-home"
     DOTFILES_OS=linux run_link --persona server
+    assert_success
+    [ ! -e "${DEST}/.local/bin/ph-update" ]
+    [ -L "${DEST}/.local/bin/sshkey" ]
+    DOTFILES_OS=linux DOTFILES_INSTALLS=pihole run_link --persona server
     assert_success
     [ -L "${DEST}/.local/bin/ph-update" ]
     [ -L "${DEST}/.local/bin/ph-backup" ]
@@ -1115,7 +1120,7 @@ plant_single_layer_links() {
 
     DEST="${TEST_TMPDIR}/pi-home"
     plant_single_layer_links
-    DOTFILES_OS=linux run_link --persona server
+    DOTFILES_OS=linux DOTFILES_INSTALLS=pihole run_link --persona server
     assert_success
     refute_output --partial "Backed up"
     [ -e "${DEST}/.local/bin/ph-update" ]
@@ -1127,19 +1132,133 @@ plant_single_layer_links() {
     assert_output ""
 }
 
-@test "installs prints what each persona installs" {
+@test "installs prints what each persona installs, with the optional installs on by default" {
     run_link --persona work installs
     assert_success
     assert_output "brew=core work
 brew_optional=macos
-setup=claude-code"
+harden=no
+installs=claude-code
+installs_source=default
+install=claude-code	claude-code	tool_installed claude"
     run_link --persona home installs
     assert_line "brew=core home"
+    assert_line "installs=claude-code"
     DOTFILES_OS=linux run_link --persona server installs
-    assert_line "setup=docker tailscale claude-code"
+    assert_line "installs=docker tailscale claude-code"
     assert_line "brew=core"
     DOTFILES_OS=linux run_link --persona vps installs
     assert_line "brew=core"
     assert_line "brew_optional="
-    assert_line "setup=harden docker tailscale claude-code"
+    assert_line "harden=yes"
+    assert_line "installs=docker tailscale claude-code"
+}
+
+@test "a persona's harden setting must be yes or no" {
+    local repo="${TEST_TMPDIR}/harden-repo"
+    mkdir -p "${repo}/stow/common" "${repo}/personas"
+    printf 'os=darwin,linux\nlayers=common\nagents=no\neditors=no\nharden=maybe\n' > "${repo}/personas/home"
+    cp "${repo}/personas/home" "${repo}/personas/server"
+    run bash "${PROJECT_ROOT}/scripts/link.sh" --destination "${DEST}" --repo "${repo}" installs
+    assert_failure 2
+    assert_output --partial "harden must be yes or no, not 'maybe'"
+}
+
+@test "offered lists the optional installs for this OS, then the persona's roles, with each detect command" {
+    run_link --persona work offered
+    assert_success
+    assert_output "claude-code	default	tool_installed claude"
+    run_link --persona server offered
+    assert_output "claude-code	default	tool_installed claude"
+    DOTFILES_OS=linux run_link --persona server offered
+    assert_line --index 0 "docker	default	tool_installed docker"
+    assert_line --index 1 "tailscale	default	tool_installed tailscale"
+    assert_line --index 2 "claude-code	default	tool_installed claude"
+    assert_line "pihole	optional	[[ -x /usr/bin/pihole-FTL && -x /usr/local/bin/pihole ]]"
+    DOTFILES_OS=linux run_link --persona vps offered
+    assert_line --index 0 "docker	default	tool_installed docker"
+    refute_line --partial pihole
+}
+
+@test "optional installs are the setup scripts with a detect line, the OS directory first, on every persona" {
+    make_bare_repo
+    mkdir -p "${BARE}/scripts/bootstrap/linux" "${BARE}/scripts/bootstrap/macos"
+    printf '#!/usr/bin/env bash\n# detect: command -v zed\n' > "${BARE}/scripts/bootstrap/zed.sh"
+    printf '#!/usr/bin/env bash\n# detect: command -v docker\n' > "${BARE}/scripts/bootstrap/linux/docker.sh"
+    printf '#!/usr/bin/env bash\n# detect: [[ -d /Applications/Docker.app ]]\n' > "${BARE}/scripts/bootstrap/macos/docker.sh"
+    # A script without a detect line (an OS bootstrap, a role's setup) is not one.
+    printf '#!/usr/bin/env bash\necho plain\n' > "${BARE}/scripts/bootstrap/plain.sh"
+    DOTFILES_OS=linux run_bare_link --persona bare offered
+    assert_success
+    assert_output "docker	default	command -v docker
+zed	default	command -v zed"
+    DOTFILES_OS=darwin run_bare_link --persona bare offered
+    assert_line --index 0 "docker	default	[[ -d /Applications/Docker.app ]]"
+    DOTFILES_OS=linux run_bare_link --persona bare installs
+    assert_line "installs=docker zed"
+    assert_line "installs_source=default"
+    assert_line "install=zed	zed	command -v zed"
+    # A role may require an optional install, which then joins before it.
+    printf 'os=darwin,linux\nrequires=zed\n' > "${BARE}/roles/needy"
+    printf 'os=darwin,linux\nlayers=common\nagents=no\neditors=no\nroles_optional=needy\n' > "${BARE}/personas/bare"
+    DOTFILES_OS=linux DOTFILES_INSTALLS="needy" run_bare_link --persona bare installs
+    assert_success
+    assert_line "installs=zed needy"
+}
+
+@test "chosen installs come from DOTFILES_INSTALLS, in run order with what they require, and add their layers" {
+    DOTFILES_OS=linux DOTFILES_INSTALLS="pihole" run_link --persona server installs
+    assert_success
+    assert_line "installs=tailscale pihole"
+    assert_line "installs_source=env"
+    assert_line "install=pihole	pihole	[[ -x /usr/bin/pihole-FTL && -x /usr/local/bin/pihole ]]"
+    # The pihole role brings the pihole layer; without it a Linux server has no ph-* tools.
+    DOTFILES_OS=linux DOTFILES_INSTALLS="pihole" run_link --persona server managed
+    assert_line "${DEST}/.local/bin/ph-update"
+    DOTFILES_OS=linux DOTFILES_INSTALLS="" run_link --persona server managed
+    refute_line "${DEST}/.local/bin/ph-update"
+
+    DOTFILES_OS=linux DOTFILES_INSTALLS="pihole" run_link --persona vps installs
+    assert_failure 2
+    assert_output --partial "does not offer install 'pihole' on linux"
+    DOTFILES_OS=linux DOTFILES_INSTALLS="docker" run_link --persona server installs
+    assert_line "installs=docker"
+}
+
+@test "chosen installs are saved with the persona and a persona switch drops the ones it does not offer" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    DOTFILES_OS=linux DOTFILES_INSTALLS="pihole docker" run_link --persona server
+    assert_success
+    assert_output --partial "Saved installs tailscale pihole docker"
+    [ "$(cat "${DEST}/.local/state/dotfiles/installs")" = "tailscale pihole docker" ]
+    [ -L "${DEST}/.local/bin/ph-update" ]
+
+    DOTFILES_OS=linux run_link installs
+    assert_line "installs=tailscale pihole docker"
+    assert_line "installs_source=saved"
+
+    DOTFILES_OS=linux run_link --persona vps
+    assert_success
+    assert_output --partial "does not offer the saved install 'pihole'"
+    [ ! -e "${DEST}/.local/bin/ph-update" ]
+    DOTFILES_OS=linux DOTFILES_INSTALLS="" run_link --persona vps
+    assert_output --partial "Saved installs none"
+    [ "$(cat "${DEST}/.local/state/dotfiles/installs")" = "" ]
+
+    DOTFILES_OS=linux DOTFILES_INSTALLS="docker" run_link --dry-run --persona server
+    assert_success
+    [ "$(cat "${DEST}/.local/state/dotfiles/installs")" = "" ]
+}
+
+@test "a persona naming a role the repo lacks, or a role requiring one, fails clearly" {
+    make_bare_repo
+    printf 'os=darwin,linux\nlayers=common\nagents=no\neditors=no\nroles=missing\n' > "${BARE}/personas/bare"
+    run_bare_link --persona bare installs
+    assert_failure 2
+    assert_output --partial "no roles/missing for roles"
+    printf 'os=darwin,linux\nrequires=nothing\n' > "${BARE}/roles/odd"
+    printf 'os=darwin,linux\nlayers=common\nagents=no\neditors=no\nroles_optional=odd\n' > "${BARE}/personas/bare"
+    DOTFILES_INSTALLS=odd run_bare_link --persona bare installs
+    assert_failure 2
+    assert_output --partial "roles/odd requires 'nothing', which neither roles/ nor scripts/bootstrap/ has"
 }

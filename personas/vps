@@ -4,6 +4,6 @@ agents=yes
 agent_apps=claude codex
 skills=core
 editors=no
+harden=yes
 brew=core
 brew_optional=
-setup=harden docker tailscale claude-code

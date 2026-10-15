@@ -3,8 +3,22 @@
 #
 #   personas/<name>         which layers, editors, agents and installs a machine
 #                           gets: key=value lines for os, layers, agents,
-#                           agent_apps, skills, editors, brew,
-#                           brew_optional, setup.
+#                           agent_apps, skills, editors, brew, brew_optional,
+#                           roles (on by default), roles_optional (offered), and
+#                           harden (yes: install.sh offers harden.sh first on a
+#                           Linux box that harden-test.sh finds unhardened).
+#   roles/<name>            what a machine is for (a Pi-hole, a hardened VPS):
+#                           key=value lines for os, layers, brew, requires
+#                           (installs run first), detect (a command that
+#                           succeeds once the role is applied) and setup (the
+#                           script install.sh runs, named after the role when
+#                           unset). A role's layers link like the persona's own.
+#   scripts/bootstrap/<os>/<name>.sh, scripts/bootstrap/<name>.sh
+#                           a setup script with a "# detect: COMMAND" line is an
+#                           optional install (Docker, Tailscale, Claude Code),
+#                           offered to every persona and on by default. The
+#                           chosen installs come from DOTFILES_INSTALLS, else the
+#                           saved choice, else what is on by default.
 #   stow/<layer>, stow/<layer>.<os>
 #                           mirror $HOME; every file becomes a symlink into the
 #                           repo, so editing the live file edits the repo.
@@ -104,7 +118,11 @@ Commands:
   persona   Print the persona in effect and where it came from
             (flag, env, saved or default)
   personas  List the personas this OS can use
-  installs  Print the persona's brew, brew_optional and setup lists
+  offered   List the installs offered here (the optional installs, then the
+            persona's roles), one NAME<TAB>default|optional<TAB>DETECT line each
+  installs  Print the persona's brew and brew_optional lists, its harden
+            setting, the chosen installs in run order, and one
+            install=NAME<TAB>SETUP<TAB>DETECT line each
   add PATH...
             Start managing files from the home directory: copy each one into
             a layer, then link it (a directory adds every file in it)
@@ -148,7 +166,7 @@ parse_args() {
                 esac
                 shift
                 ;;
-            apply|managed|status|persona|personas|installs|add) COMMAND="$1" ;;
+            apply|managed|status|persona|personas|offered|installs|add) COMMAND="$1" ;;
             -h|--help) usage; exit 0 ;;
             --)
                 shift
@@ -213,11 +231,17 @@ PERSONA_AGENTS=yes
 PERSONA_EDITORS=yes
 PERSONA_AGENT_APPS="${AGENT_APPS}"
 PERSONA_SKILLS=core
+PERSONA_HARDEN=no
 # Installs, for install.sh: Brewfiles installed in full, Brewfiles offered in
-# the macOS picker, and the setup scripts offered at the end.
+# the macOS picker, and the roles on by default or offered.
 PERSONA_BREW=""
 PERSONA_BREW_OPTIONAL=""
-PERSONA_SETUP=""
+PERSONA_ROLES=""
+PERSONA_ROLES_OPTIONAL=""
+# The chosen installs in run order, set by load_installs, and where they came
+# from.
+INSTALLS=""
+INSTALLS_SOURCE=""
 
 state_dir() {
     printf '%s/.local/state/dotfiles\n' "${DEST}"
@@ -225,6 +249,10 @@ state_dir() {
 
 persona_state_file() {
     printf '%s/persona\n' "$(state_dir)"
+}
+
+installs_state_file() {
+    printf '%s/installs\n' "$(state_dir)"
 }
 
 # True when no directory between $DEST and PATH (PATH included) is a symlink,
@@ -279,7 +307,7 @@ list_personas() {
 }
 
 load_persona() {
-    local name="" source file setting key value saved app bundle
+    local name="" source file setting key value saved app bundle role
     if [[ -n "${PERSONA}" ]]; then
         name="${PERSONA}" source=flag
     elif [[ -n "${DOTFILES_PERSONA:-}" ]]; then
@@ -315,7 +343,15 @@ load_persona() {
             layers) PERSONA_LAYERS="${value}" ;;
             brew) PERSONA_BREW="${value}" ;;
             brew_optional) PERSONA_BREW_OPTIONAL="${value}" ;;
-            setup) PERSONA_SETUP="${value}" ;;
+            roles|roles_optional)
+                for role in ${value}; do
+                    if [[ ! "${role}" =~ ^[a-z][a-z0-9-]*$ || ! -f "${REPO}/roles/${role}" ]]; then
+                        log_error "${file}: no roles/${role} for ${key}"
+                        exit 2
+                    fi
+                done
+                if [[ "${key}" == roles ]]; then PERSONA_ROLES="${value}"; else PERSONA_ROLES_OPTIONAL="${value}"; fi
+                ;;
             skills)
                 for bundle in ${value}; do
                     if [[ ! "${bundle}" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
@@ -334,12 +370,16 @@ load_persona() {
                 done
                 PERSONA_AGENT_APPS="${value}"
                 ;;
-            agents|editors)
+            agents|editors|harden)
                 if [[ "${value}" != yes && "${value}" != no ]]; then
                     log_error "${file}: ${key} must be yes or no, not '${value}'"
                     exit 2
                 fi
-                if [[ "${key}" == agents ]]; then PERSONA_AGENTS="${value}"; else PERSONA_EDITORS="${value}"; fi
+                case "${key}" in
+                    agents) PERSONA_AGENTS="${value}" ;;
+                    editors) PERSONA_EDITORS="${value}" ;;
+                    harden) PERSONA_HARDEN="${value}" ;;
+                esac
                 ;;
             *)
                 log_error "${file}: unknown setting '${key}'"
@@ -386,6 +426,175 @@ save_persona() {
     fi
     (umask 077 && mkdir -p "$(dirname "${file}")" && printf '%s\n' "${PERSONA_NAME}" > "${file}")
     printf 'Saved persona %s\n' "${PERSONA_NAME}"
+}
+
+# This platform's own directory of setup scripts.
+bootstrap_dir() {
+    case "$(platform)" in
+        darwin) printf '%s/scripts/bootstrap/macos\n' "${REPO}" ;;
+        *) printf '%s/scripts/bootstrap/%s\n' "${REPO}" "$(platform)" ;;
+    esac
+}
+
+# The setup script NAME.sh for this platform: the platform's directory first,
+# then the shared one.
+setup_script() {
+    local name="$1" dir
+    for dir in "$(bootstrap_dir)" "${REPO}/scripts/bootstrap"; do
+        if [[ -f "${dir}/${name}.sh" ]]; then
+            printf '%s\n' "${dir}/${name}.sh"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# The optional installs: the setup scripts for this platform that carry a
+# "# detect:" line, offered to every persona and on by default. The platform's
+# own directory first, then the shared one, each in name order.
+optional_installs() {
+    local dir script name seen=""
+    for dir in "$(bootstrap_dir)" "${REPO}/scripts/bootstrap"; do
+        for script in "${dir}"/*.sh; do
+            [[ -f "${script}" ]] || continue
+            grep -q '^# detect: ' "${script}" || continue
+            name="$(basename "${script}" .sh)"
+            [[ " ${seen} " != *" ${name} "* ]] || continue
+            seen="${seen} ${name}"
+            printf '%s\n' "${name}"
+        done
+    done
+}
+
+# True when NAME is a role or an optional install this platform has. The
+# list is read whole: grep -q quitting early would end the pipeline in
+# SIGPIPE, which pipefail reports as no match.
+install_exists() {
+    local file="${REPO}/roles/$1"
+    if [[ -f "${file}" ]]; then
+        persona_allows_platform "${file}"
+    else
+        grep -qxF "$1" <<< "$(optional_installs)"
+    fi
+}
+
+# One setting of an install: from roles/NAME, where setup is the role's own
+# name when unset, or for an optional install from its script, which declares
+# only detect.
+install_setting() {
+    local name="$1" key="$2" value="" script
+    if [[ -f "${REPO}/roles/${name}" ]]; then
+        value="$(persona_settings "${REPO}/roles/${name}" | sed -n "s/^${key}=//p" | tail -n 1)"
+    elif [[ "${key}" == detect ]] && script="$(setup_script "${name}")"; then
+        value="$(sed -n 's/^# detect: //p' "${script}" | head -n 1)"
+    fi
+    [[ -n "${value}" || "${key}" != setup ]] || value="${name}"
+    printf '%s\n' "${value}"
+}
+
+# What is offered on this platform, as NAME<TAB>default|optional<TAB>DETECT:
+# the optional installs, then the persona's roles in its order.
+offered_installs() {
+    local name
+    for name in $(optional_installs); do
+        printf '%s\tdefault\t%s\n' "${name}" "$(install_setting "${name}" detect)"
+    done
+    for name in ${PERSONA_ROLES}; do
+        persona_allows_platform "${REPO}/roles/${name}" || continue
+        printf '%s\tdefault\t%s\n' "${name}" "$(install_setting "${name}" detect)"
+    done
+    for name in ${PERSONA_ROLES_OPTIONAL}; do
+        persona_allows_platform "${REPO}/roles/${name}" || continue
+        printf '%s\toptional\t%s\n' "${name}" "$(install_setting "${name}" detect)"
+    done
+    return 0
+}
+
+# Append NAME to ORDERED after what it requires, which joins even when not
+# chosen; a requirement must be a role or an optional install this platform
+# has.
+visit_install() {
+    local name="$1" depth="${2:-0}" required
+    [[ " ${ORDERED} " != *" ${name} "* ]] || return 0
+    if [[ "${depth}" -gt 10 ]]; then
+        log_error "roles/${name}: requires chain too deep (a cycle?)"
+        exit 2
+    fi
+    for required in $(install_setting "${name}" requires); do
+        if ! install_exists "${required}"; then
+            log_error "roles/${name} requires '${required}', which neither roles/ nor scripts/bootstrap/ has for $(platform)"
+            exit 2
+        fi
+        visit_install "${required}" $((depth + 1))
+    done
+    ORDERED="${ORDERED} ${name}"
+}
+
+# The chosen installs: DOTFILES_INSTALLS (set, maybe empty), else the saved
+# choice, else what is on by default. Each must be offered here; a saved one
+# no longer offered (a persona switch) is dropped with a warning. A role's
+# layers link like the persona's own.
+load_installs() {
+    local saved name offered kept=""
+    if [[ -n "${DOTFILES_INSTALLS+x}" ]]; then
+        INSTALLS="${DOTFILES_INSTALLS}" INSTALLS_SOURCE=env
+    else
+        saved="$(installs_state_file)"
+        if [[ -f "${saved}" && ! -L "${saved}" ]]; then
+            IFS= read -r INSTALLS < "${saved}" || true
+            INSTALLS_SOURCE=saved
+        else
+            INSTALLS="$(offered_installs | awk -F'\t' '$2 == "default" { print $1 }' | tr '\n' ' ')" INSTALLS_SOURCE=default
+        fi
+    fi
+    offered="$(offered_installs | cut -f1)"
+    for name in ${INSTALLS}; do
+        if grep -qxF "${name}" <<< "${offered}"; then
+            kept="${kept} ${name}"
+        elif [[ "${INSTALLS_SOURCE}" == saved ]]; then
+            log_warn "Persona '${PERSONA_NAME}' does not offer the saved install '${name}' on $(platform); dropping it"
+        else
+            log_error "Persona '${PERSONA_NAME}' does not offer install '${name}' on $(platform). Choose from: $(tr '\n' ' ' <<< "${offered}")"
+            exit 2
+        fi
+    done
+    ORDERED=""
+    for name in ${kept}; do
+        visit_install "${name}"
+    done
+    INSTALLS="${ORDERED# }"
+    for name in ${INSTALLS}; do
+        PERSONA_LAYERS="${PERSONA_LAYERS} $(install_setting "${name}" layers)"
+    done
+}
+
+# Remember installs chosen through DOTFILES_INSTALLS (install.sh sets it after
+# its questions), like the persona.
+save_installs() {
+    local file parent
+    [[ "${INSTALLS_SOURCE}" == env ]] || return 0
+    [[ "${DRY_RUN}" -eq 0 ]] || return 0
+    file="$(installs_state_file)"
+    if [[ -f "${file}" && ! -L "${file}" && "$(cat "${file}")" == "${INSTALLS}" ]]; then
+        return 0
+    fi
+    if ! parent="$(no_symlinked_parents "${file}")"; then
+        log_error "Installs state path is a symlink: ${parent}; not saving the installs"
+        return 1
+    fi
+    (umask 077 && mkdir -p "$(dirname "${file}")" && printf '%s\n' "${INSTALLS}" > "${file}")
+    printf 'Saved installs %s\n' "${INSTALLS:-none}"
+}
+
+# The Brewfiles the persona and its roles install in full, deduplicated.
+brewfiles() {
+    local role name list="${PERSONA_BREW}"
+    for role in ${INSTALLS}; do
+        for name in $(install_setting "${role}" brew); do
+            [[ " ${list} " == *" ${name} "* ]] || list="${list} ${name}"
+        done
+    done
+    printf '%s\n' "${list# }"
 }
 
 # A persona layer with no stow/<layer> or stow/<layer>.<os> directory on any
@@ -1178,6 +1387,7 @@ add_files() {
 }
 
 main() {
+    local name
     parse_args "$@"
 
     if [[ ! -d "${REPO}/stow" ]]; then
@@ -1199,12 +1409,17 @@ main() {
         return 0
     fi
     load_persona
+    load_installs
 
     case "${COMMAND}" in
         persona) printf '%s %s\n' "${PERSONA_NAME}" "${PERSONA_SOURCE}" ;;
+        offered) offered_installs ;;
         installs)
-            printf 'brew=%s\nbrew_optional=%s\nsetup=%s\n' \
-                "${PERSONA_BREW}" "${PERSONA_BREW_OPTIONAL}" "${PERSONA_SETUP}"
+            printf 'brew=%s\nbrew_optional=%s\nharden=%s\ninstalls=%s\ninstalls_source=%s\n' \
+                "$(brewfiles)" "${PERSONA_BREW_OPTIONAL}" "${PERSONA_HARDEN}" "${INSTALLS}" "${INSTALLS_SOURCE}"
+            for name in ${INSTALLS}; do
+                printf 'install=%s\t%s\t%s\n' "${name}" "$(install_setting "${name}" setup)" "$(install_setting "${name}" detect)"
+            done
             ;;
         managed) print_managed ;;
         status) print_status ;;
@@ -1214,6 +1429,7 @@ main() {
                 log_warn "No persona chosen; linking as '${PERSONA_NAME}', the default for $(platform). Pick one with: install.sh --persona NAME"
             fi
             save_persona
+            save_installs
             warn_missing_layers
             prune_stale_links
             run_stow

@@ -237,6 +237,66 @@ brew "agent-browser"'
     assert_output "1"
 }
 
+@test "brew.sh --pending lists the optional entries not installed, all of them without Homebrew" {
+    write_brew_mock
+    run env PATH="${TEST_BIN}:/usr/bin:/bin" HOME="${TEST_TMPDIR}/home" OSTYPE=darwin24 TEST_TMPDIR="${TEST_TMPDIR}" \
+        TEST_LOG="${TEST_LOG}" BREW_FORMULAE="htop tree" BREW_CASKS="chatgpt claude" \
+        bash "${PROJECT_ROOT}/homebrew/brew.sh" --pending < /dev/null
+    assert_success
+    assert_line --index 0 $'wget\tbrew "wget"'
+    refute_line --partial 'brew "htop"'
+    refute_line --partial 'cask "chatgpt"'
+    run grep -c "bundle" "${TEST_LOG}"
+    assert_output "0"
+
+    # No brew on PATH and none in its usual place: nothing is installed, so every entry is pending.
+    run env PATH="/usr/bin:/bin" HOME="${TEST_TMPDIR}/home" OSTYPE=linux-gnu DOTFILES_BREW_OPTIONAL=macos \
+        bash "${PROJECT_ROOT}/homebrew/brew.sh" --pending < /dev/null
+    assert_success
+    assert_line --index 0 $'htop\tbrew "htop"'
+}
+
+@test "brew.sh installs DOTFILES_BREW_PICKS instead of asking" {
+    write_brew_mock
+    run env PATH="${TEST_BIN}:/usr/bin:/bin" HOME="${TEST_TMPDIR}/home" OSTYPE=darwin24 \
+        TEST_TMPDIR="${TEST_TMPDIR}" TEST_LOG="${TEST_LOG}" TEST_BUNDLE="${TEST_BUNDLE}" \
+        DOTFILES_PROMPT=read DOTFILES_BREWFILES="" BREW_FORMULAE="htop tree" BREW_CASKS="chatgpt claude" \
+        DOTFILES_BREW_PICKS=$'brew "wget"\ncask "firefox"\ncask "htop"' \
+        bash "${PROJECT_ROOT}/homebrew/brew.sh" <<< "1 2"
+    assert_success
+    assert_output --partial "Installing 2 optional Homebrew package(s)..."
+    refute_output --partial "Optional Homebrew packages (macos)"
+    run cat "${TEST_BUNDLE}"
+    assert_output 'brew "wget"
+cask "firefox"'
+
+    # Set but empty: install.sh asked and got nothing, so nothing is offered.
+    : > "${TEST_LOG}"
+    run_brew_sh darwin24 DOTFILES_BREWFILES="" BREW_FORMULAE="htop tree" DOTFILES_BREW_PICKS=
+    assert_success
+    assert_output --partial "No macos Homebrew packages selected"
+    run grep "bundle install" "${TEST_LOG}"
+    assert_failure
+}
+
+@test "brew.sh --dry-run reports what it would install and installs nothing" {
+    write_brew_mock
+    run env PATH="${TEST_BIN}:/usr/bin:/bin" HOME="${TEST_TMPDIR}/home" OSTYPE=darwin24 TEST_TMPDIR="${TEST_TMPDIR}" \
+        TEST_LOG="${TEST_LOG}" DOTFILES_BREWFILES="core" BREW_FORMULAE="htop tree" BREW_CASKS="chatgpt" \
+        bash "${PROJECT_ROOT}/homebrew/brew.sh" --dry-run < /dev/null
+    assert_success
+    assert_output --partial "Would install from Brewfile.core:"
+    assert_output --partial "Would offer from Brewfile.macos: wget"
+    run grep "bundle install\|cleanup" "${TEST_LOG}"
+    assert_failure
+
+    run env PATH="/usr/bin:/bin" HOME="${TEST_TMPDIR}/home" OSTYPE=linux-gnu DOTFILES_BREWFILES="core" \
+        bash "${PROJECT_ROOT}/homebrew/brew.sh" --dry-run < /dev/null
+    assert_success
+    assert_output --partial "Would install Homebrew"
+    assert_output --partial "Would install from Brewfiles: core"
+}
+
 @test "brew.sh says so when every optional entry is installed" {
     local all
     all="$(grep -oE '^(brew|cask) "[^"]+"' "${PROJECT_ROOT}/homebrew/Brewfile.macos" | sed -E 's/^[a-z]+ "([^"]+)"/\1/' | tr '\n' ' ')"

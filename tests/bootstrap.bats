@@ -205,24 +205,193 @@ _run_vendor_script() {
 }
 
 # ---------------------------------------------------------------------------
+# linux/pihole.sh — Unbound and Pi-hole against a scratch root
+# ---------------------------------------------------------------------------
+
+# A scratch root for pihole.sh (PIHOLE_ROOT) with the system commands mocked
+# in ROOT/bin, each logging its call to ROOT/log: apt-get installs unbound
+# by creating usr/sbin/unbound, curl hands back a fake Pi-hole installer that
+# creates pihole-FTL and pihole, systemctl reports unbound-resolvconf enabled
+# while ROOT/resolvconf-enabled exists, unbound-checkconf fails while
+# ROOT/badconf exists, and pihole-FTL --config answers from ROOT/ftl-KEY.
+_make_pihole_root() {
+    PIHOLE_SCRATCH="${TEST_TMPDIR}/root"
+    local root="${PIHOLE_SCRATCH}"
+    mkdir -p "${root}/bin" "${root}/etc/unbound/unbound.conf.d"
+    : > "${root}/log"
+    cat > "${root}/bin/apt-get" <<'MOCK'
+#!/usr/bin/env bash
+printf 'apt-get %s\n' "$*" >> "${PIHOLE_ROOT}/log"
+if [[ "$1" == install && "${*: -1}" == unbound ]]; then
+    mkdir -p "${PIHOLE_ROOT}/usr/sbin"
+    printf '#!/bin/sh\n' > "${PIHOLE_ROOT}/usr/sbin/unbound"
+    chmod +x "${PIHOLE_ROOT}/usr/sbin/unbound"
+fi
+MOCK
+    cat > "${root}/bin/systemctl" <<'MOCK'
+#!/usr/bin/env bash
+printf 'systemctl %s\n' "$*" >> "${PIHOLE_ROOT}/log"
+case "$*" in
+    "is-enabled unbound-resolvconf.service"|"is-active unbound-resolvconf.service")
+        [[ -e "${PIHOLE_ROOT}/resolvconf-enabled" ]] ;;
+    "disable --now unbound-resolvconf.service")
+        rm -f "${PIHOLE_ROOT}/resolvconf-enabled" ;;
+esac
+MOCK
+    cat > "${root}/bin/sysctl" <<'MOCK'
+#!/usr/bin/env bash
+printf 'sysctl %s\n' "$*" >> "${PIHOLE_ROOT}/log"
+MOCK
+    cat > "${root}/bin/unbound-checkconf" <<'MOCK'
+#!/usr/bin/env bash
+printf 'unbound-checkconf %s\n' "$*" >> "${PIHOLE_ROOT}/log"
+[[ ! -e "${PIHOLE_ROOT}/badconf" ]] || { echo "fatal error: bad config" >&2; exit 1; }
+echo "unbound-checkconf: no errors in /etc/unbound/unbound.conf"
+MOCK
+    cat > "${root}/bin/dig" <<'MOCK'
+#!/usr/bin/env bash
+printf 'dig %s\n' "$*" >> "${PIHOLE_ROOT}/log"
+echo 203.0.113.10
+MOCK
+    cat > "${root}/bin/curl" <<'MOCK'
+#!/usr/bin/env bash
+cat <<'INSTALLER'
+printf 'installer %s DEBIAN_FRONTEND=%s\n' "$*" "${DEBIAN_FRONTEND:-}" >> "${PIHOLE_ROOT}/log"
+mkdir -p "${PIHOLE_ROOT}/usr/bin" "${PIHOLE_ROOT}/usr/local/bin"
+printf '#!/bin/sh\n' > "${PIHOLE_ROOT}/usr/bin/pihole-FTL"
+printf '#!/bin/sh\n' > "${PIHOLE_ROOT}/usr/local/bin/pihole"
+chmod +x "${PIHOLE_ROOT}/usr/bin/pihole-FTL" "${PIHOLE_ROOT}/usr/local/bin/pihole"
+INSTALLER
+MOCK
+    cat > "${root}/bin/pihole-FTL" <<'MOCK'
+#!/usr/bin/env bash
+printf 'pihole-FTL %s\n' "$*" >> "${PIHOLE_ROOT}/log"
+if [[ "$1" == --config && $# -eq 2 ]]; then
+    case "$2" in
+        dns.upstreams) cat "${PIHOLE_ROOT}/ftl-upstreams" 2>/dev/null || echo '[ "127.0.0.1#5335" ]' ;;
+        dns.dnssec) cat "${PIHOLE_ROOT}/ftl-dnssec" 2>/dev/null || echo false ;;
+    esac
+fi
+MOCK
+    chmod +x "${root}"/bin/*
+}
+
+# Runs pihole.sh against the scratch root; arguments are environment settings.
+_run_pihole() {
+    run env PATH="${PIHOLE_SCRATCH}/bin:/usr/bin:/bin" PIHOLE_ROOT="${PIHOLE_SCRATCH}" "$@" \
+        bash "${PROJECT_ROOT}/scripts/bootstrap/linux/pihole.sh" < /dev/null
+}
+
+@test "pihole.sh skips a machine without apt-get" {
+    run env PATH="/usr/bin:/bin" bash "${PROJECT_ROOT}/scripts/bootstrap/linux/pihole.sh" < /dev/null
+    # On a Mac there is no apt-get, so the script stops before sudo.
+    assert_success
+    assert_output --partial "apt-get not found; skipping Pi-hole install"
+}
+
+@test "pihole.sh installs Unbound with the guide's config, disables the resolvconf hook, then installs Pi-hole pointed at it" {
+    _make_pihole_root
+    local root="${PIHOLE_SCRATCH}"
+    # Debian's unbound package, as apt leaves it: the resolvconf hook on.
+    touch "${root}/resolvconf-enabled"
+    printf 'unbound_conf=/etc/unbound/unbound.conf.d/resolvconf_resolvers.conf\n' > "${root}/etc/resolvconf.conf"
+    printf 'forward-zone:\n' > "${root}/etc/unbound/unbound.conf.d/resolvconf_resolvers.conf"
+
+    _run_pihole
+    assert_success
+    assert_output --partial "Installing Unbound"
+    assert_output --partial "Wrote ${root}/etc/unbound/unbound.conf.d/pi-hole.conf"
+    assert_output --partial "Disabling unbound-resolvconf"
+    assert_output --partial "Commenting out unbound_conf in ${root}/etc/resolvconf.conf"
+    assert_output --partial "Removing ${root}/etc/unbound/unbound.conf.d/resolvconf_resolvers.conf"
+    assert_output --partial "Wrote ${root}/etc/sysctl.d/99-unbound.conf"
+    assert_output --partial "Restarting Unbound"
+    assert_output --partial "Unbound resolves pi-hole.net on 127.0.0.1#5335"
+    assert_output --partial "Seeding ${root}/etc/pihole/pihole.toml with upstreams 127.0.0.1#5335"
+    assert_output --partial "Installing Pi-hole"
+    assert_output --partial "Set the web password: sudo pihole setpassword"
+
+    # Unbound: loopback only on 5335, validating, hardened, private ranges hidden.
+    run cat "${root}/etc/unbound/unbound.conf.d/pi-hole.conf"
+    assert_line --regexp "^    interface: 127.0.0.1$"
+    assert_line --regexp "^    port: 5335$"
+    for setting in "harden-glue: yes" "harden-dnssec-stripped: yes" "hide-identity: yes" "hide-version: yes" \
+        "use-caps-for-id: no" "edns-buffer-size: 1232" "so-rcvbuf: 1m" "private-address: 10.0.0.0/8"; do
+        assert_line "    ${setting}"
+    done
+    run cat "${root}/etc/resolvconf.conf"
+    assert_output "#unbound_conf=/etc/unbound/unbound.conf.d/resolvconf_resolvers.conf"
+    [ ! -e "${root}/etc/unbound/unbound.conf.d/resolvconf_resolvers.conf" ]
+    run cat "${root}/etc/sysctl.d/99-unbound.conf"
+    assert_output "net.core.rmem_max=1048576"
+    # Pi-hole: seeded for the unattended installer, upstream Unbound, DNSSEC left to it.
+    run cat "${root}/etc/pihole/pihole.toml"
+    assert_output '[dns]
+  upstreams = ["127.0.0.1#5335"]
+  dnssec = false'
+    run cat "${root}/log"
+    assert_line "apt-get install -y -qq unbound"
+    assert_line "systemctl disable --now unbound-resolvconf.service"
+    assert_line "sysctl -q -w net.core.rmem_max=1048576"
+    assert_line "systemctl enable --now unbound"
+    assert_line "systemctl restart unbound"
+    assert_line "dig @127.0.0.1 -p 5335 pi-hole.net +short +time=5 +tries=1"
+    assert_line "installer --unattended DEBIAN_FRONTEND=noninteractive"
+    # The seeded settings already match, so nothing is set through pihole-FTL.
+    refute_line --partial "dns.upstreams ["
+    refute_line --partial "dns.dnssec false"
+}
+
+@test "pihole.sh run again changes nothing, but brings Pi-hole's upstreams and DNSSEC back in line" {
+    _make_pihole_root
+    local root="${PIHOLE_SCRATCH}"
+    _run_pihole
+    assert_success
+    : > "${root}/log"
+    # The web UI moved Pi-hole off Unbound and turned its own DNSSEC on.
+    printf '[ "1.1.1.1" ]\n' > "${root}/ftl-upstreams"
+    printf 'true\n' > "${root}/ftl-dnssec"
+
+    _run_pihole PIHOLE_UPSTREAMS="127.0.0.1#5335 1.1.1.1"
+    assert_success
+    assert_output --partial "Unbound already installed"
+    assert_output --partial "${root}/etc/unbound/unbound.conf.d/pi-hole.conf already in place"
+    assert_output --partial "Pi-hole already installed, skipping (pihole -up updates it)"
+    assert_output --partial 'Pointing Pi-hole at 127.0.0.1#5335 1.1.1.1 (was [ "1.1.1.1" ])'
+    assert_output --partial "Turning Pi-hole's own DNSSEC off (Unbound validates)"
+    refute_output --partial "Restarting Unbound"
+    refute_output --partial "Installing"
+    run cat "${root}/log"
+    assert_line 'pihole-FTL --config dns.upstreams ["127.0.0.1#5335", "1.1.1.1"]'
+    assert_line "pihole-FTL --config dns.dnssec false"
+    assert_line "systemctl enable --now unbound"
+    refute_line --partial "apt-get install"
+    refute_line --partial "systemctl restart"
+    refute_line --partial "installer"
+}
+
+@test "pihole.sh stops before Pi-hole when unbound-checkconf rejects the config" {
+    _make_pihole_root
+    touch "${PIHOLE_SCRATCH}/badconf"
+    _run_pihole
+    assert_failure
+    assert_output --partial "unbound-checkconf rejects the configuration"
+    refute_output --partial "Installing Pi-hole"
+    [ ! -e "${PIHOLE_SCRATCH}/etc/pihole/pihole.toml" ]
+}
+
+# ---------------------------------------------------------------------------
 # linux/tailscale.sh — idempotency guard
 # ---------------------------------------------------------------------------
 
-@test "tailscale.sh skips when tailscale is already installed" {
-    mkdir -p "${TEST_TMPDIR}/bin"
-    printf '#!/usr/bin/env bash\necho "Tailscale mock"' > "${TEST_TMPDIR}/bin/tailscale"
-    chmod +x "${TEST_TMPDIR}/bin/tailscale"
-
-    run bash -c '
-        export PATH="'"${TEST_TMPDIR}/bin"':${PATH}"
-        if command -v tailscale >/dev/null 2>&1; then
-            echo "SKIPPED"
-            exit 0
-        fi
-        echo "WOULD_INSTALL"
-    '
+@test "tailscale.sh skips when tailscale is on PATH, or came through Homebrew" {
+    _run_vendor_script tailscale.sh 'printf "#!/bin/sh\n" > "'"${TEST_TMPDIR}"'/bin/tailscale"; chmod +x "'"${TEST_TMPDIR}"'/bin/tailscale"'
     assert_success
-    assert_output "SKIPPED"
+    assert_output --partial "Tailscale already installed, skipping"
+
+    _run_vendor_script tailscale.sh 'mkdir -p "${HOMEBREW_PREFIX}/bin"; printf "#!/bin/sh\n" > "${HOMEBREW_PREFIX}/bin/tailscale"; chmod +x "${HOMEBREW_PREFIX}/bin/tailscale"'
+    assert_success
+    assert_output --partial "Tailscale already installed, skipping"
 }
 
 # ---------------------------------------------------------------------------

@@ -169,35 +169,171 @@ run_persona_prompt() {
     assert_output "home"
 }
 
-@test "install.sh offers the persona's setup scripts last" {
-    run bash "${PROJECT_ROOT}/install.sh" --dry-run --skip-system --skip-brew --skip-shell --persona server < /dev/null
-    assert_success
-    assert_output --partial "] Setup"
-    assert_output --partial "Dry run: would offer claude-code"
-    assert_output --partial "No docker setup script for macOS"
-
-    run bash "${PROJECT_ROOT}/install.sh" --dry-run --skip-system --skip-brew --skip-shell --persona home < /dev/null
-    assert_success
-    assert_output --partial "Dry run: would offer claude-code"
-}
-
-@test "install.sh runs the chosen setup scripts and reports a failing one" {
-    local repo="${TEST_TMPDIR}/repo"
+@test "install.sh applies the chosen installs last, skips applied ones, and reports a failing one" {
+    local repo="${TEST_TMPDIR}/repo" installs
     mkdir -p "${repo}/scripts/bootstrap/linux"
-    printf '#!/usr/bin/env bash\necho ran one\n' > "${repo}/scripts/bootstrap/linux/one.sh"
+    cp "${PROJECT_ROOT}/scripts/common.sh" "${repo}/scripts/"
+    printf '#!/usr/bin/env bash\necho ran one\ntouch "${TEST_TMPDIR}/one-done"\n' > "${repo}/scripts/bootstrap/linux/one.sh"
     printf '#!/usr/bin/env bash\necho ran two\nexit 3\n' > "${repo}/scripts/bootstrap/two.sh"
+    printf '#!/usr/bin/env bash\necho ran four\n' > "${repo}/scripts/bootstrap/four.sh"
+    # A detect line runs with common.sh in scope, so tool_installed works there.
+    installs="installs=zero one two three four
+install=zero	zero	tool_installed bash
+install=one	one	[[ -e '${TEST_TMPDIR}/one-done' ]]
+install=two	two	false
+install=three	three	false
+install=four	four	false"
     run bash -c "
         source '${PROJECT_ROOT}/scripts/common.sh'
-        BASEDIR='${repo}' os_dir=linux os_label=Linux dry_run=0
-        $(sed -n '/^setup_script_path() {$/,/^}$/p;/^run_setup_scripts() {$/,/^}$/p' "${PROJECT_ROOT}/install.sh")
-        DOTFILES_SETUP='one two three' DOTFILES_PROMPT=read run_setup_scripts 2>/dev/null
-    " <<< "all"
+        BASEDIR='${repo}' os_dir=linux os_label=Linux dry_run=0 VERBOSE=0 INSTALL_INFO=\"\$1\"
+        $(sed -n '/^run_streamed() {$/,/^}$/p;/^setup_script_path() {$/,/^}$/p;/^install_applied() {$/,/^}$/p;/^run_installs() {$/,/^}$/p' "${PROJECT_ROOT}/install.sh")
+        run_installs
+    " bash "${installs}" < /dev/null
     assert_success
-    assert_output --partial "No three setup script for Linux"
-    assert_output --partial "ran one"
-    assert_output --partial "ok: one done"
-    assert_output --partial "ran two"
-    assert_output --partial "failed: two failed"
+    assert_line "  ok: zero already applied"
+    # A setup script's output streams in the step's style.
+    assert_line "  ran one"
+    assert_line "  ok: one applied"
+    assert_line "  ran two"
+    assert_line "  failed: two not applied; rerun it: bash ${repo}/scripts/bootstrap/two.sh"
+    assert_line "  failed: No three setup script for Linux; three not applied"
+    # A script that exits 0 without satisfying the detect is still a failure.
+    assert_line "  failed: four not applied; rerun it: bash ${repo}/scripts/bootstrap/four.sh"
+
+    run bash -c "
+        source '${PROJECT_ROOT}/scripts/common.sh'
+        BASEDIR='${repo}' os_dir=linux os_label=Linux dry_run=1 VERBOSE=0 INSTALL_INFO=\"\$1\"
+        $(sed -n '/^run_streamed() {$/,/^}$/p;/^setup_script_path() {$/,/^}$/p;/^install_applied() {$/,/^}$/p;/^run_installs() {$/,/^}$/p' "${PROJECT_ROOT}/install.sh")
+        run_installs
+    " bash "${installs}" < /dev/null
+    assert_success
+    assert_line "  Would apply two: bash ${repo}/scripts/bootstrap/two.sh"
+    refute_output --partial "ran two"
+}
+
+@test "install.sh parses --install, --no-install and --reconfigure" {
+    run bash -c "
+        usage() { :; }
+        log_error() { printf 'ERROR %s\n' \"\$*\"; }
+        $(parser_snippet)
+        printf 'installs=%s no=%s reconfigure=%s args=%s\n' \"\${install_args[*]:-}\" \"\${no_install_args[*]:-}\" \"\${reconfigure}\" \"\${link_args[*]:-}\"
+    " bash --install docker --install pihole --no-install claude-code --reconfigure --adopt
+    assert_success
+    assert_output "installs=docker pihole no=claude-code reconfigure=1 args=--adopt"
+
+    run bash -c "
+        log_error() { printf 'ERROR %s\n' \"\$*\"; }
+        $(parser_snippet)
+    " bash --install
+    assert_failure 2
+    assert_output --partial "--install requires a name"
+}
+
+@test "install.sh parses --harden and --no-harden" {
+    run bash -c "
+        usage() { :; }
+        $(parser_snippet)
+        printf 'harden=%s args=%s\n' \"\${harden_arg}\" \"\${link_args[*]:-}\"
+    " bash --harden --adopt
+    assert_success
+    assert_output "harden=yes args=--adopt"
+    run bash -c "
+        usage() { :; }
+        $(parser_snippet)
+        printf 'harden=%s\n' \"\${harden_arg}\"
+    " bash --no-harden
+    assert_output "harden=no"
+}
+
+# resolve_harden from install.sh against a fake repo whose harden-test.sh
+# prints what HARDEN_TEST_GAPS holds. Prints HARDEN, its source, and the gaps.
+run_resolve_harden() {
+    local repo="${TEST_TMPDIR}/repo"
+    mkdir -p "${repo}/scripts/bootstrap/linux"
+    printf '#!/usr/bin/env bash\n[[ "$1" == --brief ]] || exit 2\nprintf "%%s" "${HARDEN_TEST_GAPS:-}"\n' > "${repo}/scripts/bootstrap/linux/harden-test.sh"
+    run bash -c "
+        source '${PROJECT_ROOT}/scripts/common.sh'
+        BASEDIR='${repo}' os_dir=\"\$1\" PERSONA_HARDEN=\"\$2\" harden_arg=\"\$3\"
+        $(sed -n '/^resolve_harden() {$/,/^}$/p' "${PROJECT_ROOT}/install.sh")
+        resolve_harden
+        printf 'harden=%s source=%s gaps=%s\n' \"\${HARDEN}\" \"\${HARDEN_SOURCE}\" \"\${HARDEN_GAPS//\$'\\n'/|}\"
+    " bash "$@" < /dev/null
+}
+
+@test "install.sh offers hardening only on a Linux persona with harden=yes that the check finds unhardened" {
+    # A hardened box, or a persona without harden=yes, asks nothing.
+    HARDEN_TEST_GAPS="" run_resolve_harden linux yes ""
+    assert_success
+    assert_output "harden=0 source= gaps="
+    HARDEN_TEST_GAPS=$'root can log in over SSH\nufw is not enabled' run_resolve_harden linux no ""
+    assert_output "harden=0 source= gaps="
+    HARDEN_TEST_GAPS=$'root can log in over SSH' run_resolve_harden macos yes ""
+    assert_output "harden=0 source= gaps="
+
+    # Unhardened with closed stdin: the gaps are reported, nothing is opted into.
+    HARDEN_TEST_GAPS=$'root can log in over SSH\nufw is not enabled' run_resolve_harden linux yes ""
+    assert_success
+    assert_output "harden=0 source= gaps=root can log in over SSH|ufw is not enabled"
+    refute_output --partial "Harden it first"
+    HARDEN_TEST_GAPS=$'root can log in over SSH' run_resolve_harden linux yes no
+    assert_output "harden=0 source= gaps=root can log in over SSH"
+
+    # --harden runs harden.sh outright, without the check, and only on Linux.
+    HARDEN_TEST_GAPS="" run_resolve_harden linux yes yes
+    assert_success
+    assert_output "harden=1 source=flag gaps="
+    run_resolve_harden macos yes yes
+    assert_failure 2
+    assert_output --partial "The --harden option is for Linux"
+}
+
+@test "install.sh hardens first with --harden and otherwise says what the check found" {
+    local repo="${TEST_TMPDIR}/repo" home="${TEST_TMPDIR}/harden-home" bin="${TEST_TMPDIR}/bin"
+    mkdir -p "${repo}/scripts/bootstrap/linux" "${repo}/stow/common" "${repo}/personas" "${repo}/roles" "${home}" "${bin}"
+    cp "${PROJECT_ROOT}/install.sh" "${repo}/"
+    cp "${PROJECT_ROOT}/scripts/common.sh" "${PROJECT_ROOT}/scripts/link.sh" "${PROJECT_ROOT}/scripts/file-review.sh" "${repo}/scripts/"
+    printf 'export DEMO=1\n' > "${repo}/stow/common/.demo"
+    printf 'os=darwin,linux\nlayers=common\nagents=no\neditors=no\nharden=yes\nbrew=\nbrew_optional=\n' > "${repo}/personas/server"
+    cp "${repo}/personas/server" "${repo}/personas/home"
+    printf '#!/usr/bin/env bash\n[[ -e "${HOME}/.hardened" ]] && exit 0\nprintf "root can log in over SSH\\nufw is not enabled\\n"\nexit 1\n' > "${repo}/scripts/bootstrap/linux/harden-test.sh"
+    printf '#!/usr/bin/env bash\necho "harden $*"\n[[ "$1" == --dry-run ]] || touch "${HOME}/.hardened"\n' > "${repo}/scripts/bootstrap/linux/harden.sh"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "${bin}/stow"
+    printf '#!/usr/bin/env bash\nprintf "ssh-rsa k\\n" > "${*: -1}.pub"\ntouch "${*: -1}"\n' > "${bin}/ssh-keygen"
+    chmod +x "${bin}/stow" "${bin}/ssh-keygen"
+    local -a env=(PATH="${bin}:/usr/bin:/bin" HOME="${home}" HOMEBREW_PREFIX="${TEST_TMPDIR}/brew" USER=t SHELL=/bin/sh OSTYPE=linux-gnu DOTFILES_OS=linux)
+
+    # Closed stdin: the gaps are stated up front and as a next step; harden.sh does not run.
+    run env "${env[@]}" bash "${repo}/install.sh" --skip-system --skip-brew --skip-shell < /dev/null
+    assert_success
+    assert_output --partial "Not hardened: root can log in over SSH; ufw is not enabled"
+    assert_output --partial "install.sh --harden"
+    refute_output --partial "] Harden"
+    refute_line --regexp "^  harden"
+    [ ! -e "${home}/.hardened" ]
+
+    # A dry run with --harden dry-runs harden.sh, first.
+    run env "${env[@]}" bash "${repo}/install.sh" --skip-system --skip-brew --skip-shell --harden --dry-run < /dev/null
+    assert_success
+    assert_output --partial "Hardening first (flag)"
+    assert_output --partial "[1/"
+    assert_line --regexp "\[1/[0-9]+\] Harden"
+    assert_output --partial "harden --dry-run"
+    [ ! -e "${home}/.hardened" ]
+
+    # --harden runs harden.sh with HARDEN_ARGS, before the repository link.
+    run env "${env[@]}" HARDEN_ARGS="--allow 443 --cloudflare" bash "${repo}/install.sh" --skip-system --skip-brew --skip-shell --harden < /dev/null
+    assert_success
+    assert_line "  harden --allow 443 --cloudflare"
+    assert_output --partial "ok: Hardened;"
+    refute_output --partial "Not hardened"
+    [ -e "${home}/.hardened" ]
+    [[ "${output%%Repository link*}" == *"] Harden"* ]]
+
+    # Hardened now: nothing is said or offered.
+    run env "${env[@]}" bash "${repo}/install.sh" --skip-system --skip-brew --skip-shell < /dev/null
+    assert_success
+    refute_output --partial "Harden"
+    refute_output --partial "Not hardened"
 }
 
 @test "install.sh rejects an unknown persona before changing anything" {
@@ -551,9 +687,11 @@ MOCK
         chmod +x "${TEST_BIN}/hostname" "${TEST_BIN}/find" "${TEST_BIN}/zsh" "${TEST_BIN}/grep" "${TEST_BIN}/ssh-keygen" "${TEST_BIN}/brew" "${TEST_STOW_STUB}"
 
         cd "'"${PROJECT_ROOT}"'"
-        ./install.sh --skip-system --skip-brew --adopt
+        # No installs: the claude-code one, on by default, would run its installer.
+        ./install.sh --skip-system --skip-brew --no-install claude-code --adopt
 
         [[ -L "${HOME}/.dotfiles" ]] || { echo "missing dotfiles symlink"; exit 1; }
+        [[ "$(cat "${HOME}/.local/state/dotfiles/installs")" == "" ]] || { echo "installs not saved as none"; exit 1; }
         [[ "$(readlink "${HOME}/.dotfiles")" == "'"${PROJECT_ROOT}"'" ]] || { echo "bad dotfiles symlink"; exit 1; }
         [[ -f "${HOME}/.ssh/id_ed25519" ]] || { echo "missing private key"; exit 1; }
         [[ -f "${HOME}/.ssh/id_ed25519.pub" ]] || { echo "missing public key"; exit 1; }
@@ -568,6 +706,8 @@ MOCK
         [[ ! -e "${HOME}/.cursor/AGENTS.md" ]] || { echo "home persona got the Cursor links"; exit 1; }
     '
     assert_success
+    assert_output --partial "Persona: home (default)"
+    assert_output --partial "Installs: none chosen of claude-code"
     assert_output --partial "Installing GNU Stow with Homebrew"
     assert_output --partial "Linking dotfiles from "
     assert_output --partial "Checking links before applying"
@@ -600,6 +740,7 @@ MOCK
         cp "'"${PROJECT_ROOT}"'/scripts/common.sh" "${REPO_COPY}/scripts/common.sh"
         cp "'"${PROJECT_ROOT}"'/scripts/link.sh" "${REPO_COPY}/scripts/link.sh"
         cp -R "'"${PROJECT_ROOT}"'/personas" "${REPO_COPY}/personas"
+        cp -R "'"${PROJECT_ROOT}"'/roles" "${REPO_COPY}/roles"
 
         cat > "${TEST_BIN}/hostname" <<'"'"'MOCK'"'"'
 #!/usr/bin/env bash
@@ -682,13 +823,83 @@ MOCK
         chmod +x "${TEST_BIN}/hostname" "${TEST_BIN}/find" "${TEST_BIN}/zsh" "${TEST_BIN}/grep" "${TEST_BIN}/ssh-keygen" "${TEST_BIN}/brew" "${TEST_STOW_STUB}"
 
         cd "${REPO_COPY}"
-        ./install.sh --skip-system --skip-brew --adopt
+        DOTFILES_INSTALLS="" ./install.sh --skip-system --skip-brew --adopt
 
         [[ -d "${REPO_COPY}" ]] || { echo "repo copy missing"; exit 1; }
         [[ ! -e "${REPO_COPY}/.dotfiles" ]] || { echo "nested self-link created"; exit 1; }
     '
     assert_success
     assert_output --partial "Dotfiles repo already linked at"
+}
+
+@test "install.sh applies the default and chosen installs, records them, and skips them on the next run" {
+    local repo="${TEST_TMPDIR}/repo" home="${TEST_TMPDIR}/install-home" bin="${TEST_TMPDIR}/bin"
+    mkdir -p "${repo}/scripts/bootstrap/linux" "${repo}/stow/common" "${repo}/personas" "${repo}/roles" "${home}" "${bin}"
+    cp "${PROJECT_ROOT}/install.sh" "${repo}/"
+    cp "${PROJECT_ROOT}/scripts/common.sh" "${PROJECT_ROOT}/scripts/link.sh" "${PROJECT_ROOT}/scripts/file-review.sh" "${repo}/scripts/"
+    printf 'export DEMO=1\n' > "${repo}/stow/common/.demo"
+    printf 'os=darwin,linux\nlayers=common\nagents=no\neditors=no\nbrew=\nbrew_optional=\nroles_optional=demo\n' > "${repo}/personas/home"
+    cp "${repo}/personas/home" "${repo}/personas/server"
+    # A role the persona offers, and an optional install (a setup script with
+    # a detect line) that every persona gets, on by default.
+    printf 'os=darwin,linux\ndetect=[[ -e "${HOME}/.demo-applied" ]]\n' > "${repo}/roles/demo"
+    printf '#!/usr/bin/env bash\necho demo running\ntouch "${HOME}/.demo-applied"\n' > "${repo}/scripts/bootstrap/demo.sh"
+    printf '#!/usr/bin/env bash\n# detect: tool_installed tool\necho tool running\nmkdir -p "${HOME}/.local/bin"\nprintf "#!/bin/sh\\n" > "${HOME}/.local/bin/tool"\nchmod +x "${HOME}/.local/bin/tool"\n' > "${repo}/scripts/bootstrap/tool.sh"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "${bin}/stow"
+    printf '#!/usr/bin/env bash\nprintf "ssh-rsa k\\n" > "${*: -1}.pub"\ntouch "${*: -1}"\n' > "${bin}/ssh-keygen"
+    chmod +x "${bin}/stow" "${bin}/ssh-keygen"
+
+    run env PATH="${bin}:/usr/bin:/bin" HOME="${home}" HOMEBREW_PREFIX="${TEST_TMPDIR}/brew" USER=t SHELL=/bin/sh \
+        bash "${repo}/install.sh" --skip-system --skip-brew --skip-shell --install demo < /dev/null
+    assert_success
+    assert_output --partial "Installs: tool demo (flag)"
+    assert_output --partial "] Installs"
+    assert_output --partial "Applying tool"
+    assert_output --partial "Applying demo"
+    # The setup script's output streams in the step's style.
+    assert_line "  tool running"
+    assert_line "  demo running"
+    assert_output --partial "ok: tool applied"
+    assert_output --partial "ok: demo applied"
+    [ "$(cat "${home}/.local/state/dotfiles/installs")" = "tool demo" ]
+    [ -e "${home}/.demo-applied" ]
+    [ -x "${home}/.local/bin/tool" ]
+
+    # Saved: no flag needed, and an applied install is not run again.
+    run env PATH="${bin}:/usr/bin:/bin" HOME="${home}" HOMEBREW_PREFIX="${TEST_TMPDIR}/brew" USER=t SHELL=/bin/sh \
+        bash "${repo}/install.sh" --skip-system --skip-brew --skip-shell < /dev/null
+    assert_success
+    assert_output --partial "Installs: tool demo (saved)"
+    assert_output --partial "ok: tool already applied"
+    assert_output --partial "ok: demo already applied"
+    refute_output --partial "running"
+
+    # --no-install drops from the saved choice, the default install included.
+    run env PATH="${bin}:/usr/bin:/bin" HOME="${home}" HOMEBREW_PREFIX="${TEST_TMPDIR}/brew" USER=t SHELL=/bin/sh \
+        bash "${repo}/install.sh" --skip-system --skip-brew --skip-shell --no-install demo < /dev/null
+    assert_success
+    assert_output --partial "Installs: tool (flag)"
+    [ "$(cat "${home}/.local/state/dotfiles/installs")" = "tool" ]
+    run env PATH="${bin}:/usr/bin:/bin" HOME="${home}" HOMEBREW_PREFIX="${TEST_TMPDIR}/brew" USER=t SHELL=/bin/sh \
+        bash "${repo}/install.sh" --skip-system --skip-brew --skip-shell --no-install tool < /dev/null
+    assert_success
+    assert_output --partial "Installs: none chosen of tool demo"
+    [ "$(cat "${home}/.local/state/dotfiles/installs")" = "" ]
+
+    # A fresh machine with closed stdin gets the default install only.
+    run env PATH="${bin}:/usr/bin:/bin" HOME="${TEST_TMPDIR}/fresh-home" HOMEBREW_PREFIX="${TEST_TMPDIR}/brew" USER=t SHELL=/bin/sh \
+        bash "${repo}/install.sh" --skip-system --skip-brew --skip-shell --dry-run < /dev/null
+    assert_success
+    assert_output --partial "Installs: tool (default)"
+    assert_output --partial "Would apply tool: bash "
+    refute_output --partial "Would apply demo"
+
+    # An install the persona does not offer is refused before anything changes.
+    run env PATH="${bin}:/usr/bin:/bin" HOME="${TEST_TMPDIR}/other-home" HOMEBREW_PREFIX="${TEST_TMPDIR}/brew" USER=t SHELL=/bin/sh \
+        bash "${repo}/install.sh" --skip-system --skip-brew --skip-shell --install nope < /dev/null
+    assert_failure 2
+    assert_output --partial "does not offer install 'nope'"
+    [ ! -e "${TEST_TMPDIR}/other-home/.dotfiles" ]
 }
 
 @test "install.sh --dry-run reports changes without touching the system" {
@@ -751,8 +962,14 @@ MOCK
 
         chmod +x "${TEST_BIN}/hostname" "${TEST_BIN}/find" "${TEST_BIN}/zsh" "${TEST_BIN}/grep" "${TEST_BIN}/ssh-keygen" "${TEST_BIN}/brew" "${TEST_BIN}/chsh" "${TEST_BIN}/stow"
 
+        cat > "${TEST_BIN}/xcode-select" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+exit 1
+MOCK
+
+        chmod +x "${TEST_BIN}/xcode-select"
         cd "'"${PROJECT_ROOT}"'"
-        ./install.sh --dry-run
+        OSTYPE=darwin24 ./install.sh --dry-run
 
         [[ ! -e "${HOME}/.dotfiles" ]] || { echo "FAIL: created the dotfiles symlink"; exit 1; }
         [[ ! -e "${HOME}/.ssh" ]] || { echo "FAIL: created the .ssh directory"; exit 1; }
@@ -762,16 +979,20 @@ MOCK
             exit 1
         }
         ! grep -q "^ssh-keygen " "${TEST_LOG}" || { echo "FAIL: ran ssh-keygen"; exit 1; }
-        ! grep -q "^brew " "${TEST_LOG}" || { echo "FAIL: ran brew"; exit 1; }
+        # Homebrew is only asked what is installed, never to install.
+        ! grep -q "^brew \(bundle install\|install\)" "${TEST_LOG}" || { echo "FAIL: ran brew install"; exit 1; }
+        grep -q "^brew bundle check" "${TEST_LOG}" || { echo "FAIL: did not check the Brewfiles"; exit 1; }
         ! grep -q "^chsh " "${TEST_LOG}" || { echo "FAIL: ran chsh"; exit 1; }
         # find is mocked above; use the real one to prove HOME is untouched.
         [[ -z "$(/usr/bin/find "${HOME}" -mindepth 1 -print)" ]] || { echo "FAIL: wrote into HOME"; /usr/bin/find "${HOME}"; exit 1; }
     '
     assert_success
+    assert_output --partial "Installs: claude-code (default)"
     assert_output --partial "Would link "
+    assert_output --partial "Would install the Xcode Command Line Tools"
     assert_output --partial "Would create an SSH key at "
-    assert_output --partial "Dry run: skipping the system bootstrap script."
-    assert_output --partial "Dry run: skipping Homebrew install/update/bundle."
+    assert_output --partial "Would offer from Brewfile.macos"
+    assert_output --partial "Would apply claude-code: bash "
 }
 
 # ---------------------------------------------------------------------------
@@ -794,6 +1015,33 @@ MOCK
         assert_output --partial "command failed"
         refute_output --partial "ok:"
     done
+}
+
+@test "run_streamed indents live output, drops the INFO label, and keeps the exit status" {
+    run bash -c '
+        set -euo pipefail
+        VERBOSE=0
+        eval "$(sed -n '\''/^run_streamed() {$/,/^}$/p'\'' "$PROJECT_ROOT/install.sh")"
+        talk() { printf "INFO first\n"; printf "WARN second\n" >&2; printf "no newline"; return 3; }
+        run_streamed talk || printf "\nstatus=%s\n" "$?"
+    '
+    assert_success
+    assert_line "  first"
+    assert_line "  WARN second"
+    assert_line "  no newline"
+    assert_line "status=3"
+
+    # Verbose runs stream the command as it is.
+    run bash -c '
+        set -euo pipefail
+        VERBOSE=1
+        eval "$(sed -n '\''/^run_streamed() {$/,/^}$/p'\'' "$PROJECT_ROOT/install.sh")"
+        talk() { printf "INFO first\n"; return 3; }
+        run_streamed talk || printf "status=%s\n" "$?"
+    '
+    assert_success
+    assert_line "INFO first"
+    assert_line "status=3"
 }
 
 @test "ensure_local_install_ssh_key fails clearly when ssh-keygen is missing" {

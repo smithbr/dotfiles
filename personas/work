@@ -6,4 +6,3 @@ skills=core
 editors=yes
 brew=core work
 brew_optional=macos
-setup=claude-code

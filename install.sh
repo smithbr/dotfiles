@@ -10,8 +10,11 @@ usage() {
     cat <<'EOF'
 Usage: install.sh [OPTIONS] [-- STOW_ARGS...]
 
-Sets this machine up: links the repo into place, ensures an SSH key exists,
-runs the OS bootstrap and Homebrew, then links the dotfiles with GNU Stow.
+Sets this machine up: asks what it is (persona, installs, optional packages)
+once and remembers, offers to harden a Linux server or VPS first when it is
+not, then links the repo into place, ensures an SSH key exists, runs the OS
+bootstrap and Homebrew, links the dotfiles with GNU Stow, and applies the
+chosen installs. Safe to run again: every step skips what is already done.
 
 Options:
   -n, --dry-run      Report what would change without touching the system
@@ -20,8 +23,20 @@ Options:
   -h, --help         Show this help message and exit
       --persona NAME Set this machine up as NAME (home, work, server, vps;
                      see personas/). Saved for later runs; without it, a terminal
-                     asks (the saved choice preselected), otherwise the saved
-                     choice or the OS default applies
+                     asks until one is saved, otherwise the saved choice or the
+                     OS default applies
+      --install NAME Add an install: one offered to every persona (docker,
+                     tailscale, claude-code; on by default) or a role the persona
+                     offers (see roles/: pihole); --no-install NAME drops one.
+                     Saved for later runs; without either, a terminal asks until
+                     a choice is saved. DOTFILES_INSTALLS="a b" sets the whole
+                     list
+      --harden       Run scripts/bootstrap/linux/harden.sh first (key-only SSH
+                     over Tailscale, ufw, unattended upgrades; HARDEN_ARGS adds
+                     its options). Without it, a server or vps persona on Linux
+                     that harden-test.sh finds unhardened asks on a terminal;
+                     --no-harden skips the question
+      --reconfigure  Ask the persona and install questions again
       --skip-system  Skip the OS bootstrap (scripts/bootstrap/<os>/setup.sh)
       --skip-brew    Skip the Homebrew install/update/bundle step
       --skip-shell   Skip adding zsh to /etc/shells and chsh
@@ -37,16 +52,31 @@ run_system_bootstrap=1
 run_brew=1
 run_shell_setup=1
 persona_arg=""
-declare -a link_args=()
+harden_arg=""
+reconfigure=0
+declare -a link_args=() install_args=() no_install_args=()
 while [[ $# -gt 0 ]]; do
     case "${1}" in
-        --persona)
+        --persona|--install|--no-install)
             if [[ $# -lt 2 || -z "${2}" ]]; then
-                log_error "--persona requires a name"
+                log_error "${1} requires a name"
                 exit 2
             fi
-            persona_arg="${2}"
+            case "${1}" in
+                --persona) persona_arg="${2}" ;;
+                --install) install_args+=("${2}") ;;
+                --no-install) no_install_args+=("${2}") ;;
+            esac
             shift
+            ;;
+        --harden)
+            harden_arg=yes
+            ;;
+        --no-harden)
+            harden_arg=no
+            ;;
+        --reconfigure)
+            reconfigure=1
             ;;
         -n|--dry-run)
             dry_run=1
@@ -145,6 +175,25 @@ run_boxed() {
     elif [[ -z "${output}" ]]; then
         _check "Nothing to change"
     fi
+
+    return "${status}"
+}
+
+# Live output in a step's style: each line indented and the "INFO " label
+# dropped as run_boxed does, for a step that must show things as they happen
+# (a backup being made, a login URL to open) rather than hold them for a box.
+# The command keeps the terminal as stdin, so a prompt it draws there works.
+run_streamed() {
+    local line status=0
+
+    if [[ "${VERBOSE}" -eq 1 ]]; then
+        "$@" || status=$?
+        return "${status}"
+    fi
+
+    "$@" 2>&1 | while IFS= read -r line || [[ -n "${line}" ]]; do
+        printf '  %s\n' "${line#INFO }"
+    done || status="${PIPESTATUS[0]}"
 
     return "${status}"
 }
@@ -354,8 +403,7 @@ select_files_to_archive() {
     fi
 }
 
-# The setup scripts a persona offers (its setup list: docker, tailscale,
-# claude-code, ...) live in scripts/bootstrap/<os>/ or scripts/bootstrap/.
+# An install's setup script lives in scripts/bootstrap/<os>/ or scripts/bootstrap/.
 setup_script_path() {
     local name="$1" dir
     for dir in "${BASEDIR}/scripts/bootstrap/${os_dir}" "${BASEDIR}/scripts/bootstrap"; do
@@ -367,41 +415,43 @@ setup_script_path() {
     return 1
 }
 
-# Offered on a terminal once everything is linked, so a machine gets the
-# scripts for what it is for (a Pi-hole, a Docker host) when it is ready.
-# Every script is safe to run again; a failure is reported, not fatal.
-run_setup_scripts() {
-    local name script
-    local -a offered=() chosen=()
+# True once an install is applied: its detect command succeeds, with
+# common.sh's helpers (tool_installed) in scope.
+install_applied() {
+    bash -c "source '${BASEDIR}/scripts/common.sh' && $1" >/dev/null 2>&1
+}
 
-    for name in ${DOTFILES_SETUP:-}; do
-        if setup_script_path "${name}" >/dev/null; then
-            offered+=("${name}")
+# Apply the chosen installs in order, last, once everything is linked, so a
+# machine gets what it is for (Tailscale, a Pi-hole) when it is ready. One
+# whose detect command already succeeds is skipped; a failure is reported,
+# not fatal, and the install stays chosen so the next run retries. A setup
+# script's output streams, since a vendor installer may take minutes or
+# print a login URL, but in the step's style.
+run_installs() {
+    local name setup detect script
+
+    while IFS=$'\t' read -r name setup detect; do
+        [[ "${name}" == install=* ]] || continue
+        name="${name#install=}"
+        if install_applied "${detect}"; then
+            _check "${name} already applied"
+            continue
+        fi
+        if ! script="$(setup_script_path "${setup}")"; then
+            _cross "No ${setup} setup script for ${os_label}; ${name} not applied"
+            continue
+        fi
+        if [[ "${dry_run}" -eq 1 ]]; then
+            _item "Would apply ${name}: bash ${script}"
+            continue
+        fi
+        _item "Applying ${name}"
+        if run_streamed bash "${script}" && install_applied "${detect}"; then
+            _check "${name} applied"
         else
-            _item "No ${name} setup script for ${os_label}; skipping it"
+            _cross "${name} not applied; rerun it: bash ${script}"
         fi
-    done
-    if [[ "${#offered[@]}" -eq 0 ]]; then
-        _skip "Nothing to offer on ${os_label}"
-    elif [[ "${dry_run}" -eq 1 ]]; then
-        _skip "Dry run: would offer ${offered[*]}"
-    else
-        while IFS= read -r name; do
-            [[ -z "${name}" ]] || chosen+=("${name}")
-        done < <(choose_many "Setup scripts to run now" "${offered[@]}" || true)
-        if [[ "${#chosen[@]}" -eq 0 ]]; then
-            _skip "None chosen; run them from scripts/bootstrap/ later: ${offered[*]}"
-        fi
-        for name in ${chosen[@]+"${chosen[@]}"}; do
-            script="$(setup_script_path "${name}")"
-            _item "Running ${name}"
-            if bash "${script}"; then
-                _check "${name} done"
-            else
-                _cross "${name} failed; rerun it: bash ${script}"
-            fi
-        done
-    fi
+    done <<< "${INSTALL_INFO}"
 }
 
 # Ask which persona this machine is, when a terminal is available and neither
@@ -420,7 +470,8 @@ prompt_persona() {
 }
 
 # Settle the persona before anything changes, and pass it on to link.sh and
-# file-review.sh through the environment.
+# file-review.sh through the environment. A terminal is asked until a choice
+# is saved, and again with --reconfigure.
 resolve_persona() {
     local resolved name source
     if [[ -n "${persona_arg}" ]]; then
@@ -428,40 +479,181 @@ resolve_persona() {
     fi
     resolved="$(bash "${LINK_SCRIPT}" persona)" || exit 2
     read -r name source <<< "${resolved}"
-    # Ask on a terminal unless --persona or DOTFILES_PERSONA chose; a saved choice is only the preselection.
-    if [[ ( "${source}" == default || "${source}" == saved ) && -t 0 && -t 1 ]]; then
+    if [[ ( "${source}" == default || "${reconfigure}" -eq 1 ) && "${source}" != flag && "${source}" != env && -t 0 && -t 1 ]]; then
         name="$(prompt_persona "${name}")"
         export DOTFILES_PERSONA="${name}"
+        source=chosen
     fi
     PERSONA_NAME="${name}"
+    PERSONA_SOURCE="${source}"
+}
 
-    # What the persona installs, for homebrew/brew.sh and the setup step.
-    local installs key value
-    installs="$(bash "${LINK_SCRIPT}" installs)" || exit 2
+# The persona's install lists from link.sh: brew=, brew_optional=, installs=
+# (chosen, in run order), installs_source=, and an
+# install=NAME<TAB>SETUP<TAB>DETECT line per chosen install.
+read_installs() {
+    local key value
+    INSTALL_INFO="$(bash "${LINK_SCRIPT}" installs)" || exit 2
     while IFS='=' read -r key value; do
         case "${key}" in
-            brew) export DOTFILES_BREWFILES="${value}" ;;
-            brew_optional) export DOTFILES_BREW_OPTIONAL="${value}" ;;
-            setup) export DOTFILES_SETUP="${value}" ;;
+            brew) DOTFILES_BREWFILES="${value}" ;;
+            brew_optional) DOTFILES_BREW_OPTIONAL="${value}" ;;
+            harden) PERSONA_HARDEN="${value}" ;;
+            installs) INSTALLS="${value}" ;;
+            installs_source) INSTALLS_SOURCE="${value}" ;;
         esac
-    done <<< "${installs}"
-    if [[ -z "${DOTFILES_BREWFILES// /}" && -z "${DOTFILES_BREW_OPTIONAL// /}" && "${run_brew}" -eq 1 ]]; then
-        run_brew=0
-        brew_skip_reason="Homebrew (the ${PERSONA_NAME} persona installs none)"
+    done <<< "${INSTALL_INFO}"
+    export DOTFILES_BREWFILES DOTFILES_BREW_OPTIONAL
+}
+
+# Settle the installs (the optional installs every persona gets, on by
+# default, and the persona's roles): --install/--no-install and
+# DOTFILES_INSTALLS decide outright; otherwise a terminal is asked until a
+# choice is saved (or --reconfigure), with the saved or default installs and
+# the ones already applied preselected; closed stdin keeps those. The answer
+# goes to link.sh as DOTFILES_INSTALLS, which saves it, orders it, and adds
+# the roles' layers. PENDING_INSTALLS is what is chosen but not yet applied.
+resolve_installs() {
+    local name detect reply chosen="" applied="" source="" source_was=""
+    local -a items=()
+
+    OFFERED_INSTALLS="" PENDING_INSTALLS=""
+    while IFS=$'\t' read -r name _ detect; do
+        [[ -n "${name}" ]] || continue
+        OFFERED_INSTALLS="${OFFERED_INSTALLS}${name} "
+        if [[ -n "${detect}" ]] && install_applied "${detect}"; then
+            applied="${applied} ${name}"
+            items+=("${name} (applied)"$'\t'"${name}")
+        else
+            items+=("${name}"$'\t'"${name}")
+        fi
+    done < <(bash "${LINK_SCRIPT}" offered)
+    read_installs
+    chosen="${INSTALLS}" source_was="${INSTALLS_SOURCE}"
+
+    if [[ "${#install_args[@]}" -gt 0 || "${#no_install_args[@]}" -gt 0 ]]; then
+        chosen="${chosen} ${install_args[*]+"${install_args[*]}"}"
+        for name in ${no_install_args[@]+"${no_install_args[@]}"}; do
+            chosen=" ${chosen} "
+            chosen="${chosen// ${name} / }"
+        done
+        source=flag
+    elif [[ "${#items[@]}" -gt 0 && ( "${INSTALLS_SOURCE}" == default || "${reconfigure}" -eq 1 ) && -t 0 && -t 1 ]]; then
+        # Esc or an invalid answer keeps the marked installs.
+        if reply="$(choose_many --selected "${chosen} ${applied}" "Installs for this machine" "${items[@]}")"; then
+            chosen="$(tr '\n' ' ' <<< "${reply}")"
+        fi
+        source=chosen
+    fi
+    export DOTFILES_INSTALLS="${chosen}"
+    read_installs
+    INSTALLS_SOURCE="${source:-${source_was}}"
+    for name in ${INSTALLS}; do
+        [[ " ${applied} " == *" ${name} "* ]] || PENDING_INSTALLS="${PENDING_INSTALLS}${name} "
+    done
+}
+
+# Offer hardening first, before anything is installed, on a Linux box whose
+# persona says harden=yes (server, vps) when harden-test.sh finds it is not:
+# its --brief output lists what is missing. --harden runs harden.sh outright
+# (it is safe to run again) and --no-harden skips the question; closed stdin
+# skips it too, since on a server in use harden.sh closes every port but the
+# tailnet's and allows only one SSH user. The question is asked in a dry run
+# as well, so the dry run shows the step.
+resolve_harden() {
+    local gap
+    HARDEN=0 HARDEN_SOURCE="" HARDEN_GAPS=""
+    if [[ "${harden_arg}" == yes ]]; then
+        if [[ "${os_dir}" != linux ]]; then
+            log_error "The --harden option is for Linux (scripts/bootstrap/linux/harden.sh)"
+            exit 2
+        fi
+        HARDEN=1 HARDEN_SOURCE=flag
+        return 0
+    fi
+    [[ "${os_dir}" == linux && "${PERSONA_HARDEN}" == yes ]] || return 0
+    HARDEN_GAPS="$(bash "${BASEDIR}/scripts/bootstrap/linux/harden-test.sh" --brief 2>/dev/null || true)"
+    [[ -n "${HARDEN_GAPS}" ]] || return 0
+    [[ "${harden_arg}" != no && -t 0 && -t 1 ]] || return 0
+    printf '\n'
+    _header "This machine is not hardened:"
+    while IFS= read -r gap; do
+        _item "${gap}"
+    done <<< "${HARDEN_GAPS}"
+    if [[ "$(choose_one "Harden it first? harden.sh: key-only SSH over Tailscale, ufw, unattended upgrades. On a server in use this closes every port but the tailnet's and allows only your SSH user." no yes no)" == yes ]]; then
+        HARDEN=1 HARDEN_SOURCE=chosen
     fi
 }
 
-PERSONA_NAME=""
-brew_skip_reason="Homebrew"
-resolve_persona
+# harden.sh re-runs itself through sudo for this user and streams (a
+# Tailscale login URL to open). HARDEN_ARGS adds its options (--allow 443,
+# --cloudflare, --keep-public-ssh), as with bootstrap.sh. A failure is
+# reported, not fatal: the rest of the install does not depend on it.
+run_harden() {
+    local script="${BASEDIR}/scripts/bootstrap/linux/harden.sh"
+    local -a args=()
+    # shellcheck disable=SC2206 # HARDEN_ARGS is a list of options
+    [[ -z "${HARDEN_ARGS:-}" ]] || args=(${HARDEN_ARGS})
+    if [[ "${dry_run}" -eq 1 ]]; then
+        run_boxed bash "${script}" --dry-run ${args[@]+"${args[@]}"} || true
+        return 0
+    fi
+    if run_streamed bash "${script}" ${args[@]+"${args[@]}"}; then
+        _check "Hardened; in a new terminal, check that you can still log in before closing this one"
+    else
+        _cross "Hardening did not finish; rerun it: sudo bash ${script}"
+    fi
+}
 
-cd "${BASEDIR}"
+# Ask the optional Homebrew packages question up front, when Homebrew will
+# run on macOS and a terminal is there; brew.sh then installs the answer
+# (DOTFILES_BREW_PICKS) without asking. Closed stdin picks none.
+resolve_brew_picks() {
+    local line
+    local -a pending=()
+    BREW_PICK_COUNT=0
+    [[ "${run_brew}" -eq 1 && "${os_dir}" == macos && -n "${DOTFILES_BREW_OPTIONAL// /}" ]] || return 0
+    while IFS= read -r line; do
+        [[ -n "${line}" ]] && pending+=("${line}")
+    done < <(bash "${BASEDIR}/homebrew/brew.sh" --pending)
+    export DOTFILES_BREW_PICKS=""
+    [[ "${#pending[@]}" -gt 0 && "${dry_run}" -eq 0 && -t 0 && -t 1 ]] || return 0
+    DOTFILES_BREW_PICKS="$(choose_many "Optional Homebrew packages" "${pending[@]}" || true)"
+    [[ -z "${DOTFILES_BREW_PICKS}" ]] || BREW_PICK_COUNT="$(wc -l <<< "${DOTFILES_BREW_PICKS}" | tr -d ' ')"
+}
+
+# One sudo prompt up front when a step will need it, so no password prompt
+# hides inside a boxed step or a spinner. ponytail: no keepalive; sudo's own
+# timeout covers a normal run.
+prime_sudo() {
+    [[ "${dry_run}" -eq 0 && "${EUID}" -ne 0 ]] || return 0
+    command -v sudo >/dev/null 2>&1 || return 0
+    if [[ "${os_dir}" == linux && "${run_system_bootstrap}" -eq 1 ]] || [[ -n "${PENDING_INSTALLS// /}" || "${HARDEN}" -eq 1 ]]; then
+        _item "Some steps need sudo; it may ask for your password now"
+        sudo -v || log_warn "sudo failed; steps that need it will ask again or fail"
+    fi
+}
 
 case "${OSTYPE}" in
     darwin*) os_label="macOS" os_dir=macos ;;
     linux*) os_label="Linux" os_dir=linux ;;
     *) os_label="${OSTYPE}" os_dir="" ;;
 esac
+
+# Preflight: every question, before anything changes.
+PERSONA_NAME="" PERSONA_SOURCE="" PERSONA_HARDEN=no INSTALL_INFO="" INSTALLS="" INSTALLS_SOURCE="" OFFERED_INSTALLS="" PENDING_INSTALLS=""
+HARDEN=0 HARDEN_SOURCE="" HARDEN_GAPS=""
+brew_skip_reason="Homebrew"
+resolve_persona
+resolve_installs
+resolve_harden
+if [[ -z "${DOTFILES_BREWFILES// /}" && -z "${DOTFILES_BREW_OPTIONAL// /}" && "${run_brew}" -eq 1 ]]; then
+    run_brew=0
+    brew_skip_reason="Homebrew (the ${PERSONA_NAME} persona installs none)"
+fi
+resolve_brew_picks
+
+cd "${BASEDIR}"
 
 run_mode="Installing"
 [[ "${dry_run}" -eq 1 ]] && run_mode="Dry run (nothing will be changed)"
@@ -482,16 +674,36 @@ if [[ "${run_shell_setup}" -eq 1 ]]; then
 else
     skipped_steps+=("login shell")
 fi
-[[ -z "${DOTFILES_SETUP// /}" ]] || STEP_TOTAL=$((STEP_TOTAL + 1))
+[[ -z "${INSTALLS// /}" ]] || STEP_TOTAL=$((STEP_TOTAL + 1))
+[[ "${HARDEN}" -eq 0 ]] || STEP_TOTAL=$((STEP_TOTAL + 1))
 
 _header "Dotfiles setup"
 _item "${run_mode} from ${BASEDIR}"
-_item "Persona: ${PERSONA_NAME}"
+_item "Persona: ${PERSONA_NAME} (${PERSONA_SOURCE})"
+if [[ "${HARDEN}" -eq 1 ]]; then
+    _item "Hardening first (${HARDEN_SOURCE})"
+elif [[ -n "${HARDEN_GAPS}" ]]; then
+    _item "Not hardened: $(tr '\n' ';' <<< "${HARDEN_GAPS}" | sed 's/;$//; s/;/; /g')"
+fi
+if [[ -n "${INSTALLS// /}" ]]; then
+    _item "Installs: ${INSTALLS} (${INSTALLS_SOURCE})"
+elif [[ -n "${OFFERED_INSTALLS// /}" ]]; then
+    _item "Installs: none chosen of ${OFFERED_INSTALLS% }"
+fi
+if [[ "${BREW_PICK_COUNT}" -gt 0 ]]; then
+    _item "Optional Homebrew packages: ${BREW_PICK_COUNT} chosen"
+fi
 if [[ "${#skipped_steps[@]}" -gt 0 ]]; then
     _item "Skipping: $(printf '%s, ' "${skipped_steps[@]}" | sed 's/, $//')"
 fi
 if [[ "${VERBOSE}" -eq 0 ]]; then
     _item "Use --verbose to stream full command output"
+fi
+prime_sudo
+
+if [[ "${HARDEN}" -eq 1 ]]; then
+    begin_step "Harden" "Key-only SSH over Tailscale, ufw, unattended upgrades (scripts/bootstrap/linux/harden.sh)"
+    run_harden
 fi
 
 begin_step "Repository link" "Point ~/.dotfiles at this checkout"
@@ -499,13 +711,13 @@ run_boxed ensure_dotfiles_repo_link
 
 if [[ "${run_system_bootstrap}" -eq 1 ]]; then
     begin_step "System packages" "Run the ${os_label} bootstrap script (system tools and settings)"
-    if [[ "${dry_run}" -eq 1 ]]; then
-        _skip "Dry run: skipping the system bootstrap script."
-    elif [[ -n "${os_dir}" ]]; then
+    if [[ -z "${os_dir}" ]]; then
+        _skip "No bootstrap for ${OSTYPE}"
+    elif [[ "${dry_run}" -eq 1 ]]; then
+        run_boxed bash "scripts/bootstrap/${os_dir}/setup.sh" --dry-run
+    else
         bash "scripts/bootstrap/${os_dir}/setup.sh"
         _check "System bootstrap complete"
-    else
-        _skip "No bootstrap for ${OSTYPE}"
     fi
 fi
 
@@ -516,10 +728,9 @@ run_boxed ensure_local_install_ssh_key
 if [[ "${run_brew}" -eq 1 ]]; then
     begin_step "Homebrew" "Install Homebrew if needed, then the ${DOTFILES_BREWFILES:-core} Brewfile packages"
     if [[ "${dry_run}" -eq 1 ]]; then
-        _skip "Dry run: skipping Homebrew install/update/bundle."
+        run_boxed bash homebrew/brew.sh --dry-run
     else
-        chmod +x homebrew/brew.sh
-        ./homebrew/brew.sh
+        bash homebrew/brew.sh
         _check "Homebrew packages up to date"
     fi
 fi
@@ -527,9 +738,9 @@ fi
 begin_step "Dotfiles" "Install GNU Stow if needed, then link the managed files into your home"
 run_boxed ensure_stow
 
-# Not boxed: backups of replaced files are listed as they happen, and the
-# agents clone may need to show an SSH prompt.
-apply_dotfiles
+# Streamed, not boxed: backups of replaced files are listed as they happen,
+# and the agents clone may need to show an SSH prompt.
+run_streamed apply_dotfiles
 
 zsh_path=""
 if [[ "${run_shell_setup}" -eq 1 ]]; then
@@ -572,16 +783,14 @@ if [[ "${offer_cleanup}" -eq 1 ]]; then
     select_files_to_archive
 fi
 
-if [[ -n "${DOTFILES_SETUP// /}" ]]; then
-    begin_step "Setup" "Run the setup scripts this persona offers, chosen on a terminal"
-    run_setup_scripts
-fi
-# Hardening is never automatic (on a server in use it would close ports and
-# SSH users that are needed), so say when a Linux machine still lacks it.
-if [[ "${os_dir}" == linux && ! -f /etc/ssh/sshd_config.d/00-harden.conf ]]; then
-    _next_step "Harden this machine when it is new or yours alone: bash ${BASEDIR}/scripts/bootstrap/linux/harden.sh"
+if [[ -n "${INSTALLS// /}" ]]; then
+    begin_step "Installs" "Apply what this machine gets: ${INSTALLS}"
+    run_installs
 fi
 
+if [[ "${HARDEN}" -eq 0 && -n "${HARDEN_GAPS}" ]]; then
+    _next_step "Harden this machine when it is new or yours alone: ${BASEDIR}/install.sh --harden (scripts/bootstrap/linux/harden-test.sh shows what is missing)"
+fi
 if [[ -n "${zsh_path:-}" && "${dry_run}" -eq 0 ]]; then
     _next_step "Reload your shell: exec -l \$SHELL (or open a new terminal)"
 fi

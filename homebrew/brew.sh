@@ -2,9 +2,11 @@
 # Install Homebrew if needed, then the persona's Brewfiles: those in
 # DOTFILES_BREWFILES in full, and on macOS a picker over the entries of
 # DOTFILES_BREW_OPTIONAL not yet installed. install.sh sets both from the
-# persona; run on its own this installs core and offers macos. Brewfiles are
-# plain `brew bundle` files: an entry that only applies to macOS says so with
-# `if OS.mac?`. Nothing is upgraded here; os-update does that.
+# persona and asks the picker's question itself up front (--pending lists the
+# entries, DOTFILES_BREW_PICKS answers it); run on its own this installs core
+# and offers macos. Brewfiles are plain `brew bundle` files: an entry that only
+# applies to macOS says so with `if OS.mac?`. Nothing is upgraded here;
+# os-update does that.
 
 set -euo pipefail
 
@@ -17,10 +19,15 @@ usage() {
 Usage: brew.sh [OPTIONS]
 
 Options:
+  -n, --dry-run   Report what would be installed without installing anything
+      --pending   Print the optional entries not yet installed, one
+                  NAME<TAB>LINE per line (every entry when Homebrew is missing)
   -v, --verbose   Stream full brew output instead of a spinner
   -h, --help      Show this help message and exit
 USAGE
 }
+
+DRY_RUN=0
 
 # Homebrew's bin directory on this machine, to look in before it is on PATH.
 brew_bin_dir() {
@@ -39,15 +46,24 @@ brew_bin_dir() {
     esac
 }
 
+# Put Homebrew on PATH when it is installed but not there yet.
+find_brew() {
+    local bin_dir
+    command -v brew >/dev/null 2>&1 && return 0
+    bin_dir="$(brew_bin_dir)" || exit 1
+    export PATH="${bin_dir}:${bin_dir%/bin}/sbin:${PATH}"
+    command -v brew >/dev/null 2>&1
+}
+
 ensure_brew() {
-    local bin_dir prefix
-    if ! command -v brew >/dev/null 2>&1; then
-        bin_dir="$(brew_bin_dir)" || exit 1
-        export PATH="${bin_dir}:${bin_dir%/bin}/sbin:${PATH}"
-        if ! command -v brew >/dev/null 2>&1; then
-            printf '\n\nInstalling Homebrew...\n\n'
-            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    local prefix
+    if ! find_brew; then
+        if [[ "${DRY_RUN}" -eq 1 ]]; then
+            log_info "Would install Homebrew"
+            return 1
         fi
+        printf '\n\nInstalling Homebrew...\n\n'
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
     fi
     prefix="$(brew --prefix)"
     export PATH="${prefix}/bin:${prefix}/sbin:${PATH}"
@@ -85,14 +101,21 @@ install_brewfile() {
         log_info "All ${name} Homebrew packages already installed"
         return 0
     fi
+    if [[ "${DRY_RUN}" -eq 1 ]]; then
+        log_info "Would install from Brewfile.${name}: $(pending_entries "${brewfile}" | cut -f1 | tr '\n' ' ')"
+        return 0
+    fi
     bundle_install "${brewfile}" "${name} Homebrew packages"
 }
 
 # The brew and cask lines of a Brewfile whose package is not installed, as
 # name<TAB>line (a tap-qualified cask is installed under its short name).
+# Without Homebrew every entry is pending.
 pending_entries() {
-    local brewfile="$1" line name installed
-    installed=" $(brew list --formula 2>/dev/null | tr '\n' ' ') $(brew list --cask 2>/dev/null | tr '\n' ' ') "
+    local brewfile="$1" line name installed=""
+    if command -v brew >/dev/null 2>&1; then
+        installed=" $(brew list --formula 2>/dev/null | tr '\n' ' ') $(brew list --cask 2>/dev/null | tr '\n' ' ') "
+    fi
     while IFS= read -r line; do
         [[ "${line}" =~ ^[[:space:]]*(brew|cask)[[:space:]]+\"([^\"]+)\" ]] || continue
         name="${BASH_REMATCH[2]}"
@@ -103,6 +126,8 @@ pending_entries() {
 
 # macOS only: the entries of an optional Brewfile not yet installed, chosen on
 # a terminal (closed stdin chooses none), bundled from a temporary Brewfile.
+# When DOTFILES_BREW_PICKS is set (install.sh asked already), its lines are
+# the choice and nothing is asked here.
 offer_brewfile() {
     local name="$1" brewfile="${BASEDIR}/homebrew/Brewfile.$1" entry tmp count=0
     local -a pending=()
@@ -114,16 +139,45 @@ offer_brewfile() {
         log_info "All ${name} Homebrew packages already installed"
         return 0
     fi
+    if [[ "${DRY_RUN}" -eq 1 ]]; then
+        log_info "Would offer from Brewfile.${name}: $(printf '%s\n' "${pending[@]}" | cut -f1 | tr '\n' ' ')"
+        return 0
+    fi
     tmp="$(mktemp "${TMPDIR:-/tmp}/Brewfile.${name}.XXXXXX")"
     while IFS= read -r entry; do
         [[ -z "${entry}" ]] || { printf '%s\n' "${entry}" >> "${tmp}"; count=$((count + 1)); }
-    done < <(choose_many "Optional Homebrew packages (${name})" "${pending[@]}" || true)
+    done < <(chosen_entries "${name}" "${pending[@]}" || true)
     if [[ "${count}" -eq 0 ]]; then
         log_info "No ${name} Homebrew packages selected"
     else
         bundle_install "${tmp}" "${count} optional Homebrew package(s)"
     fi
     rm -f "${tmp}"
+}
+
+# The lines of the pending entries to install: those of DOTFILES_BREW_PICKS
+# when it is set, else the picker's answer.
+chosen_entries() {
+    local name="$1" entry
+    shift
+    if [[ -n "${DOTFILES_BREW_PICKS+x}" ]]; then
+        for entry in "$@"; do
+            grep -qxF "${entry#*$'\t'}" <<< "${DOTFILES_BREW_PICKS}" && printf '%s\n' "${entry#*$'\t'}"
+        done
+        return 0
+    fi
+    choose_many "Optional Homebrew packages (${name})" "$@"
+}
+
+# --pending: every optional entry not yet installed, for install.sh's question.
+print_pending() {
+    local name brewfile
+    find_brew || true
+    for name in ${DOTFILES_BREW_OPTIONAL-macos}; do
+        brewfile="${BASEDIR}/homebrew/Brewfile.${name}"
+        [[ -f "${brewfile}" ]] && pending_entries "${brewfile}"
+    done
+    return 0
 }
 
 main() {
@@ -133,6 +187,8 @@ main() {
     VERBOSE="${VERBOSE:-0}"
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            -n|--dry-run) DRY_RUN=1 ;;
+            --pending) print_pending; exit 0 ;;
             -v|--verbose) VERBOSE=1 ;;
             -h|--help) usage; exit 0 ;;
             *)
@@ -146,7 +202,11 @@ main() {
     export VERBOSE
 
     require_non_root
-    ensure_brew
+    if ! ensure_brew; then
+        # A dry run without Homebrew: every entry would be installed.
+        log_info "Would install from Brewfiles: ${DOTFILES_BREWFILES-core}"
+        return 0
+    fi
     for name in ${DOTFILES_BREWFILES-core}; do
         install_brewfile "${name}"
     done
@@ -155,6 +215,7 @@ main() {
             offer_brewfile "${name}"
         done
     fi
+    [[ "${DRY_RUN}" -eq 0 ]] || return 0
     [[ "${VERBOSE}" -eq 0 ]] || cleanup+=(--verbose)
     spin "Cleaning up Homebrew..." "${cleanup[@]}"
 }
