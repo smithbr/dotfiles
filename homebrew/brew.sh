@@ -5,8 +5,9 @@
 # persona and asks the picker's question itself up front (--pending lists the
 # entries, DOTFILES_BREW_PICKS answers it); run on its own this installs core
 # and offers macos. Brewfiles are plain `brew bundle` files: an entry that only
-# applies to macOS says so with `if OS.mac?`. Nothing is upgraded here;
-# os-update does that.
+# applies to macOS says so with `if OS.mac?`. It also writes Homebrew's global
+# npmrc so npm never caches in ~/.npm. Nothing is upgraded here; os-update
+# does that.
 
 set -euo pipefail
 
@@ -169,6 +170,33 @@ chosen_entries() {
     choose_many "Optional Homebrew packages (${name})" "$@"
 }
 
+# npm started outside a shell (Claude's MCP servers through npx, GUI apps)
+# never sees .zshenv's NPM_CONFIG_CACHE and caches in ~/.npm. Homebrew's npm
+# reads its global npmrc whatever started it, so that file points the cache at
+# the same place; the shell's variable still wins where it is set. A global
+# npmrc the repo did not write is left alone.
+NPMRC_MARKER="# Managed by dotfiles homebrew/brew.sh"
+
+write_global_npmrc() {
+    local npmrc wanted
+    npmrc="$(brew --prefix)/etc/npmrc"
+    wanted="${NPMRC_MARKER}"$'\n''cache=~/.cache/npm'
+    if [[ -f "${npmrc}" ]]; then
+        [[ "$(cat "${npmrc}")" != "${wanted}" ]] || return 0
+        if [[ "$(head -n 1 "${npmrc}")" != "${NPMRC_MARKER}" ]]; then
+            log_warn "Leaving ${npmrc} alone (not written by the dotfiles); add cache=~/.cache/npm to keep npm out of ~/.npm"
+            return 0
+        fi
+    fi
+    if [[ "${DRY_RUN}" -eq 1 ]]; then
+        log_info "Would write ${npmrc} to keep npm's cache in ~/.cache/npm"
+        return 0
+    fi
+    mkdir -p "${npmrc%/*}"
+    printf '%s\n' "${wanted}" > "${npmrc}"
+    log_info "Wrote ${npmrc}: npm caches in ~/.cache/npm"
+}
+
 # --pending: every optional entry not yet installed, for install.sh's question.
 print_pending() {
     local name brewfile
@@ -215,6 +243,7 @@ main() {
             offer_brewfile "${name}"
         done
     fi
+    write_global_npmrc
     [[ "${DRY_RUN}" -eq 0 ]] || return 0
     [[ "${VERBOSE}" -eq 0 ]] || cleanup+=(--verbose)
     spin "Cleaning up Homebrew..." "${cleanup[@]}"

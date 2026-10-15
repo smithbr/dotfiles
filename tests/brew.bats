@@ -297,6 +297,45 @@ cask "firefox"'
     assert_output --partial "Would install from Brewfiles: core"
 }
 
+@test "brew.sh writes Homebrew's global npmrc once, then leaves it as is" {
+    local npmrc="${TEST_TMPDIR}/prefix/etc/npmrc"
+    run_brew_sh linux-gnu
+    assert_success
+    assert_output --partial "Wrote ${npmrc}"
+    run cat "${npmrc}"
+    assert_output $'# Managed by dotfiles homebrew/brew.sh\ncache=~/.cache/npm'
+
+    run_brew_sh linux-gnu
+    assert_success
+    refute_output --partial "npmrc"
+}
+
+@test "brew.sh rewrites its own stale npmrc but keeps one it did not write" {
+    local npmrc="${TEST_TMPDIR}/prefix/etc/npmrc"
+    mkdir -p "${npmrc%/*}"
+    printf '# Managed by dotfiles homebrew/brew.sh\ncache=/old\n' > "${npmrc}"
+    run_brew_sh linux-gnu
+    assert_success
+    run cat "${npmrc}"
+    assert_output $'# Managed by dotfiles homebrew/brew.sh\ncache=~/.cache/npm'
+
+    printf 'registry=https://example.test/\n' > "${npmrc}"
+    run_brew_sh linux-gnu
+    assert_success
+    assert_output --partial "Leaving ${npmrc} alone"
+    run cat "${npmrc}"
+    assert_output "registry=https://example.test/"
+}
+
+@test "brew.sh --dry-run reports the npmrc without writing it" {
+    write_brew_mock
+    run env PATH="${TEST_BIN}:/usr/bin:/bin" HOME="${TEST_TMPDIR}/home" OSTYPE=linux-gnu TEST_TMPDIR="${TEST_TMPDIR}" \
+        TEST_LOG="${TEST_LOG}" bash "${PROJECT_ROOT}/homebrew/brew.sh" --dry-run < /dev/null
+    assert_success
+    assert_output --partial "Would write ${TEST_TMPDIR}/prefix/etc/npmrc"
+    [[ ! -e "${TEST_TMPDIR}/prefix/etc/npmrc" ]]
+}
+
 @test "brew.sh says so when every optional entry is installed" {
     local all
     all="$(grep -oE '^(brew|cask) "[^"]+"' "${PROJECT_ROOT}/homebrew/Brewfile.macos" | sed -E 's/^[a-z]+ "([^"]+)"/\1/' | tr '\n' ' ')"
