@@ -276,29 +276,40 @@ prompt_mode() {
 }
 
 # One of the ITEMs, by gum or a numbered list on stderr, printed to stdout.
-# The answer may be a number or an item; anything else, an empty answer, or
-# end of input gives DEFAULT, which may be empty.
+# An ITEM may be LABEL<tab>VALUE: the label is shown, the value printed. The
+# answer may be a number or a value; anything else, an empty answer, or end
+# of input gives DEFAULT (a value), which may be empty.
 #   choose_one HEADER DEFAULT ITEM...
 choose_one() {
-    local header="$1" default="$2" item reply="" index=1
+    local header="$1" default="$2" item reply="" index selected=""
+    local -a items=() labels=() values=() options=()
     shift 2
-    local -a items=("$@")
+    items=("$@")
 
+    for item in "${items[@]}"; do
+        labels+=("${item%%$'\t'*}")
+        values+=("${item#*$'\t'}")
+    done
     if [[ "$(prompt_mode)" == gum ]]; then
-        reply="$(gum choose --header "${header}" ${default:+--selected "${default}"} "${items[@]}")" || reply=""
+        for index in "${!items[@]}"; do
+            options+=("${labels[${index}]}"$'\t'"${values[${index}]}")
+            # gum matches --selected against labels.
+            [[ "${values[${index}]}" != "${default}" ]] || selected="${labels[${index}]}"
+        done
+        [[ -z "${selected}" ]] || options=(--selected "${selected}" "${options[@]}")
+        reply="$(gum choose --header "${header}" --label-delimiter=$'\t' "${options[@]}")" || reply=""
     else
         printf '%s\n' "${header}" >&2
-        for item in "${items[@]}"; do
-            printf '  %d) %s\n' "${index}" "${item}" >&2
-            index=$((index + 1))
+        for index in "${!items[@]}"; do
+            printf '  %d) %s\n' "$((index + 1))" "${labels[${index}]}" >&2
         done
         printf 'Choice%s: ' "${default:+ [${default}]}" >&2
         IFS= read -r reply || reply=""
     fi
     if [[ "${reply}" =~ ^[0-9]+$ && "${reply}" -ge 1 && "${reply}" -le "${#items[@]}" ]]; then
-        reply="${items[$((reply - 1))]}"
+        reply="${values[$((reply - 1))]}"
     fi
-    for item in "${items[@]}"; do
+    for item in "${values[@]}"; do
         if [[ "${item}" == "${reply}" ]]; then
             printf '%s\n' "${item}"
             return 0

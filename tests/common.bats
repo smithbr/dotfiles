@@ -451,6 +451,48 @@ run_picker() {
 Choice [green]: "
 }
 
+@test "choose_one shows labels, prints values, and takes a number or a value" {
+    run_picker 2 choose_one "Pick" "" $'Red\tred' $'Green (installed)\tgreen'
+    assert_success
+    assert_output "green"
+    run_picker green choose_one "Pick" "" $'Red\tred' $'Green (installed)\tgreen'
+    assert_output "green"
+    run_picker "" choose_one "Pick" red $'Red\tred' $'Green (installed)\tgreen'
+    assert_output "red"
+    run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"'"
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        DOTFILES_PROMPT=read choose_one "Pick" red $'"'"'Red\tred'"'"' $'"'"'Green (installed)\tgreen'"'"' 2>&1 >/dev/null
+    ' < /dev/null
+    assert_success
+    assert_output "Pick
+  1) Red
+  2) Green (installed)
+Choice [red]: "
+}
+
+@test "choose_one hands gum the labels and values and selects the default by label" {
+    cat > "${TEST_TMPDIR}/bin/gum" <<'MOCK'
+#!/usr/bin/env bash
+[[ "$1" == choose ]] || exit 0
+printf '%s\n' "$@" > "${GUM_ARGS}"
+printf 'green\n'
+MOCK
+    chmod +x "${TEST_TMPDIR}/bin/gum"
+    run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"':/usr/bin:/bin"
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        DOTFILES_PROMPT=gum GUM_ARGS="'"${TEST_TMPDIR}"'/gum-args" choose_one "Pick" green red $'"'"'Green\tgreen'"'"' 2>/dev/null
+    '
+    assert_success
+    assert_output "green"
+    grep -Fqx -- "--label-delimiter="$'\t' "${TEST_TMPDIR}/gum-args"
+    grep -Fqx -- "red"$'\t'"red" "${TEST_TMPDIR}/gum-args"
+    grep -Fqx -- "Green"$'\t'"green" "${TEST_TMPDIR}/gum-args"
+    grep -Fqx -- "--selected" "${TEST_TMPDIR}/gum-args"
+    grep -Fqx -- "Green" "${TEST_TMPDIR}/gum-args"
+}
+
 @test "choose_many --selected marks the values, keeps them on Enter, and drops them on none" {
     run_picker "" choose_many --selected "green" "Pick" red green blue
     assert_success

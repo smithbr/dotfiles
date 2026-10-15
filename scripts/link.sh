@@ -1273,11 +1273,68 @@ add_refusal() {
     return 0
 }
 
-# Pick the layer for add: --layer, else a choice on a terminal. Only layers
-# this persona links qualify, so the added file is linked right here.
+# What a layer holds, read from the tree so nothing is kept by hand: its
+# top-level paths (dot-directories one level down, a few script names for
+# .local/bin), the personas whose layers= name it (else the role that brings
+# it), and the platform when it exists only as a platform part.
+#   layer_description LAYER WIDTH
+layer_description() {
+    local layer="$1" width="$2" dir entry paths="" item owners="" platform="" file total=0 linked=0
+    local -a entries=() names=()
+    for dir in "${REPO}/stow/${layer}" "${REPO}/stow/${layer}.darwin" "${REPO}/stow/${layer}.linux"; do
+        [[ -d "${dir}" ]] || continue
+        while IFS= read -r entry; do
+            [[ -n "${entry}" ]] || continue
+            if [[ "${entry}" == .local/bin && -d "${dir}/${entry}" ]]; then
+                names=()
+                while IFS= read -r file && [[ "${#names[@]}" -lt 3 ]]; do
+                    names+=("${file}")
+                done < <(find "${dir}/${entry}" -mindepth 1 -maxdepth 1 -type f ! -name .DS_Store -exec basename {} \; | LC_ALL=C sort)
+                [[ "$(find "${dir}/${entry}" -mindepth 1 -maxdepth 1 -type f ! -name .DS_Store | wc -l)" -le 3 ]] || names+=(...)
+                [[ "${#names[@]}" -eq 0 ]] || entry="${entry}: $(IFS=,; printf '%s' "${names[*]}")" entry="${entry//,/, }"
+            fi
+            entries+=("${entry}")
+        done < <({ find "${dir}" -mindepth 1 -maxdepth 1 -type f ! -name .DS_Store; find "${dir}" -mindepth 2 -maxdepth 2 ! -name .DS_Store; } | sed "s|^${dir}/||" | LC_ALL=C sort -u)
+    done
+    for item in "${entries[@]+"${entries[@]}"}"; do
+        if [[ -n "${paths}" && "$(( ${#paths} + ${#item} ))" -gt 56 ]]; then
+            paths="${paths}, ..."
+            break
+        fi
+        paths="${paths:+${paths}, }${item}"
+    done
+
+    for file in "${REPO}/personas"/*; do
+        [[ -f "${file}" ]] || continue
+        total=$((total + 1))
+        [[ " $(persona_settings "${file}" | sed -n 's/^layers=//p') " == *" ${layer} "* ]] || continue
+        linked=$((linked + 1))
+        owners="${owners:+${owners}, }$(basename "${file}")"
+    done
+    [[ "${linked}" -eq 0 || "${linked}" -lt "${total}" ]] || owners="every persona"
+    if [[ -z "${owners}" ]]; then
+        for file in "${REPO}/roles"/*; do
+            [[ -f "${file}" && "$(basename "${file}")" != README.md ]] || continue
+            [[ " $(persona_settings "${file}" | sed -n 's/^layers=//p') " == *" ${layer} "* ]] || continue
+            owners="${owners:+${owners}, }the $(basename "${file}") role"
+        done
+    fi
+    if [[ ! -d "${REPO}/stow/${layer}" ]]; then
+        if [[ -d "${REPO}/stow/${layer}.darwin" && ! -d "${REPO}/stow/${layer}.linux" ]]; then
+            platform="macOS only"
+        elif [[ -d "${REPO}/stow/${layer}.linux" && ! -d "${REPO}/stow/${layer}.darwin" ]]; then
+            platform="Linux only"
+        fi
+    fi
+    printf '%-*s  %s (%s%s)' "${width}" "${layer}" "${paths:-nothing yet}" "${owners:-no persona}" "${platform:+; ${platform}}"
+}
+
+# Pick the layer for add: --layer, else a choice on a terminal, each layer
+# described from the tree. Only layers this persona links qualify, so the
+# added file is linked right here.
 choose_add_layer() {
-    local layer
-    local -a layers=()
+    local layer width=0
+    local -a layers=() choices=()
     read -r -a layers <<< "${PERSONA_LAYERS}"
 
     if [[ -n "${ADD_LAYER}" ]]; then
@@ -1291,7 +1348,13 @@ choose_add_layer() {
         log_error "Name the layer with --layer (one of: ${PERSONA_LAYERS})"
         exit 2
     fi
-    ADD_LAYER="$(choose_one "Layer for the new files" "" "${layers[@]}")"
+    for layer in "${layers[@]}"; do
+        [[ "${#layer}" -le "${width}" ]] || width="${#layer}"
+    done
+    for layer in "${layers[@]}"; do
+        choices+=("$(layer_description "${layer}" "${width}")"$'\t'"${layer}")
+    done
+    ADD_LAYER="$(choose_one "Layer for the new files" "" "${choices[@]}")"
     if [[ -z "${ADD_LAYER}" ]]; then
         log_error "No layer chosen; nothing added"
         exit 1

@@ -780,6 +780,67 @@ plant_old_links() {
     assert_output --partial "only apply to add"
 }
 
+# Runs link.sh with stdin on a pseudo-terminal and the answer typed there,
+# since the layer prompt asks only on a terminal. Output is what the terminal
+# showed, with its line endings normalized.
+run_fixture_link_on_tty() {
+    local answer="$1"
+    shift
+    command -v python3 >/dev/null 2>&1 || skip "python3 not available"
+    run python3 - "${answer}" bash "${PROJECT_ROOT}/${LINK}" --repo "${FIXTURE}" --destination "${DEST}" "$@" <<'PY'
+import os, pty, sys
+answer, cmd = sys.argv[1], sys.argv[2:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ["DOTFILES_PROMPT"] = "read"
+    os.execvp(cmd[0], cmd)
+os.write(fd, (answer + "\n").encode())
+out = b""
+while True:
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    out += chunk
+_, status = os.waitpid(pid, 0)
+sys.stdout.write(out.decode(errors="replace").replace("\r\n", "\n"))
+sys.exit(status >> 8 if os.WIFEXITED(status) else 1)
+PY
+}
+
+@test "add describes each layer on a terminal and takes the answer by number or name" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_fixture_repo
+    mkdir -p "${FIXTURE}/stow/desk.darwin/.config/app" "${FIXTURE}/stow/common/.local/bin"
+    printf 'app\n' > "${FIXTURE}/stow/desk.darwin/.config/app/rc"
+    printf 'tool\n' > "${FIXTURE}/stow/common/.local/bin/tool"
+    printf 'os=darwin,linux\nlayers=common extra desk\nagents=yes\nskills=core\neditors=no\nbrew=\n' > "${FIXTURE}/personas/home"
+    printf 'x\n' > "${DEST}/.rc"
+    printf 'y\n' > "${DEST}/.rc2"
+    printf 'z\n' > "${DEST}/.rc3"
+
+    run_fixture_link_on_tty 2 --persona home add "${DEST}/.rc"
+    assert_success
+    assert_output --partial "Layer for the new files"
+    assert_output --partial "1) common  .keep, .local/bin: tool (every persona)"
+    assert_output --partial "2) extra   .config/extra (home)"
+    assert_output --partial "3) desk    .config/app (home; macOS only)"
+    assert_output --partial "Copied ~/.rc to stow/extra/.rc"
+    [[ "$(cat "${FIXTURE}/stow/extra/.rc")" == "x" ]]
+    [ -L "${DEST}/.rc" ]
+
+    run_fixture_link_on_tty common --persona home add "${DEST}/.rc2"
+    assert_success
+    assert_output --partial "Copied ~/.rc2 to stow/common/.rc2"
+    [ -L "${DEST}/.rc2" ]
+
+    run_fixture_link_on_tty "" --persona home --dry-run add "${DEST}/.rc3"
+    assert_failure
+    assert_output --partial "No layer chosen"
+}
+
 @test "add dry run copies and links nothing" {
     make_fixture_repo
     printf 'x\n' > "${DEST}/.rc"
