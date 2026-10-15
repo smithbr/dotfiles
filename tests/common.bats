@@ -293,20 +293,52 @@ MOCK
     assert_output --partial "from function"
 }
 
-@test "spin delegates to gum with shared padding" {
+# Runs a bash script file with a pseudo-terminal on stdout, for the helpers
+# that draw only on a terminal.
+run_on_tty() {
+    command -v script >/dev/null 2>&1 || skip "script(1) not available"
+    if [[ "$(uname)" == Darwin ]]; then
+        run script -q /dev/null bash "$1"
+    else
+        run script -qec "bash $1" /dev/null
+    fi
+}
+
+@test "spin delegates to gum with shared padding on a terminal" {
+    cat > "${TEST_TMPDIR}/bin/gum" <<'MOCK'
+#!/usr/bin/env bash
+echo "gum $*"
+MOCK
+    chmod +x "${TEST_TMPDIR}/bin/gum"
+    cat > "${TEST_TMPDIR}/spin.sh" <<EOF
+export PATH="${TEST_TMPDIR}/bin:\${PATH}"
+source "${PROJECT_ROOT}/scripts/common.sh"
+spin "Loading..." echo "payload"
+EOF
+
+    run_on_tty "${TEST_TMPDIR}/spin.sh"
+    assert_success
+    assert_output --partial "gum spin --spinner dot --title Loading... --padding=0 1 -- echo payload"
+}
+
+@test "spin logs the title and streams output when stdout is not a terminal" {
     cat > "${TEST_TMPDIR}/bin/gum" <<'MOCK'
 #!/usr/bin/env bash
 echo "gum $*"
 MOCK
     chmod +x "${TEST_TMPDIR}/bin/gum"
 
+    # Captured by run, so stdout is a pipe: a spinner here would leave cursor
+    # escapes in a boxed or streamed step.
     run bash -c '
         export PATH="'"${TEST_TMPDIR}/bin"':${PATH}"
         source "'"${PROJECT_ROOT}"'/scripts/common.sh"
         spin "Loading..." echo "payload"
     '
     assert_success
-    assert_output --partial "gum spin --spinner dot --title Loading... --padding=0 1 -- echo payload"
+    refute_output --partial "gum spin"
+    assert_output --partial "Loading..."
+    assert_output --partial "payload"
 }
 
 @test "spin bypasses gum and streams output when VERBOSE=1" {

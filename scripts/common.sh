@@ -225,7 +225,10 @@ spin() {
         return 0
     fi
 
-    if command -v gum >/dev/null 2>&1 && [[ "$(type -t "$1" 2>/dev/null)" != "function" ]]; then
+    # The spinner only draws on a terminal: captured into a box or piped
+    # through install.sh, gum spin leaves cursor escapes in the output, so
+    # the title is logged and the command prints as it goes.
+    if command -v gum >/dev/null 2>&1 && [[ -t 1 && "$(type -t "$1" 2>/dev/null)" != "function" ]]; then
         if ! gum spin --spinner dot --title "${title}" --padding="0 1" -- "$@"; then
             log_error "${title} failed"
             return 1
