@@ -1532,17 +1532,19 @@ plant_single_layer_links() {
 }
 
 @test "installs prints what each persona installs, with the optional installs on by default" {
+    local hb_detect='[[ -d "${HOLEBERRY_APPS_DIR:-/Applications}/Holeberry.app" ]]'
     run_link --persona work installs
     assert_success
     assert_output "brew=core work
 brew_optional=macos
 harden=no
-installs=claude-code
+installs=holeberry claude-code
 installs_source=default
+install=holeberry	holeberry	${hb_detect}
 install=claude-code	claude-code	tool_installed claude"
     run_link --persona home installs
     assert_line "brew=core home"
-    assert_line "installs=claude-code"
+    assert_line "installs=holeberry claude-code"
     DOTFILES_OS=linux run_link --persona server installs
     assert_line "installs=docker tailscale claude-code"
     assert_line "brew=core"
@@ -1564,11 +1566,14 @@ install=claude-code	claude-code	tool_installed claude"
 }
 
 @test "offered lists the optional installs for this OS, then the persona's roles, with each detect command" {
+    local hb_detect='[[ -d "${HOLEBERRY_APPS_DIR:-/Applications}/Holeberry.app" ]]'
     run_link --persona work offered
     assert_success
-    assert_output "claude-code	default	tool_installed claude"
+    assert_output "holeberry	default	${hb_detect}
+claude-code	default	tool_installed claude"
     run_link --persona server offered
-    assert_output "claude-code	default	tool_installed claude"
+    assert_output "holeberry	default	${hb_detect}
+claude-code	default	tool_installed claude"
     DOTFILES_OS=linux run_link --persona server offered
     assert_line --index 0 "docker	default	tool_installed docker"
     assert_line --index 1 "tailscale	default	tool_installed tailscale"

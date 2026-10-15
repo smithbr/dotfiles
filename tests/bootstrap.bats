@@ -626,6 +626,128 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
+# macos/holeberry.sh — the Holeberry role, from its release DMG
+# ---------------------------------------------------------------------------
+
+# Mocked curl, hdiutil, codesign, spctl, and ditto for holeberry.sh, each
+# logging to ${TEST_TMPDIR}/holeberry.log. HB_TEAM sets the signing team,
+# HB_SPCTL_RC Gatekeeper's answer, and HB_NO_DMG drops the DMG from the
+# release.
+_make_holeberry_mocks() {
+    local bin="${TEST_TMPDIR}/bin"
+    mkdir -p "${bin}" "${TEST_TMPDIR}/home" "${TEST_TMPDIR}/tmp"
+    : > "${TEST_TMPDIR}/holeberry.log"
+
+    cat > "${bin}/curl" <<'MOCK'
+#!/usr/bin/env bash
+printf 'curl %s\n' "$*" >> "${HB_LOG}"
+if [[ "$*" == *api.github.com* ]]; then
+    printf '{"assets": [\n'
+    printf '  {"browser_download_url": "https://github.com/pedrovieira/Holeberry/releases/download/v9.9.9/appcast.xml"}'
+    [[ -n "${HB_NO_DMG:-}" ]] || printf ',\n  {"browser_download_url": "https://github.com/pedrovieira/Holeberry/releases/download/v9.9.9/Holeberry-9.9.9.dmg"}'
+    printf '\n]}\n'
+    exit 0
+fi
+while [[ $# -gt 0 ]]; do
+    if [[ "$1" == -o ]]; then printf 'dmg\n' > "$2"; fi
+    shift
+done
+MOCK
+    cat > "${bin}/hdiutil" <<'MOCK'
+#!/usr/bin/env bash
+printf 'hdiutil %s\n' "$1" >> "${HB_LOG}"
+if [[ "$1" == attach ]]; then
+    while [[ $# -gt 0 ]]; do
+        if [[ "$1" == -mountpoint ]]; then mkdir -p "$2/Holeberry.app/Contents"; fi
+        shift
+    done
+fi
+MOCK
+    cat > "${bin}/codesign" <<'MOCK'
+#!/usr/bin/env bash
+printf 'codesign %s\n' "$1" >> "${HB_LOG}"
+if [[ "$1" == -dv ]]; then printf 'TeamIdentifier=%s\n' "${HB_TEAM:-5UN5GTF749}" >&2; fi
+MOCK
+    cat > "${bin}/spctl" <<'MOCK'
+#!/usr/bin/env bash
+printf 'spctl %s\n' "$*" >> "${HB_LOG}"
+exit "${HB_SPCTL_RC:-0}"
+MOCK
+    cat > "${bin}/ditto" <<'MOCK'
+#!/usr/bin/env bash
+printf 'ditto\n' >> "${HB_LOG}"
+cp -R "$1" "$2"
+MOCK
+    chmod +x "${bin}"/*
+}
+
+# Runs holeberry.sh with the mocks; arguments are environment settings.
+_run_holeberry() {
+    run env "$@" HOME="${TEST_TMPDIR}/home" TMPDIR="${TEST_TMPDIR}/tmp" \
+        HOLEBERRY_APPS_DIR="${TEST_TMPDIR}/Applications" \
+        HB_LOG="${TEST_TMPDIR}/holeberry.log" PATH="${TEST_TMPDIR}/bin:/usr/bin:/bin" \
+        bash "${PROJECT_ROOT}/scripts/bootstrap/macos/holeberry.sh" < /dev/null
+}
+
+@test "holeberry.sh installs the release's DMG once it checks the team and Gatekeeper" {
+    _make_holeberry_mocks
+    _run_holeberry
+    assert_success
+    assert_output --partial "Downloading Holeberry-9.9.9.dmg..."
+    assert_output --partial "Holeberry installed at ${TEST_TMPDIR}/Applications/Holeberry.app"
+    [ -d "${TEST_TMPDIR}/Applications/Holeberry.app/Contents" ]
+
+    run cat "${TEST_TMPDIR}/holeberry.log"
+    assert_line --partial "curl -fsSL -o"
+    assert_line "codesign -dv"
+    assert_line "codesign --verify"
+    assert_line --partial "spctl --assess --type execute"
+    assert_line "ditto"
+    assert_line "hdiutil detach"
+    # The download and its mount point are gone.
+    run ls -A "${TEST_TMPDIR}/tmp"
+    assert_output ""
+}
+
+@test "holeberry.sh leaves an installed copy to its own updates" {
+    _make_holeberry_mocks
+    mkdir -p "${TEST_TMPDIR}/Applications/Holeberry.app"
+    _run_holeberry
+    assert_success
+    assert_output --partial "Holeberry already installed"
+    run cat "${TEST_TMPDIR}/holeberry.log"
+    assert_output ""
+}
+
+@test "holeberry.sh refuses an app signed by another team" {
+    _make_holeberry_mocks
+    _run_holeberry HB_TEAM=ABCDE12345
+    assert_failure
+    assert_output --partial "signed by team 'ABCDE12345', not 5UN5GTF749"
+    [ ! -e "${TEST_TMPDIR}/Applications/Holeberry.app" ]
+    run cat "${TEST_TMPDIR}/holeberry.log"
+    assert_line "hdiutil detach"
+    refute_line "ditto"
+}
+
+@test "holeberry.sh refuses an app Gatekeeper rejects" {
+    _make_holeberry_mocks
+    _run_holeberry HB_SPCTL_RC=3
+    assert_failure
+    assert_output --partial "Gatekeeper rejects Holeberry.app"
+    [ ! -e "${TEST_TMPDIR}/Applications/Holeberry.app" ]
+}
+
+@test "holeberry.sh fails clearly when the release has no DMG" {
+    _make_holeberry_mocks
+    _run_holeberry HB_NO_DMG=1
+    assert_failure
+    assert_output --partial "No Holeberry DMG in the latest release"
+    run cat "${TEST_TMPDIR}/holeberry.log"
+    refute_line --partial "curl -fsSL -o"
+}
+
+# ---------------------------------------------------------------------------
 # macos/setup.sh — mocked execution flow
 # ---------------------------------------------------------------------------
 
@@ -824,6 +946,7 @@ MOCK
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/harden.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/harden-test.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/setup.sh" \
+            "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/holeberry.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/claude-code.sh" \
             "'"${PROJECT_ROOT}"'/homebrew/brew.sh"; do
             first_line="$(head -1 "${f}")"
@@ -850,6 +973,7 @@ MOCK
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/harden.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/harden-test.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/setup.sh" \
+            "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/holeberry.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/claude-code.sh" \
             "'"${PROJECT_ROOT}"'/homebrew/brew.sh"; do
             if ! grep -q "set -euo pipefail" "${f}"; then
@@ -877,6 +1001,7 @@ MOCK
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/tailscale.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/harden.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/setup.sh" \
+            "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/holeberry.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/claude-code.sh" \
             "'"${PROJECT_ROOT}"'/homebrew/brew.sh"; do
             if ! grep -q "source.*common\.sh" "${f}"; then
@@ -904,6 +1029,7 @@ MOCK
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/tailscale.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/harden.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/setup.sh" \
+            "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/holeberry.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/claude-code.sh" \
             "'"${PROJECT_ROOT}"'/homebrew/brew.sh"; do
             if ! grep -q "BASEDIR=" "${f}"; then

@@ -687,8 +687,9 @@ MOCK
         chmod +x "${TEST_BIN}/hostname" "${TEST_BIN}/find" "${TEST_BIN}/zsh" "${TEST_BIN}/grep" "${TEST_BIN}/ssh-keygen" "${TEST_BIN}/brew" "${TEST_STOW_STUB}"
 
         cd "'"${PROJECT_ROOT}"'"
-        # No installs: the claude-code one, on by default, would run its installer.
-        ./install.sh --skip-system --skip-brew --no-install claude-code --adopt
+        # No installs: claude-code and holeberry, on by default, would run
+        # their real installers.
+        ./install.sh --skip-system --skip-brew --no-install claude-code --no-install holeberry --adopt
 
         [[ -L "${HOME}/.dotfiles" ]] || { echo "missing dotfiles symlink"; exit 1; }
         [[ "$(cat "${HOME}/.local/state/dotfiles/installs")" == "" ]] || { echo "installs not saved as none"; exit 1; }
@@ -707,7 +708,7 @@ MOCK
     '
     assert_success
     assert_output --partial "Persona: home (default)"
-    assert_output --partial "Installs: none chosen of claude-code"
+    assert_output --partial "Installs: none chosen of holeberry claude-code"
     assert_output --partial "Installing GNU Stow with Homebrew"
     assert_output --partial "Linking dotfiles from "
     assert_output --partial "Checking links before applying"
@@ -987,7 +988,7 @@ MOCK
         [[ -z "$(/usr/bin/find "${HOME}" -mindepth 1 -print)" ]] || { echo "FAIL: wrote into HOME"; /usr/bin/find "${HOME}"; exit 1; }
     '
     assert_success
-    assert_output --partial "Installs: claude-code (default)"
+    assert_output --partial "Installs: holeberry claude-code (default)"
     assert_output --partial "Would link "
     assert_output --partial "Would install the Xcode Command Line Tools"
     assert_output --partial "Would create an SSH key at "
