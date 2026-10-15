@@ -142,7 +142,9 @@ ensure_unbound() {
     fi
     if [[ -f "${RESOLVCONF_CONF}" ]] && grep -q '^unbound_conf=' "${RESOLVCONF_CONF}"; then
         log_info "Commenting out unbound_conf in ${RESOLVCONF_CONF}"
-        sed -Ei 's/^unbound_conf=/#unbound_conf=/' "${RESOLVCONF_CONF}"
+        # No sed -i: BSD sed reads it differently, and the tests run on macOS.
+        sed -E 's/^unbound_conf=/#unbound_conf=/' "${RESOLVCONF_CONF}" > "${RESOLVCONF_CONF}.tmp"
+        mv "${RESOLVCONF_CONF}.tmp" "${RESOLVCONF_CONF}"
         changed=1
     fi
     if [[ -f "${RESOLVCONF_HOOK}" ]]; then
