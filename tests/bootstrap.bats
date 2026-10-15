@@ -568,6 +568,7 @@ MOCK
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/docker.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/tailscale.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/harden.sh" \
+            "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/harden-test.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/setup.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/claude-code.sh" \
             "'"${PROJECT_ROOT}"'/homebrew/brew.sh"; do
@@ -593,6 +594,7 @@ MOCK
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/docker.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/tailscale.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/harden.sh" \
+            "'"${PROJECT_ROOT}"'/scripts/bootstrap/linux/harden-test.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/macos/setup.sh" \
             "'"${PROJECT_ROOT}"'/scripts/bootstrap/claude-code.sh" \
             "'"${PROJECT_ROOT}"'/homebrew/brew.sh"; do

@@ -79,6 +79,10 @@ This is process-level isolation, not a real container or VM.
 - Verifies that `harden.sh` re-runs itself through sudo for the user who ran it
 - Checks shell script shebangs, strict mode, `common.sh` sourcing, and `BASEDIR` conventions
 
+[`harden_test.bats`](harden_test.bats)
+
+- Runs `scripts/bootstrap/linux/harden-test.sh` against a scratch root (`HARDEN_ROOT`) with mocked `sshd`, `ufw`, `tailscale`, `docker`, `systemctl`, `apt-get`, and `getent`: a hardened box passes with its open ports listed, a fresh box fails with the config files read the way sshd does (`sshd_config.d/` first, first value wins) and the checks that need root skipped, `--brief` prints only the failures, a locked-out or root admin user fails, public SSH is judged against Tailscale, Docker ports published to all interfaces, pending upgrades, and a needed reboot warn, and bad arguments are rejected
+
 [`bin_scripts.bats`](bin_scripts.bats)
 
 - Covers scripts in [`stow/tools/.local/bin`](../stow/tools/.local/bin), [`stow/personal/.local/bin`](../stow/personal/.local/bin), and [`stow/server.linux/.local/bin`](../stow/server.linux/.local/bin)
