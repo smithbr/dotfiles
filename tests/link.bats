@@ -936,7 +936,6 @@ persona_state() {
     [ -L "${DEST}/.config/ghostty/config" ]
     [ -L "${DEST}/.local/bin/sshkey" ]
     [ -L "${DEST}/.local/bin/df-deploy" ]
-    [ -L "${DEST}/.config/restic/b2.env.example" ]
     [ ! -e "${DEST}/.local/bin/ph-update" ]
 
     # A work Mac gets the shared tools but nothing personal or Pi-hole.
@@ -945,7 +944,7 @@ persona_state() {
     assert_success
     [ -L "${DEST}/.local/bin/sshkey" ]
     for path in .local/bin/cf-cert .local/bin/df-deploy .local/bin/ts-test \
-        .config/restic .local/bin/ph-update .local/bin/ph-padd; do
+        .local/bin/ph-update .local/bin/ph-padd; do
         [ ! -e "${DEST}/${path}" ]
     done
 
@@ -1061,8 +1060,7 @@ dest_git_config() {
 
 @test "status names real files a layer the persona does not link would own" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
-    mkdir -p "${DEST}/.config/restic" "${DEST}/.config/git" "${DEST}/.local/bin"
-    printf 'secret\n' > "${DEST}/.config/restic/b2.env"
+    mkdir -p "${DEST}/.config/git" "${DEST}/.local/bin"
     printf 'old copy\n' > "${DEST}/.local/bin/cf-cert"
     printf '[user]\n    email = me@work.example\n' > "${DEST}/.config/git/config.local"
     run_link --persona work
@@ -1070,10 +1068,19 @@ dest_git_config() {
 
     run_link --persona work status
     assert_success
-    assert_output "unlinked ${DEST}/.config/restic
-unlinked ${DEST}/.local/bin/cf-cert"
-    [ "$(cat "${DEST}/.config/restic/b2.env")" = secret ]
+    assert_output "unlinked ${DEST}/.local/bin/cf-cert"
     [ "$(cat "${DEST}/.local/bin/cf-cert")" = 'old copy' ]
+
+    # A whole folder only an unlinked layer would own is named once, not per
+    # file. A fresh home: here work has linked that folder already.
+    local server_home="${TEST_TMPDIR}/server-home"
+    mkdir -p "${server_home}/.config/ghostty"
+    printf 'font-size = 14\n' > "${server_home}/.config/ghostty/config"
+    DEST="${server_home}" run_link --persona server status
+    assert_success
+    assert_line "unlinked ${server_home}/.config/ghostty"
+    refute_output --partial "ghostty/config"
+    [ "$(cat "${server_home}/.config/ghostty/config")" = 'font-size = 14' ]
 
     # A persona that links the layer does not report its folder.
     rm "${DEST}/.local/bin/cf-cert"

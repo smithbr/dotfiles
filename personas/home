@@ -4,6 +4,6 @@ agents=yes
 agent_apps=claude codex
 skills=core vault
 editors=yes
-brew=core home personal
+brew=core home
 brew_optional=macos
 setup=claude-code

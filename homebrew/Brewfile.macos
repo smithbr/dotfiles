@@ -31,7 +31,6 @@ cask "yaak"
 
 # Productivity
 cask "appcleaner"
-cask "obsidian"
 cask "utm"
 
 # Security and Networking
