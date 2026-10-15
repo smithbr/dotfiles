@@ -9,7 +9,6 @@ export AWS_CONFIG_FILE="${XDG_CONFIG_HOME}/aws/config"
 export AWS_DATA_PATH="${XDG_DATA_HOME}/aws/models"
 export AWS_SDK_LOAD_CONFIG=1
 export AWS_SHARED_CREDENTIALS_FILE="${XDG_CONFIG_HOME}/aws/credentials"
-export DOCKER_CONFIG="${XDG_CONFIG_HOME}/docker"
 export GNUPGHOME="${XDG_DATA_HOME}/gnupg"
 export GOBIN="${XDG_BIN_HOME}"
 export HISTFILE="${XDG_STATE_HOME}/zsh/history"

@@ -9,5 +9,9 @@ export XDG_BIN_HOME="${XDG_BIN_HOME:-${HOME}/.local/bin}"
 export XDG_STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
 export PATH="${XDG_BIN_HOME}:${PATH}"
 
+# Docker keeps its current context here, so scripts and colima must agree with
+# the interactive shell or they fall back to ~/.docker and lose the context.
+export DOCKER_CONFIG="${XDG_CONFIG_HOME}/docker"
+
 # Keep $path/$PATH entries unique so re-sourcing / exec reloads don't duplicate them.
 typeset -U path PATH
