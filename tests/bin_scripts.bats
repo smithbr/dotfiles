@@ -2964,6 +2964,13 @@ fake_df_repo() {
     assert_output --partial "/fake repo/scripts/link.sh|add|--layer|tools|a file|"
 }
 
+@test "df-remove runs its repo's link.sh remove with every argument" {
+    fake_df_repo df-remove link.sh
+    run "${TEST_TMPDIR}/home/.local/bin/df-remove" --delete "a file"
+    assert_success
+    assert_output --partial "/fake repo/scripts/link.sh|remove|--delete|a file|"
+}
+
 @test "df-file-review runs the cleanup review by default and passes arguments through" {
     fake_df_repo df-file-review file-review.sh
     run "${TEST_TMPDIR}/home/.local/bin/df-file-review"

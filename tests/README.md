@@ -95,7 +95,7 @@ This is process-level isolation, not a real container or VM.
 - Runs `os-update` and `ph-sec-audit` against mocked system tools
 - Runs `ts-test` in a fully mocked sandbox
 - Runs `sshkey` help, local key creation, and cleanup flows inside an isolated home directory
-- Runs `df-link` and `df-file-review` through a stow-style link into a fake repo: arguments pass through, `df-file-review` defaults to `--cleanup`, and a wrapper outside a repo fails clearly
+- Runs `df-link`, `df-remove`, and `df-file-review` through a stow-style link into a fake repo: arguments pass through (`df-remove` as `link.sh remove`), `df-file-review` defaults to `--cleanup`, and a wrapper outside a repo fails clearly
 - Runs `df-deploy` with a stub `ssh` that runs the remote command against a scratch clone: pull and relink, every named or `DF_DEPLOY_HOSTS` host, a non-fast-forward pull failing that host before linking, dry runs, a missing host, and the unpushed-commit warning
 
 [`brew_add.bats`](brew_add.bats)
@@ -136,6 +136,7 @@ This is process-level isolation, not a real container or VM.
 - Verifies linking per platform, shared editor settings, backups of changed copies and foreign links, removal of stale repo links (files that moved, were deleted, or belong to an unused package) while real files and foreign links stay, persona choice (flag, environment, saved state, OS default, unknown or wrong-OS names), personas without agents or editors, idempotency, and dry runs
 - Covers agent links (clone, backup of real agent config, unreachable repo), seed files (the gh login only for personas with the `personal` layer), the `managed` and `status` reports, the installs (`offered` and `installs`: the optional installs read from setup scripts' detect lines, the OS directory first, a role requiring one, `DOTFILES_INSTALLS`, the saved choice, and a persona switch dropping what it does not offer), and the git identity: only `personal` sets `user.email`, `config.local` overrides it, and a missing email or a `[user]` in `~/.gitconfig` is warned about and reported; `status` names real files a layer the persona does not link would own (not shared parents or the empty folders a persona switch leaves) and never moves them
 - Runs `add` against a fixture repo: a file becomes a link with no backup and keeps its executable bit; directories, `--platform`, relative paths, `--seed`, dry runs; refusals of secrets, private keys, `.local` overrides, agent and editor paths, repo files, outside paths, symlinks, banned words (without naming them), a layer the persona does not link, and a missing layer on closed stdin; the layer prompt on a pseudo-terminal describes each layer (paths, personas, platform) and takes a number or a name
+- Runs `remove` against the fixture repo: a link becomes a real file with the same content and mode, gone from the layer (empty folders too) and the index, and left alone by the next link run; a directory removes every managed link in it and keeps its real files and foreign links; real files, seed files, foreign, agent, and editor links, paths outside the destination, and the destination itself are refused with nothing changed; dry runs; `--delete` moves the file to a private `cleanup/<timestamp>.remove/` folder
 
 [`install.bats`](install.bats)
 

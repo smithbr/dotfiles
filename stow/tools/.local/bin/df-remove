@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Stop managing files with the dotfiles, keeping them in ~: link.sh remove.
+
+set -euo pipefail
+
+# The script lives at <repo>/stow/tools/.local/bin/df-remove, reached through its stow link.
+repo="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../../.." && pwd)"
+if [[ ! -f "${repo}/scripts/link.sh" ]]; then
+    printf 'df-remove: cannot find scripts/link.sh in %s\n' "${repo}" >&2
+    exit 1
+fi
+exec bash "${repo}/scripts/link.sh" remove "$@"

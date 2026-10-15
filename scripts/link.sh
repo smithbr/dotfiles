@@ -63,7 +63,8 @@ PERSONA=""
 ADD_LAYER=""
 ADD_PLATFORM=0
 ADD_SEED=0
-declare -a add_paths=()
+REMOVE_DELETE=0
+declare -a path_args=()
 declare -a stow_args=()
 
 AGENTS_REPO_URL="${AGENTS_REPO_URL:-git@github.com:smithbr/agents-private.git}"
@@ -126,6 +127,10 @@ Commands:
   add PATH...
             Start managing files from the home directory: copy each one into
             a layer, then link it (a directory adds every file in it)
+  remove PATH...
+            Stop managing linked files: replace each link with a real copy
+            of its repo file and git rm that file (a directory removes every
+            managed link in it)
 
 Options:
   -n, --dry-run           Report what would change without touching anything
@@ -140,6 +145,8 @@ Options:
                           (stow/<layer>.<os>)
       --seed              add: copy once as a seed file the app then owns,
                           instead of linking
+      --delete            remove: drop the files from the home directory too,
+                          moving them to ~/.local/state/dotfiles/cleanup/
   -h, --help              Show this help and exit
 
 Arguments after -- go to stow, e.g. link.sh -- --verbose=2
@@ -153,6 +160,7 @@ parse_args() {
             --refresh) REFRESH=1 ;;
             --platform) ADD_PLATFORM=1 ;;
             --seed) ADD_SEED=1 ;;
+            --delete) REMOVE_DELETE=1 ;;
             --repo|--destination|--persona|--layer)
                 if [[ $# -lt 2 ]]; then
                     log_error "$1 requires a value"
@@ -166,7 +174,7 @@ parse_args() {
                 esac
                 shift
                 ;;
-            apply|managed|status|persona|personas|offered|installs|add) COMMAND="$1" ;;
+            apply|managed|status|persona|personas|offered|installs|add|remove) COMMAND="$1" ;;
             -h|--help) usage; exit 0 ;;
             --)
                 shift
@@ -179,23 +187,27 @@ parse_args() {
                 exit 2
                 ;;
             *)
-                if [[ "${COMMAND}" != add ]]; then
+                if [[ "${COMMAND}" != add && "${COMMAND}" != remove ]]; then
                     log_error "Unknown argument: $1"
                     usage >&2
                     exit 2
                 fi
-                add_paths+=("$1")
+                path_args+=("$1")
                 ;;
         esac
         shift
     done
 
-    if [[ "${COMMAND}" == add && "${#add_paths[@]}" -eq 0 ]]; then
-        log_error "add needs at least one path"
+    if [[ ( "${COMMAND}" == add || "${COMMAND}" == remove ) && "${#path_args[@]}" -eq 0 ]]; then
+        log_error "${COMMAND} needs at least one path"
         exit 2
     fi
     if [[ "${COMMAND}" != add && ( -n "${ADD_LAYER}" || "${ADD_PLATFORM}" -eq 1 || "${ADD_SEED}" -eq 1 ) ]]; then
         log_error "--layer, --platform and --seed only apply to add"
+        exit 2
+    fi
+    if [[ "${COMMAND}" != remove && "${REMOVE_DELETE}" -eq 1 ]]; then
+        log_error "--delete only applies to remove"
         exit 2
     fi
 
@@ -1366,7 +1378,7 @@ choose_add_layer() {
 collect_add_files() {
     local path entry dir absolute real_dest relative
     real_dest="$(cd -P "${DEST}" && pwd)"
-    for path in "${add_paths[@]}"; do
+    for path in "${path_args[@]}"; do
         if [[ -L "${path}" ]]; then
             if is_repo_link "${path}"; then
                 log_error "Already managed: ${path}"
@@ -1449,6 +1461,174 @@ add_files() {
         "${#relatives[@]}" "${REPO}" "${kind}/${package}"
 }
 
+# ---------------------------------------------------------------------------
+# remove: stop managing files, keeping them in the home directory
+# ---------------------------------------------------------------------------
+
+# The repo file a link in the home directory stands for, relative to the repo
+# (stow/<package>/...), when it is a regular file there.
+stow_link_source() {
+    local destination
+    is_repo_link "$1" || return 1
+    destination="$(link_destination "$1")" || return 1
+    [[ "${destination}" == "${REPO}/stow/"*/* && -f "${destination}" && ! -L "${destination}" ]] || return 1
+    printf '%s\n' "${destination#"${REPO}"/}"
+}
+
+# Why remove will not take a path that is not a link into the repo's stow/.
+remove_refusal() {
+    local path="$1" relative="$2" dir
+    if [[ ! -L "${path}" ]]; then
+        for dir in "${REPO}"/seed/*/; do
+            if [[ -e "${dir}${relative}" ]]; then
+                printf 'a seed file, copied once and never linked; delete %s from the repo instead\n' "${dir#"${REPO}"/}${relative}"
+                return 0
+            fi
+        done
+        printf 'a real file, not a link into the repo\n'
+    elif is_agent_link "${path}"; then
+        printf 'links into the private agents repo\n'
+    elif ! is_repo_link "${path}"; then
+        printf 'links outside the repo\n'
+    elif [[ "$(link_destination "${path}")" == "${REPO}/editors/"* ]]; then
+        printf 'shared editor settings, kept in editors/\n'
+    else
+        printf 'its repo file is gone; df-link removes the stale link\n'
+    fi
+}
+
+# relative|source for each file to stop managing: a link into the repo's
+# stow/, or every such link under a directory. Every other path is refused,
+# each one reported before any change.
+collect_remove_files() {
+    local path absolute link source real_dest relative refused=0
+    real_dest="$(cd -P "${DEST}" && pwd)"
+    for path in "${path_args[@]}"; do
+        if [[ ! -e "${path}" && ! -L "${path}" ]]; then
+            log_error "No such file: ${path}"
+            refused=1
+            continue
+        fi
+        if [[ -d "${path}" && ! -L "${path}" ]]; then
+            absolute="$(cd -P "${path}" && pwd)" || return 1
+        else
+            absolute="$(cd -P "$(dirname "${path}")" && pwd)/$(basename "${path}")" || return 1
+        fi
+        if [[ "${absolute}" != "${real_dest}/"* ]]; then
+            log_error "Not inside ${DEST}: ${path}"
+            refused=1
+            continue
+        fi
+        relative="${absolute#"${real_dest}"/}"
+        if [[ -d "${absolute}" && ! -L "${absolute}" ]]; then
+            while IFS= read -r link; do
+                source="$(stow_link_source "${link}")" || continue
+                printf '%s|%s\n' "${link#"${real_dest}"/}" "${source}"
+            done < <(find "${absolute}" -type l)
+        elif source="$(stow_link_source "${absolute}")"; then
+            printf '%s|%s\n' "${relative}" "${source}"
+        else
+            log_error "Not removing ~/${relative}: $(remove_refusal "${absolute}" "${relative}")"
+            refused=1
+        fi
+    done
+    [[ "${refused}" -eq 0 ]]
+}
+
+# A private folder for files remove --delete takes out of the home directory,
+# beside the file review's cleanup archives and never reached through a
+# symlinked parent.
+REMOVE_ARCHIVE=""
+remove_archive() {
+    local base parent
+    [[ -z "${REMOVE_ARCHIVE}" ]] || return 0
+    base="$(state_dir)/cleanup"
+    if ! parent="$(no_symlinked_parents "${base}")"; then
+        log_error "Archive parent is a symlink: ${parent}; nothing removed"
+        return 1
+    fi
+    (umask 077 && mkdir -p "${base}")
+    REMOVE_ARCHIVE="${base}/$(date +%Y%m%d-%H%M%S).remove"
+    if ! (umask 077 && mkdir "${REMOVE_ARCHIVE}" 2>/dev/null); then
+        REMOVE_ARCHIVE="$(mktemp -d "${REMOVE_ARCHIVE}.XXXXXX")"
+    fi
+}
+
+# Take one file out of the repo: git rm when it is tracked, then the folders
+# that leaves empty inside its package.
+drop_repo_file() {
+    local source="$1" package dir
+    if command -v git >/dev/null 2>&1 \
+        && git -C "${REPO}" ls-files --error-unmatch -- "${source}" >/dev/null 2>&1; then
+        git -C "${REPO}" rm -q -f -- "${source}"
+    else
+        rm -f "${REPO}/${source}"
+    fi
+    package="${source#stow/}"
+    package="${REPO}/stow/${package%%/*}"
+    dir="$(dirname "${REPO}/${source}")"
+    while [[ "${dir}" == "${package}/"* ]]; do
+        if [[ -d "${dir}" ]]; then
+            rmdir "${dir}" 2>/dev/null || break
+        fi
+        dir="$(dirname "${dir}")"
+    done
+}
+
+remove_files() {
+    local files entry relative source target tmp
+    local -a entries=()
+
+    files="$(collect_remove_files)" || exit 1
+    while IFS= read -r entry; do
+        [[ -n "${entry}" ]] && entries+=("${entry}")
+    done < <(printf '%s\n' "${files}" | LC_ALL=C sort -u)
+    if [[ "${#entries[@]}" -eq 0 ]]; then
+        log_error "No managed files to remove"
+        exit 1
+    fi
+
+    if [[ "${DRY_RUN}" -eq 1 ]]; then
+        for entry in "${entries[@]}"; do
+            relative="${entry%%|*}" source="${entry#*|}"
+            if [[ "${REMOVE_DELETE}" -eq 1 ]]; then
+                printf 'Would move ~/%s to %s/cleanup/ and git rm %s\n' "${relative}" "$(state_dir)" "${source}"
+            else
+                printf 'Would replace the link ~/%s with a copy of %s and git rm it\n' "${relative}" "${source}"
+            fi
+        done
+        return 0
+    fi
+
+    # Every live file is in place (a real copy, or archived) before the repo
+    # loses anything, so a failure part way never leaves a dangling link.
+    [[ "${REMOVE_DELETE}" -eq 0 ]] || remove_archive || exit 1
+    for entry in "${entries[@]}"; do
+        relative="${entry%%|*}" source="${entry#*|}" target="${DEST}/${entry%%|*}"
+        if [[ "${REMOVE_DELETE}" -eq 1 ]]; then
+            (umask 077 && mkdir -p "$(dirname "${REMOVE_ARCHIVE}/${relative}")")
+            cp -p "${REPO}/${source}" "${REMOVE_ARCHIVE}/${relative}"
+            rm -f "${target}"
+            printf 'Moved ~/%s to %s\n' "${relative}" "${REMOVE_ARCHIVE}/${relative}"
+        else
+            tmp="$(mktemp "$(dirname "${target}")/.df-remove.XXXXXX")"
+            if ! cp -p "${REPO}/${source}" "${tmp}" || ! mv -f "${tmp}" "${target}"; then
+                rm -f "${tmp}"
+                log_error "Could not replace the link ~/${relative}; it is left in place"
+                exit 1
+            fi
+            printf 'Kept ~/%s as a real file\n' "${relative}"
+        fi
+    done
+    for entry in "${entries[@]}"; do
+        drop_repo_file "${entry#*|}"
+        printf 'Removed %s from the repo\n' "${entry#*|}"
+    done
+
+    printf 'Removed %d file(s) from the repo. Commit with: git -C %s commit\n' "${#entries[@]}" "${REPO}"
+    printf 'Other machines drop these links on their next df-link or df-deploy, and the files go with them; to keep one there, run df-remove on it before pulling.\n'
+}
+
 main() {
     local name
     parse_args "$@"
@@ -1487,6 +1667,7 @@ main() {
         managed) print_managed ;;
         status) print_status ;;
         add) add_files ;;
+        remove) remove_files ;;
         apply)
             if [[ "${PERSONA_SOURCE}" == default ]]; then
                 log_warn "No persona chosen; linking as '${PERSONA_NAME}', the default for $(platform). Pick one with: install.sh --persona NAME"
