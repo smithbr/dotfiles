@@ -163,6 +163,35 @@ run_nvm_block() {
     teardown_tmpdir
 }
 
+@test "lg follows lazygit to the directory it left in, and stays put otherwise" {
+    command -v zsh >/dev/null || skip "zsh not installed"
+    setup_tmpdir
+    local bin="${TEST_TMPDIR}/bin" target="${TEST_TMPDIR}/repo dir"
+    mkdir -p "${bin}" "${TEST_TMPDIR}/home/.lazygit" "${target}"
+    # lazygit writes the directory it was in on exit when LAZYGIT_NEW_DIR_FILE is set.
+    cat > "${bin}/lazygit" <<'MOCK'
+#!/bin/sh
+printf 'lazygit %s\n' "$*"
+[ -n "${LG_TARGET:-}" ] && printf '%s' "${LG_TARGET}" > "${LAZYGIT_NEW_DIR_FILE}"
+exit 0
+MOCK
+    chmod +x "${bin}/lazygit"
+    local fns="${PROJECT_ROOT}/stow/common/.config/shell/functions"
+
+    run env HOME="${TEST_TMPDIR}/home" PATH="${bin}:/usr/bin:/bin" LG_TARGET="${target}" \
+        zsh -fc "cd '${TEST_TMPDIR}'; source '${fns}'; lg log; pwd"
+    assert_success
+    assert_line --index 0 "lazygit log"
+    assert_line --index 1 "${target}"
+    [ ! -e "${TEST_TMPDIR}/home/.lazygit/newdir" ]
+
+    run env HOME="${TEST_TMPDIR}/home" PATH="${bin}:/usr/bin:/bin" \
+        zsh -fc "cd '${TEST_TMPDIR}'; source '${fns}'; lg; pwd"
+    assert_success
+    assert_line --index 1 "${TEST_TMPDIR}"
+    teardown_tmpdir
+}
+
 @test "na appends an alias to the repo aliases file and defines it" {
     command -v zsh >/dev/null || skip "zsh not installed"
     setup_tmpdir

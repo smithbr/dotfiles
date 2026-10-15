@@ -384,8 +384,9 @@ _run_pihole() {
 # bootstrap.sh — the entry point for a machine without the repo
 # ---------------------------------------------------------------------------
 
-# Runs bootstrap.sh with a git and sudo that log their calls; the clone
-# creates a fake install.sh that prints its arguments.
+# Runs bootstrap.sh (BOOTSTRAP, a patched copy) with a git and sudo that log
+# their calls; the clone creates a fake install.sh that prints its arguments.
+# BOOTSTRAP_PATH replaces the PATH it runs with.
 run_bootstrap() {
     local bin="${TEST_TMPDIR}/bin"
     mkdir -p "${bin}" "${TEST_TMPDIR}/home"
@@ -404,8 +405,8 @@ while [[ "$1" == -* ]]; do [[ "$1" == -u ]] && shift; shift; done
 MOCK
     chmod +x "${bin}/git" "${bin}/sudo"
     : > "${TEST_TMPDIR}/log"
-    run env PATH="${bin}:/usr/bin:/bin" HOME="${TEST_TMPDIR}/home" TEST_TMPDIR="${TEST_TMPDIR}" \
-        DOTFILES_REPO="file://${TEST_TMPDIR}/origin" bash "${PROJECT_ROOT}/bootstrap.sh" "$@" < /dev/null
+    run env PATH="${BOOTSTRAP_PATH:-${bin}:/usr/bin:/bin}" HOME="${TEST_TMPDIR}/home" TEST_TMPDIR="${TEST_TMPDIR}" \
+        DOTFILES_REPO="file://${TEST_TMPDIR}/origin" bash "${BOOTSTRAP:-${PROJECT_ROOT}/bootstrap.sh}" "$@" < /dev/null
 }
 
 @test "bootstrap.sh clones the repo and runs install.sh with the rest of its arguments" {
@@ -436,6 +437,80 @@ MOCK
     assert_failure 2
     assert_output --partial "--user needs a name"
 }
+
+@test "bootstrap.sh as root with --user hardens, then clones and installs as that user" {
+    [[ ! -f /etc/ssh/sshd_config.d/00-harden.conf ]] || skip "this machine is already hardened"
+    local bin="${TEST_TMPDIR}/bin"
+    mkdir -p "${bin}"
+    # alice exists; curl hands back a harden.sh that logs its arguments.
+    printf '#!/bin/sh\nexit 0\n' > "${bin}/id"
+    printf '#!/bin/sh\nprintf "alice:x:1000:1000::%s:/bin/bash\\n"\n' "${TEST_TMPDIR}/alice" > "${bin}/getent"
+    cat > "${bin}/curl" <<'MOCK'
+#!/usr/bin/env bash
+printf 'curl %s\n' "$*" >> "${TEST_TMPDIR}/log"
+printf 'printf "harden.sh %%s\\n" "$*" >> "${TEST_TMPDIR}/log"\n'
+MOCK
+    chmod +x "${bin}/id" "${bin}/getent" "${bin}/curl"
+    sed -e 's/^if \[\[ "${EUID}" -eq 0 \]\]; then/if true; then/' -e 's/^ensure_git$/:/' \
+        "${PROJECT_ROOT}/bootstrap.sh" > "${TEST_TMPDIR}/root-bootstrap.sh"
+    export BOOTSTRAP="${TEST_TMPDIR}/root-bootstrap.sh" OSTYPE=linux-gnu HARDEN_ARGS="--allow 80 --allow 443"
+
+    run_bootstrap --user alice --persona vps
+    assert_success
+    assert_output --partial "INFO Creating and hardening for alice"
+    assert_line "install.sh --persona vps"
+    run cat "${TEST_TMPDIR}/log"
+    assert_output "curl -fsSL file://${TEST_TMPDIR}/origin/raw/main/scripts/bootstrap/linux/harden.sh
+harden.sh --user alice --allow 80 --allow 443
+sudo -u alice -H git clone --quiet file://${TEST_TMPDIR}/origin ${TEST_TMPDIR}/alice/.dotfiles
+git clone --quiet file://${TEST_TMPDIR}/origin ${TEST_TMPDIR}/alice/.dotfiles
+sudo -u alice -H bash ${TEST_TMPDIR}/alice/.dotfiles/install.sh --persona vps"
+}
+
+@test "bootstrap.sh installs git through apt on Linux, and needs sudo to do it" {
+    # A PATH with no git: apt-get "installs" the logging git mock into it.
+    local bare="${TEST_TMPDIR}/bare" tool
+    mkdir -p "${bare}"
+    for tool in bash env mkdir chmod cat cp; do
+        ln -s "$(command -v "${tool}")" "${bare}/${tool}"
+    done
+    cat > "${bare}/apt-get" <<'MOCK'
+#!/usr/bin/env bash
+printf 'apt-get %s\n' "$*" >> "${TEST_TMPDIR}/log"
+[[ "$1" != install ]] || cp "${TEST_TMPDIR}/bin/git" "${TEST_TMPDIR}/bare/git"
+MOCK
+    chmod +x "${bare}/apt-get"
+    export BOOTSTRAP_PATH="${bare}" OSTYPE=linux-gnu
+
+    # Without sudo, a user cannot install git and nothing is cloned.
+    run_bootstrap --persona vps
+    assert_failure 1
+    assert_output --partial "ERROR sudo is required for: apt-get update -qq"
+    run cat "${TEST_TMPDIR}/log"
+    assert_output ""
+
+    ln -s "${TEST_TMPDIR}/bin/sudo" "${bare}/sudo"
+    run_bootstrap --persona vps
+    assert_success
+    assert_line "INFO Installing git"
+    assert_line "install.sh --persona vps"
+    run cat "${TEST_TMPDIR}/log"
+    assert_output "sudo apt-get update -qq
+apt-get update -qq
+sudo apt-get install -y -qq git
+apt-get install -y -qq git
+git clone --quiet file://${TEST_TMPDIR}/origin ${TEST_TMPDIR}/home/.dotfiles"
+}
+
+@test "bootstrap.sh --help prints usage and changes nothing" {
+    run_bootstrap --help
+    assert_success
+    assert_line "Usage: bootstrap.sh [--user NAME] [INSTALL_ARGS...]"
+    run cat "${TEST_TMPDIR}/log"
+    assert_output ""
+    [ ! -e "${TEST_TMPDIR}/home/.dotfiles" ]
+}
+
 
 # ---------------------------------------------------------------------------
 # linux/tailscale.sh — idempotency guard

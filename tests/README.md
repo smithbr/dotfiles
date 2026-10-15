@@ -79,6 +79,7 @@ This is process-level isolation, not a real container or VM.
 - Dry-runs `harden.sh` against a scratch root (`HARDEN_ROOT`) with mocked system tools: required arguments, closing public SSH only once Tailscale is connected, Cloudflare-only ports, and stopping before user or SSH changes when there is no key to copy
 - Verifies the macOS iTerm2 step enables the Python API, makes the repo profile the default, adds the Catppuccin color presets (rewriting a stale one, keeping the user's own), and rewrites nothing on a second run
 - Verifies that `harden.sh` re-runs itself through sudo for the user who ran it
+- Runs `bootstrap.sh` with logging `git`, `sudo`, `curl`, and `apt-get`: the clone and its rerun, `--help`, git installed through apt (and refused without sudo), and as root with `--user` the fetched `harden.sh`, then the clone and `install.sh` as that user
 - Checks shell script shebangs, strict mode, `common.sh` sourcing, and `BASEDIR` conventions
 
 [`harden_test.bats`](harden_test.bats)
@@ -149,8 +150,13 @@ This is process-level isolation, not a real container or VM.
 
 [`zsh.bats`](zsh.bats)
 
-- Checks the zsh startup files for the XDG layout and the Homebrew bootstrap, runs the nvm block with and without nvm installed, and runs the `na` alias helper
+- Checks the zsh startup files for the XDG layout and the Homebrew bootstrap, runs the nvm block with and without nvm installed, and runs the `na` alias helper and `lg` (following lazygit to the directory it left in)
 - Runs the bash startup files with a scratch home and checks the history path
+
+[`repo_config.bats`](repo_config.bats)
+
+- Checks the shipped personas and roles: only settings `link.sh` knows, with valid values; their layers, Brewfiles, roles, setup scripts, and `requires` exist; every persona for this OS loads in `link.sh` without writing anything; every stow package and Brewfile is used; every detect command parses; a role's setup script has no detect line of its own
+- Parses every tracked JSON, TOML (examples too), YAML, and `.itermcolors` file, the zsh and bash startup files, and the zsh plugin list, skipping a check whose parser is missing
 
 [`test_helper.bash`](test_helper.bash)
 
