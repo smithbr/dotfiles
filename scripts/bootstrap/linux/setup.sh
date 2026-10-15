@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Linux bootstrap: the base apt packages. The setup scripts beside this one
-# (harden, docker, tailscale) are offered by install.sh at the end.
+# Linux bootstrap: the base apt packages. harden.sh beside this one runs
+# first, when install.sh offers it on an unhardened server; the other setup
+# scripts here are the installs it offers at the end.
+# -n/--dry-run names the missing packages without installing them.
 
 set -euo pipefail
 
@@ -8,6 +10,9 @@ BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 BOOTSTRAP_DIR="${BOOTSTRAP_DIR:-${BASEDIR}/scripts/bootstrap/linux}"
 APT_PACKAGES_FILE="${APT_PACKAGES_FILE:-${BOOTSTRAP_DIR}/apt-packages.txt}"
 source "${BASEDIR}/scripts/common.sh"
+
+DRY_RUN=0
+[[ "${1:-}" != -n && "${1:-}" != --dry-run ]] || DRY_RUN=1
 
 load_apt_packages() {
     local pkg=""
@@ -39,7 +44,9 @@ install_base_linux_packages() {
         fi
     done
 
-    if [[ "${#missing_packages[@]}" -gt 0 ]]; then
+    if [[ "${#missing_packages[@]}" -gt 0 && "${DRY_RUN}" -eq 1 ]]; then
+        log_info "Would install base Linux packages: ${missing_packages[*]}"
+    elif [[ "${#missing_packages[@]}" -gt 0 ]]; then
         log_info "Updating apt package index"
         sudo_cmd apt-get update
 

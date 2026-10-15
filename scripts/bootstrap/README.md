@@ -10,4 +10,5 @@ OS bootstrap that runs before anything is linked (`macos/setup.sh`, `linux/setup
 
 ## macOS
 
+- `macos/setup.sh` installs the Xcode Command Line Tools when missing and waits for the installer window by polling `xcode-select -p` (`CLT_WAIT_SECONDS` caps the wait), never for a keypress, so closed stdin cannot abort it; then the Xcode license, Rosetta 2 on Apple Silicon, and iTerm2's settings.
 - Settings outside profiles go in `scripts/bootstrap/macos/iterm2.sh`, which the macOS bootstrap runs: it enables the Python API (needed for Claude Code's split-pane teammates), makes the repo's `dotfiles` profile the default by its `Guid`, and adds each repo `.itermcolors` file to iTerm2's `Custom Color Presets` (so it appears under Color Presets) under its file name, read from the repo so it works before linking. It writes only keys and presets that are missing or differ, and leaves other presets alone. Keep the `Guid` in both files the same. The profile itself is described in [`stow/README.md`](../../stow/README.md).

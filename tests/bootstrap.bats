@@ -417,13 +417,14 @@ MOCK
         mkdir -p "${TEST_BIN}"
         : > "${TEST_LOG}"
 
+        # -p fails until --install has run, like the real installer finishing.
         cat > "${TEST_BIN}/xcode-select" <<'"'"'MOCK'"'"'
 #!/usr/bin/env bash
 set -euo pipefail
 
 case "${1:-}" in
     -p)
-        exit 1
+        grep -q "xcode-select --install" "${TEST_LOG}"
         ;;
     --install)
         printf "xcode-select %s\n" "$*" >> "${TEST_LOG}"
@@ -465,7 +466,8 @@ MOCK
             "${TEST_BIN}/softwareupdate"
 
         cd "'"${PROJECT_ROOT}"'"
-        printf "\n" | ./scripts/bootstrap/macos/setup.sh
+        # Closed stdin: the CLT wait polls xcode-select -p instead of reading a key.
+        CLT_POLL_SECONDS=0 ./scripts/bootstrap/macos/setup.sh < /dev/null
 
         grep -qx "xcode-select --install" "${TEST_LOG}" || { echo "missing xcode-select install"; exit 1; }
         grep -qx "softwareupdate --install-rosetta --agree-to-license" "${TEST_LOG}" || {
@@ -475,8 +477,34 @@ MOCK
     '
     assert_success
     assert_output --partial "Installing Xcode Command Line Tools"
+    assert_output --partial "Xcode Command Line Tools installed"
     assert_output --partial "Installing Rosetta 2..."
     assert_output --partial "iTerm2 not installed; skipping its settings"
+}
+
+@test "macOS setup.sh gives up on the CLT wait after CLT_WAIT_SECONDS" {
+    mkdir -p "${TEST_TMPDIR}/bin"
+    printf '#!/usr/bin/env bash\n[[ "$1" != -p ]]\n' > "${TEST_TMPDIR}/bin/xcode-select"
+    chmod +x "${TEST_TMPDIR}/bin/xcode-select"
+    run env PATH="${TEST_TMPDIR}/bin:/usr/bin:/bin" OSTYPE=darwin24 CLT_POLL_SECONDS=0 CLT_WAIT_SECONDS=0 \
+        "${PROJECT_ROOT}/scripts/bootstrap/macos/setup.sh" < /dev/null
+    assert_failure
+    assert_output --partial "still missing; finish the installer, then run install.sh again"
+}
+
+@test "macOS setup.sh --dry-run reports what is missing and installs nothing" {
+    mkdir -p "${TEST_TMPDIR}/bin"
+    printf '#!/usr/bin/env bash\nexit 1\n' > "${TEST_TMPDIR}/bin/xcode-select"
+    printf '#!/usr/bin/env bash\nprintf "arm64\\n"\n' > "${TEST_TMPDIR}/bin/uname"
+    printf '#!/usr/bin/env bash\nexit 1\n' > "${TEST_TMPDIR}/bin/pgrep"
+    printf '#!/usr/bin/env bash\necho RAN >> "${TEST_TMPDIR}/ran"\n' > "${TEST_TMPDIR}/bin/softwareupdate"
+    chmod +x "${TEST_TMPDIR}"/bin/*
+    run env PATH="${TEST_TMPDIR}/bin:/usr/bin:/bin" OSTYPE=darwin24 TEST_TMPDIR="${TEST_TMPDIR}" \
+        "${PROJECT_ROOT}/scripts/bootstrap/macos/setup.sh" --dry-run < /dev/null
+    assert_success
+    assert_output --partial "Would install the Xcode Command Line Tools"
+    assert_output --partial "Would install Rosetta 2"
+    [ ! -e "${TEST_TMPDIR}/ran" ]
 }
 
 # Runs iterm2.sh against a fake app and a `defaults` mock whose store is
