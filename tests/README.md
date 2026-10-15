@@ -91,14 +91,14 @@ This is process-level isolation, not a real container or VM.
 - Covers scripts in [`stow/tools/.local/bin`](../stow/tools/.local/bin), [`stow/personal/.local/bin`](../stow/personal/.local/bin), and [`stow/pihole.linux/.local/bin`](../stow/pihole.linux/.local/bin)
 - Runs `st` (in `stow/desktop.darwin/.local/bin`) under plain Python: team listing and dry runs, a team without agents as one tab, the missing-teams-file hint, every team in the tracked `teams.toml.example`, a directory or the current directory as a one-tab team, a team winning over a same-named directory, and each tab running its command as the tab's program
 - Verifies help output, startup probing, and the Unbound rows for `ph-padd`
-- Runs `cf-cert` against a mocked acme.sh: argument checks, issue-only runs, the combined-pem install and chained reload command, stopping on a failed issue, a missing token on closed stdin, and `--pihole` refusing to run without root
-- Verifies non-root self-elevation behavior for `ph-update`, `ph-test`, and `ph-backup`
+- Runs `cf-cert` against a mocked acme.sh: argument checks, issue-only runs, the combined-pem install and chained reload command, stopping on a failed issue, a missing token on closed stdin, `--pihole` refusing to run without root or without `pihole-FTL`, and as root pointing Pi-hole at the pem with a chown and restart on renewal; paths with spaces, `;`, and `$(...)` stay quoted when the saved reload command runs
+- Verifies non-root self-elevation behavior for `ph-update`, `ph-test`, and `ph-backup`, and that `ph-update -r` does not restart after a failed update
 - Runs `ph-backup` against mocked Pi-hole, Unbound, and Tailscale and inspects the resulting tar.gz
 - Runs `os-update` and `ph-sec-audit` against mocked system tools
 - Runs `ts-test` in a fully mocked sandbox
-- Runs `sshkey` help, local key creation, and cleanup flows inside an isolated home directory
+- Runs `sshkey` help, local key creation, and cleanup flows inside an isolated home directory; `delete` only once confirmed, `--dry-run` refused outside `cleanup` (it would skip the confirmation), the protected `id_rsa` never deleted, recreated, or touched by `cleanup` unless `SSHKEY_PROTECTED_LOCAL_KEY_NAME=''`, and an orphaned private key removed
 - Runs `df-link`, `df-rm`, `df-mv`, and `df-file-review` through a stow-style link into a fake repo: arguments pass through (`df-rm` as `link.sh rm`, `df-mv` as `link.sh mv`), `df-file-review` defaults to `--cleanup`, and a wrapper outside a repo fails clearly
-- Runs `df-deploy` with a stub `ssh` that runs the remote command against a scratch clone: pull and relink, every named or `DF_DEPLOY_HOSTS` host, a non-fast-forward pull failing that host before linking, dry runs, a missing host, and the unpushed-commit warning
+- Runs `df-deploy` with a stub `ssh` that runs the remote command against a scratch clone: pull and relink, every named or `DF_DEPLOY_HOSTS` host, a non-fast-forward pull failing that host before linking, a failed host not stopping the rest, dry runs, a missing host, and the unpushed-commit warning
 
 [`brew_add.bats`](brew_add.bats)
 
@@ -115,6 +115,7 @@ This is process-level isolation, not a real container or VM.
 - Tests logging helpers in [`scripts/common.sh`](../scripts/common.sh)
 - Verifies `gum` and non-`gum` behavior
 - Tests `require_non_root`, `sudo_cmd`, `spin`, and `tool_installed` (a tool on PATH, in `~/.local/bin`, or under `HOMEBREW_PREFIX`, with Homebrew's usual prefixes as the fallback)
+- Tests what sourcing sets (`XDG_CONFIG_HOME` under `HOME`, only when `HOME` is set), `die` (stderr, exit 1, through gum when styled), the run summary (`add_result` counts, `add_next_step` keeps each step once), `prompt_mode` (`DOTFILES_PROMPT`, plain reads without a terminal), and the plain markers when stdout is captured
 
 [`file_review.bats`](file_review.bats)
 

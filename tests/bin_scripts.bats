@@ -718,6 +718,54 @@ MOCK
     [[ ! -e "${ACME_HOME}/calls.log" ]]
 }
 
+@test "cf-cert quotes hostile paths in the reload command acme.sh runs later" {
+    setup_cf_cert_sandbox
+    # Keep the reload command as one argument, as acme.sh saves it for its cron.
+    cat > "${ACME_HOME}/acme.sh" <<'MOCK'
+#!/usr/bin/env bash
+while [[ $# -gt 0 ]]; do
+    [[ "$1" != --reloadcmd ]] || printf '%s' "$2" > "${ACME_HOME}/reloadcmd"
+    shift
+done
+MOCK
+    local dir="${TEST_TMPDIR}/tls dir;touch PWNED;\$(touch PWNED2)"
+    mkdir -p "${dir}"
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${CF_CERT}" --pem-file "${dir}/a.test.pem" a.test
+    assert_success
+
+    printf 'KEY\n' > "${dir}/a.test.key"
+    printf 'CHAIN\n' > "${dir}/a.test.fullchain"
+    run bash -c "cd '${TEST_TMPDIR}' && $(cat "${ACME_HOME}/reloadcmd")"
+    assert_success
+    run cat "${dir}/a.test.pem"
+    assert_output "$(printf 'KEY\nCHAIN')"
+    run ls -l "${dir}/a.test.pem"
+    assert_output --regexp '^-rw-------'
+    [ ! -e "${TEST_TMPDIR}/PWNED" ] && [ ! -e "${TEST_TMPDIR}/PWNED2" ]
+}
+
+@test "cf-cert --pihole as root points Pi-hole at the pem and restarts it on renewal" {
+    setup_cf_cert_sandbox
+    sed 's/(( EUID == 0 )) || die "--pihole needs root/true || die "--pihole needs root/' "${CF_CERT}" > "${TEST_TMPDIR}/cf-cert"
+    chmod +x "${TEST_TMPDIR}/cf-cert"
+
+    # Without pihole-FTL it stops before acme.sh runs.
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" "${TEST_TMPDIR}/cf-cert" --pihole a.test
+    assert_failure 1
+    assert_output --partial "pihole-FTL not found"
+    [ ! -e "${ACME_HOME}/calls.log" ]
+
+    printf '#!/usr/bin/env bash\nprintf "pihole-FTL %%s\\n" "$*" >> "%s/ftl.log"\n' "${TEST_TMPDIR}" > "${BIN_SANDBOX}/pihole-FTL"
+    chmod +x "${BIN_SANDBOX}/pihole-FTL"
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" "${TEST_TMPDIR}/cf-cert" --pihole a.test
+    assert_success
+    run cat "${TEST_TMPDIR}/ftl.log"
+    assert_output "pihole-FTL --config webserver.domain a.test
+pihole-FTL --config webserver.tls.cert /etc/pihole/a.test.pem"
+    run grep -- "--install-cert" "${ACME_HOME}/calls.log"
+    assert_output "--home ${ACME_HOME} --install-cert -d a.test --ecc --key-file /etc/pihole/a.test.key --fullchain-file /etc/pihole/a.test.fullchain --reloadcmd cat /etc/pihole/a.test.key /etc/pihole/a.test.fullchain > /etc/pihole/a.test.pem && chmod 600 /etc/pihole/a.test.pem /etc/pihole/a.test.key && chown pihole:pihole /etc/pihole/a.test.pem /etc/pihole/a.test.key && systemctl restart pihole-FTL"
+}
+
 @test "ph-update displays help" {
     run "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-update" --help
     assert_success
@@ -825,6 +873,32 @@ MOCK
     assert_success
     assert_output --partial "Pi-hole update and gravity refresh completed"
     assert_output --partial "shutdown -r now"
+}
+
+@test "ph-update -r does not restart Linux when the Pi-hole update fails" {
+    local probe_script="${TEST_TMPDIR}/ph-update"
+    ln -sf "${PROJECT_ROOT}/stow/tools/.local/bin/os-update" "${TEST_TMPDIR}/os-update"
+    sed 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
+        "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-update" > "${probe_script}"
+    chmod +x "${probe_script}"
+
+    # The update runs; the gravity refresh after it fails.
+    cat > "${BIN_SANDBOX}/pihole" <<'MOCK'
+#!/usr/bin/env bash
+printf 'pihole %s\n' "$*"
+[[ "$1" != -f ]]
+MOCK
+    printf '#!/usr/bin/env bash\n' > "${BIN_SANDBOX}/ph-padd"
+    printf '#!/usr/bin/env bash\nprintf "shutdown %%s\\n" "$*" >> "%s/shutdown.log"\n' "${TEST_TMPDIR}" > "${BIN_SANDBOX}/shutdown"
+    chmod +x "${BIN_SANDBOX}/pihole" "${BIN_SANDBOX}/ph-padd" "${BIN_SANDBOX}/shutdown"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" PH_UPDATE_SKIP_OS_UPDATE=1 \
+        DOTFILES_DIR="${PROJECT_ROOT}" "${probe_script}" -r
+    assert_failure
+    assert_output --partial "pihole -up"
+    assert_output --partial "Pi-hole update or gravity refresh failed"
+    refute_output --partial "Running shutdown -r now"
+    [ ! -e "${TEST_TMPDIR}/shutdown.log" ]
 }
 
 @test "ph-update fails before os-update when pihole is unavailable" {
@@ -2946,6 +3020,93 @@ MOCK
     assert_output ""
 }
 
+# Plants KEY and KEY.pub in the sandbox home's ~/.ssh for the sshkey tests.
+sshkey_plant_key() {
+    mkdir -p "${TEST_TMPDIR}/home/.ssh"
+    printf 'PRIVATE %s\n' "$1" > "${TEST_TMPDIR}/home/.ssh/$1"
+    printf 'ssh-ed25519 AAAA%s %s\n' "$1" "$1" > "${TEST_TMPDIR}/home/.ssh/$1.pub"
+    chmod 600 "${TEST_TMPDIR}/home/.ssh/$1"
+}
+
+run_sshkey() {
+    printf '#!/usr/bin/env bash\nprintf "ssh-add %%s\\n" "$*" >> "%s/ssh-add.log"\n[[ "$1" != -l ]] || exit 1\n' "${TEST_TMPDIR}" > "${BIN_SANDBOX}/ssh-add"
+    printf '#!/usr/bin/env bash\nprintf "sandbox-host\\n"\n' > "${BIN_SANDBOX}/hostname"
+    chmod +x "${BIN_SANDBOX}/ssh-add" "${BIN_SANDBOX}/hostname"
+    run env HOME="${TEST_TMPDIR}/home" USER="sandbox-user" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
+        "${PROJECT_ROOT}/stow/tools/.local/bin/sshkey" "$@"
+}
+
+@test "sshkey create and delete refuse --dry-run, which would skip the confirmation" {
+    sshkey_plant_key devkey
+    run_sshkey delete devkey --dry-run < /dev/null
+    assert_failure 1
+    assert_output --partial "--dry-run is only used with cleanup"
+    run_sshkey create devkey -n < /dev/null
+    assert_failure 1
+    assert_output --partial "--dry-run is only used with cleanup"
+    run cat "${TEST_TMPDIR}/home/.ssh/devkey"
+    assert_output "PRIVATE devkey"
+    [ -f "${TEST_TMPDIR}/home/.ssh/devkey.pub" ]
+}
+
+@test "sshkey delete removes a key and its agent entry only once confirmed" {
+    sshkey_plant_key devkey
+    sshkey_plant_key other
+
+    run_sshkey delete devkey <<< "n"
+    assert_failure 1
+    assert_output --partial "Aborted"
+    [ -f "${TEST_TMPDIR}/home/.ssh/devkey" ] && [ -f "${TEST_TMPDIR}/home/.ssh/devkey.pub" ]
+
+    run_sshkey delete devkey -y < /dev/null
+    assert_success
+    assert_output --partial "Removed local key: devkey"
+    [ ! -e "${TEST_TMPDIR}/home/.ssh/devkey" ] && [ ! -e "${TEST_TMPDIR}/home/.ssh/devkey.pub" ]
+    [ -f "${TEST_TMPDIR}/home/.ssh/other" ] && [ -f "${TEST_TMPDIR}/home/.ssh/other.pub" ]
+    run grep -x "ssh-add -d ${TEST_TMPDIR}/home/.ssh/devkey" "${TEST_TMPDIR}/ssh-add.log"
+    assert_success
+
+    run_sshkey delete devkey -y < /dev/null
+    assert_failure 1
+    assert_output --partial "No key files found for 'devkey'"
+}
+
+@test "sshkey never deletes or recreates the protected id_rsa, unless unprotected" {
+    sshkey_plant_key id_rsa
+    run_sshkey delete id_rsa -y < /dev/null
+    assert_failure 1
+    assert_output --partial "Refusing to modify protected key 'id_rsa'"
+    run_sshkey create id_rsa -y < /dev/null
+    assert_failure 1
+    assert_output --partial "Refusing to modify protected key 'id_rsa'"
+    run cat "${TEST_TMPDIR}/home/.ssh/id_rsa"
+    assert_output "PRIVATE id_rsa"
+    [ ! -e "${TEST_TMPDIR}/ssh-add.log" ] || ! grep -q -- "-d" "${TEST_TMPDIR}/ssh-add.log"
+
+    SSHKEY_PROTECTED_LOCAL_KEY_NAME='' run_sshkey delete id_rsa -y < /dev/null
+    assert_success
+    [ ! -e "${TEST_TMPDIR}/home/.ssh/id_rsa" ]
+}
+
+@test "sshkey cleanup removes an orphaned private key but leaves the protected one as it is" {
+    sshkey_plant_key id_rsa
+    sshkey_plant_key id_old
+    rm "${TEST_TMPDIR}/home/.ssh/id_rsa.pub" "${TEST_TMPDIR}/home/.ssh/id_old.pub"
+    chmod 644 "${TEST_TMPDIR}/home/.ssh/id_rsa" "${TEST_TMPDIR}/home/.ssh/id_old"
+    chmod 700 "${TEST_TMPDIR}/home/.ssh"
+
+    run_sshkey cleanup -y < /dev/null
+    assert_success
+    assert_output --partial "Removed ${TEST_TMPDIR}/home/.ssh/id_old"
+    [ ! -e "${TEST_TMPDIR}/home/.ssh/id_old" ]
+    run grep -x "ssh-add -d ${TEST_TMPDIR}/home/.ssh/id_old" "${TEST_TMPDIR}/ssh-add.log"
+    assert_success
+    run cat "${TEST_TMPDIR}/home/.ssh/id_rsa"
+    assert_output "PRIVATE id_rsa"
+    run ls -l "${TEST_TMPDIR}/home/.ssh/id_rsa"
+    assert_output --regexp '^-rw-r--r--'
+}
+
 # Copies a df- wrapper into a fake repo whose scripts/<name> prints its
 # arguments, and links it from a bin directory the way stow would.
 fake_df_repo() {
@@ -3056,6 +3217,23 @@ run_df_deploy() {
     assert_output --partial "df-deploy: box failed"
     run grep -c "link.sh ran" "${TEST_TMPDIR}/calls"
     assert_output "0"
+}
+
+@test "df-deploy carries on past a failed host and still fails" {
+    df_deploy_sandbox
+    cat > "${BIN_SANDBOX}/ssh" <<MOCK
+#!/usr/bin/env bash
+printf 'ssh %s %s\n' "\$1" "\$2" >> "${TEST_TMPDIR}/calls"
+[[ "\$2" != down ]] || exit 255
+HOME="${DF_REMOTE_HOME}" bash -c "\$3"
+MOCK
+    DF_DEPLOY_HOSTS="one down two" run_df_deploy
+    assert_failure
+    assert_output --partial "df-deploy: down failed"
+    refute_output --partial "df-deploy: one failed"
+    refute_output --partial "df-deploy: two failed"
+    run cat "${TEST_TMPDIR}/calls"
+    assert_output "$(printf 'ssh -t one\nlink.sh ran\nssh -t down\nssh -t two\nlink.sh ran')"
 }
 
 @test "df-deploy needs a host, prints commands on a dry run, and warns about unpushed commits" {

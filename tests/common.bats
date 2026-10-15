@@ -587,3 +587,141 @@ MOCK
     grep -Fqx -- "red"$'\t'"red" "${TEST_TMPDIR}/gum-args"
     grep -Fqx -- "Green"$'\t'"green" "${TEST_TMPDIR}/gum-args"
 }
+
+# ---------------------------------------------------------------------------
+# Sourcing defaults, die, the run summary, and the styled-output switches
+# ---------------------------------------------------------------------------
+
+@test "sourcing common.sh defaults XDG_CONFIG_HOME under HOME, keeps a set one, and needs HOME" {
+    run env -u XDG_CONFIG_HOME HOME="${TEST_TMPDIR}/home" bash -c '
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        bash -c "printf \"%s\n\" \"\${XDG_CONFIG_HOME}\""
+    '
+    assert_success
+    assert_output "${TEST_TMPDIR}/home/.config"
+
+    run env HOME="${TEST_TMPDIR}/home" XDG_CONFIG_HOME="${TEST_TMPDIR}/xdg" bash -c '
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        printf "%s\n" "${XDG_CONFIG_HOME}"
+    '
+    assert_output "${TEST_TMPDIR}/xdg"
+
+    # Without HOME it sets nothing, so the caller's own HOME check still fires.
+    run env -u XDG_CONFIG_HOME -u HOME bash -c '
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        printf "[%s]\n" "${XDG_CONFIG_HOME:-}"
+    '
+    assert_success
+    assert_output "[]"
+}
+
+@test "die prints its message on stderr and exits 1 before anything after it runs" {
+    run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"':/usr/bin:/bin"
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        die "cannot continue" 2>"'"${TEST_TMPDIR}"'/stderr"
+        echo "still running"
+    '
+    assert_failure 1
+    assert_output ""
+    run cat "${TEST_TMPDIR}/stderr"
+    assert_output "cannot continue"
+}
+
+@test "die logs through gum as an error when styled output is on" {
+    cat > "${TEST_TMPDIR}/bin/gum" <<'MOCK'
+#!/usr/bin/env bash
+printf 'gum %s\n' "$*" >&2
+MOCK
+    chmod +x "${TEST_TMPDIR}/bin/gum"
+    run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"':/usr/bin:/bin"
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        HAS_GUM=true
+        die "cannot continue" 2>&1
+    '
+    assert_failure 1
+    assert_output "gum log --level error cannot continue"
+}
+
+@test "add_result keeps results in order and counts each kind" {
+    run bash -c '
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        add_result PASS "dns resolves"
+        add_result WARN "cache cold"
+        add_result PASS "dnssec validates"
+        add_result FAIL "blocklist stale"
+        add_result INFO "not counted"
+        printf "%s|" "${SUMMARY_RESULTS[@]}"; printf "\n"
+        printf "pass=%s warn=%s fail=%s\n" "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
+    '
+    assert_success
+    assert_line --index 0 "PASS"$'\t'"dns resolves|WARN"$'\t'"cache cold|PASS"$'\t'"dnssec validates|FAIL"$'\t'"blocklist stale|INFO"$'\t'"not counted|"
+    assert_line --index 1 "pass=2 warn=1 fail=1"
+}
+
+@test "add_next_step keeps each step once, in the order first given" {
+    run bash -c '
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        add_next_step "sudo pihole setpassword"
+        add_next_step "reboot"
+        add_next_step "sudo pihole setpassword"
+        add_next_step "sudo pihole"
+        printf "%s\n" "${NEXT_STEPS[@]}"
+    '
+    assert_success
+    assert_output "sudo pihole setpassword
+reboot
+sudo pihole"
+}
+
+@test "prompt_mode takes DOTFILES_PROMPT, and reads from stdin without a terminal even with gum" {
+    printf '#!/bin/sh\n' > "${TEST_TMPDIR}/bin/gum"
+    chmod +x "${TEST_TMPDIR}/bin/gum"
+    local mode
+    for mode in gum read; do
+        run env DOTFILES_PROMPT="${mode}" PATH="/usr/bin:/bin" bash -c '
+            source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+            prompt_mode
+        ' < /dev/null
+        assert_success
+        assert_output "${mode}"
+    done
+
+    run env -u DOTFILES_PROMPT PATH="${TEST_TMPDIR}/bin:/usr/bin:/bin" bash -c '
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        prompt_mode
+    ' < /dev/null
+    assert_success
+    assert_output "read"
+}
+
+@test "with stdout captured, styling is off even with gum, and the plain markers are used" {
+    cat > "${TEST_TMPDIR}/bin/gum" <<'MOCK'
+#!/usr/bin/env bash
+printf 'gum %s\n' "$*"
+MOCK
+    chmod +x "${TEST_TMPDIR}/bin/gum"
+    run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"':/usr/bin:/bin"
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        printf "HAS_GUM=%s\n" "${HAS_GUM}"
+        _header "Section"
+        _item "detail"
+        _check "done"
+        _cross "broke"
+        _skip "not needed"
+        _success "All good"
+        _warn "Careful" 2>/dev/null
+        _warn "Careful on stderr" 2>&1 >/dev/null
+    '
+    assert_success
+    assert_output "HAS_GUM=false
+Section
+  detail
+  ok: done
+  failed: broke
+  skipped: not needed
+All good
+Careful on stderr"
+}
