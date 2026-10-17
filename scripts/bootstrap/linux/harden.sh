@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Harden a fresh Debian server or VPS before install.sh runs on it:
+# Harden a Debian server or VPS before install.sh runs on it:
 #   - an admin user with sudo and the SSH keys you logged in with
 #   - key-only SSH, root login off, only that user allowed
 #   - Tailscale, so SSH can live on the tailnet
-#   - ufw: everything inbound closed except the tailnet and the ports you
-#     name (optionally only from Cloudflare); public SSH closes once
-#     Tailscale is connected
+#   - ufw: everything inbound closed except the tailnet, the ports you name
+#     (--allow, to the internet, optionally only from Cloudflare; --lan, to
+#     this box's own network only) and, on a Pi-hole, its DNS, admin page,
+#     and DHCP and NTP when they are on, to the LAN; public SSH closes only
+#     when this very session came in over Tailscale, which proves that door
+#     works, or from the console
 #   - unattended security upgrades
 # Run as root on a new machine with only a root login, it needs nothing else
 # from this repo:
@@ -14,26 +17,35 @@
 # anything is installed, on a server or VPS a basic check finds unhardened),
 # it re-runs itself through sudo for that user. Set TS_AUTHKEY to join the
 # tailnet unattended; otherwise `tailscale up` prints a login URL and waits
-# (skipped without a terminal). Safe to run again. It is never run unasked:
-# on a server already in use it would close every port but the tailnet's and
-# allow only one SSH user.
+# (skipped without a terminal). Everything that can stop it (no key to give
+# the user, no LAN to find, Cloudflare's ranges unreachable) is checked
+# before the first change. Safe to run again: it rewrites only what differs,
+# though a port an earlier run opened stays open until `ufw delete` closes
+# it. It is never run unasked: on a server already in use it closes every
+# port but the tailnet's and the LAN ones above, and allows only one SSH user.
 
 set -euo pipefail
 
 usage() {
-    cat <<'EOF'
+    cat <<'USAGE'
 Usage: harden.sh --user NAME [options]
 
   -u, --user NAME      admin user to create or reuse (gets sudo and the SSH keys);
                        under sudo, the user who ran it
   -a, --allow PORT     open PORT[/tcp|/udp] to the internet (repeatable)
+  -l, --lan PORT       open PORT[/tcp|/udp] to this box's own network only
+                       (repeatable; a Pi-hole gets 53, 80, 443, and its DHCP
+                       and NTP ports when they are on, without asking)
       --cloudflare     open --allow ports to Cloudflare's IP ranges only
       --keep-public-ssh  leave SSH open to the internet (rate limited)
   -n, --dry-run        report what would change without changing anything
   -h, --help           show this help
 
+Public SSH closes only when this session came in over Tailscale or from the
+console; from anywhere else it stays open, rate limited, until you run this
+again over Tailscale.
 Environment: TS_AUTHKEY joins the tailnet without a login URL.
-EOF
+USAGE
 }
 
 # Piped over ssh there is no script file and no repo beside it, so fall back
@@ -56,7 +68,16 @@ ADMIN_USER=""
 CLOUDFLARE=0
 KEEP_PUBLIC_SSH=0
 SSH_PORT=22
+SOURCE_USER=""
+SOURCE_KEYS=""
+USER_HOME=""
+USER_KEYS=""
 declare -a ALLOW_PORTS=()
+declare -a LAN_PORTS=()
+declare -a LAN_IFACES=()
+# "iface<TAB>cidr" pairs the LAN rules are made from.
+declare -a LAN_SUBNETS=()
+declare -a CLOUDFLARE_RANGES=()
 declare -a EXTRA_ARGS=()
 
 die() {
@@ -74,6 +95,7 @@ run() {
 
 # write_file PATH MODE CONTENT [VALIDATOR...]: replaces PATH only when its
 # content differs; a validator runs against the new file before it moves in.
+# The temporary name holds a dot, which sudoers.d ignores and *.conf misses.
 write_file() {
     local path="$1"
     local mode="$2"
@@ -103,6 +125,29 @@ write_file() {
     log_info "Wrote ${path}"
 }
 
+# PORT or PORT/tcp or PORT/udp, 1 to 65535.
+valid_port_spec() {
+    [[ "$1" =~ ^([0-9]{1,5})(/(tcp|udp))?$ ]] &&
+        (( BASH_REMATCH[1] >= 1 && BASH_REMATCH[1] <= 65535 ))
+}
+
+# A port spec as PORT/PROTO, tcp when the spec names none.
+port_proto() {
+    if [[ "$1" == */* ]]; then
+        printf '%s\n' "$1"
+    else
+        printf '%s/tcp\n' "$1"
+    fi
+}
+
+add_lan_port() {
+    local spec
+    for spec in ${LAN_PORTS[@]+"${LAN_PORTS[@]}"}; do
+        [[ "${spec}" != "$1" ]] || return 0
+    done
+    LAN_PORTS+=("$1")
+}
+
 parse_args() {
     while [[ "$#" -gt 0 ]]; do
         case "$1" in
@@ -112,10 +157,14 @@ parse_args() {
                 shift 2
                 continue
                 ;;
-            -a|--allow)
+            -a|--allow|-l|--lan)
                 [[ "$#" -ge 2 ]] || die "$1 needs a value"
-                [[ "$2" =~ ^[0-9]{1,5}(/(tcp|udp))?$ ]] || die "Not a port: $2 (use PORT or PORT/tcp)"
-                ALLOW_PORTS+=("$2")
+                valid_port_spec "$2" || die "Not a port: $2 (use PORT or PORT/tcp, 1 to 65535)"
+                if [[ "$1" == -a || "$1" == --allow ]]; then
+                    ALLOW_PORTS+=("$2")
+                else
+                    add_lan_port "$(port_proto "$2")"
+                fi
                 EXTRA_ARGS+=("$1" "$2")
                 shift 2
                 ;;
@@ -163,7 +212,10 @@ preflight() {
             if [[ ! -f "${BASH_SOURCE[0]}" ]] || ! command -v sudo >/dev/null 2>&1; then
                 die "Run as root (or with sudo bash)."
             fi
-            exec sudo bash "${BASH_SOURCE[0]}" --user "${ADMIN_USER}" "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+            # sudo resets the environment; the auth key and where this
+            # session came from must survive the re-exec.
+            exec sudo --preserve-env=SSH_CONNECTION,SSH_CLIENT,TS_AUTHKEY \
+                bash "${BASH_SOURCE[0]}" --user "${ADMIN_USER}" "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
         fi
         log_warn "Not root: the dry run may miss files only root can read"
     fi
@@ -178,6 +230,110 @@ home_of() {
     [[ -n "${home}" ]] && printf '%s%s\n' "${ROOT_PREFIX}" "${home}"
 }
 
+# The key lines of FILE that log a user in: not comments, and not keys tied
+# to a command (a cloud image's root key only prints "log in as admin").
+usable_keys() {
+    grep -Ev '^[[:space:]]*(#|$)' "$1" 2>/dev/null | grep -v 'command=' || true
+}
+
+# The admin user gets the keys of whoever logged in: root's, or the cloud
+# image's default user when this runs under sudo. Checked before anything
+# changes: with no key to give the user, key-only SSH would lock you out.
+plan_admin_user() {
+    SOURCE_USER="${SUDO_USER:-root}"
+    USER_HOME="$(home_of "${ADMIN_USER}" || true)"
+    [[ -n "${USER_HOME}" ]] || USER_HOME="${ROOT_PREFIX}/home/${ADMIN_USER}"
+    USER_KEYS="${USER_HOME}/.ssh/authorized_keys"
+    SOURCE_KEYS="$(home_of "${SOURCE_USER}" || true)/.ssh/authorized_keys"
+
+    [[ -z "$(usable_keys "${USER_KEYS}")" ]] || return 0
+    if [[ "${SOURCE_USER}" == "${ADMIN_USER}" || -z "$(usable_keys "${SOURCE_KEYS}")" ]]; then
+        die "No SSH keys for ${ADMIN_USER} and none to copy from ${SOURCE_KEYS} (keys tied to a command= do not count); add one and run again."
+    fi
+}
+
+pihole_here() {
+    [[ -x "${ROOT_PREFIX}/usr/bin/pihole-FTL" ]]
+}
+
+# An FTL setting as pihole-FTL --config prints it; empty when it cannot say.
+ftl_config() {
+    pihole-FTL --config "$1" 2>/dev/null || true
+}
+
+# The interfaces that carry a default route, apart from the tailnet's.
+lan_ifaces() {
+    { ip -o -4 route show default 2>/dev/null; ip -o -6 route show default 2>/dev/null; } |
+        awk '{ for (i = 1; i < NF; i++) if ($i == "dev" && $(i + 1) !~ /^tailscale/) print $(i + 1) }' |
+        sort -u
+}
+
+# The networks on IFACE: the IPv4 subnets routed on the link and every IPv6
+# prefix routed there (link-local included), one per line.
+lan_subnets_on() {
+    ip -o -4 route show dev "$1" scope link 2>/dev/null | awk '$1 ~ /\// { print $1 }'
+    ip -o -6 route show dev "$1" 2>/dev/null | awk '$1 ~ /\// { print $1 }'
+}
+
+# What the LAN rules are for and where the LAN is. On a Pi-hole, DNS and the
+# admin page, plus DHCP and NTP when FTL serves them, go to the LAN without
+# asking: the deny-all default would otherwise cut every client's DNS. Found
+# before anything changes, so an unknown LAN stops the run clean.
+plan_lan() {
+    local iface subnet found where=""
+
+    if pihole_here; then
+        add_lan_port 53/tcp
+        add_lan_port 53/udp
+        add_lan_port 80/tcp
+        add_lan_port 443/tcp
+        [[ "$(ftl_config dhcp.active)" != true ]] || add_lan_port 67/udp
+        [[ "$(ftl_config ntp.ipv4.active)" != true ]] || add_lan_port 123/udp
+        log_info "Pi-hole found: ${LAN_PORTS[*]} stay open to the LAN"
+    fi
+    [[ "${#LAN_PORTS[@]}" -gt 0 ]] || return 0
+
+    while IFS= read -r iface; do
+        [[ -n "${iface}" ]] && LAN_IFACES+=("${iface}")
+    done < <(lan_ifaces)
+    [[ "${#LAN_IFACES[@]}" -gt 0 ]] || die "No default route, so there is no LAN to open ${LAN_PORTS[*]} to; nothing changed."
+
+    for iface in "${LAN_IFACES[@]}"; do
+        found=0
+        while IFS= read -r subnet; do
+            [[ -n "${subnet}" ]] || continue
+            LAN_SUBNETS+=("${iface}"$'\t'"${subnet}")
+            where="${where} ${subnet} on ${iface},"
+            found=1
+        done < <(lan_subnets_on "${iface}")
+        if [[ "${found}" -eq 0 ]]; then
+            log_warn "No subnet routed on ${iface}; opening ${LAN_PORTS[*]} on it to the private ranges instead"
+            for subnet in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 fc00::/7 fe80::/10; do
+                LAN_SUBNETS+=("${iface}"$'\t'"${subnet}")
+                where="${where} ${subnet} on ${iface},"
+            done
+        fi
+    done
+    log_info "LAN:${where%,}"
+}
+
+# Cloudflare's published ranges, fetched before anything changes and checked
+# to look like CIDRs, so a bad body never reaches ufw halfway through.
+plan_cloudflare() {
+    local v4 v6 range
+
+    [[ "${CLOUDFLARE}" -eq 1 && "${#ALLOW_PORTS[@]}" -gt 0 ]] || return 0
+    v4="$(curl -fsSL https://www.cloudflare.com/ips-v4)" || die "Could not fetch Cloudflare's IPv4 ranges"
+    v6="$(curl -fsSL https://www.cloudflare.com/ips-v6)" || die "Could not fetch Cloudflare's IPv6 ranges"
+    while IFS= read -r range; do
+        [[ -n "${range}" ]] || continue
+        [[ "${range}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ || "${range}" =~ ^[0-9a-fA-F:]+/[0-9]{1,3}$ ]] ||
+            die "Cloudflare's range list holds something that is not a CIDR: ${range}"
+        CLOUDFLARE_RANGES+=("${range}")
+    done <<< "${v4}"$'\n'"${v6}"
+    [[ -n "${v4//[[:space:]]/}" && -n "${v6//[[:space:]]/}" ]] || die "Cloudflare's range lists came back empty"
+}
+
 install_packages() {
     log_info "Updating packages"
     run env DEBIAN_FRONTEND=noninteractive apt-get update -q
@@ -188,24 +344,8 @@ install_packages() {
         ca-certificates curl sudo ufw unattended-upgrades
 }
 
-# The admin user gets the keys of whoever logged in: root's, or the cloud
-# image's default user when this runs under sudo (AWS root keys only print
-# "log in as admin"). Nothing about SSH changes unless the user ends up with
-# a key, so this cannot lock you out.
 setup_admin_user() {
-    local source_user="${SUDO_USER:-root}"
-    local source_keys=""
-    local user_home=""
-    local user_keys=""
-
-    user_home="$(home_of "${ADMIN_USER}" || true)"
-    [[ -n "${user_home}" ]] || user_home="${ROOT_PREFIX}/home/${ADMIN_USER}"
-    user_keys="${user_home}/.ssh/authorized_keys"
-    source_keys="$(home_of "${source_user}" || true)/.ssh/authorized_keys"
-
-    if [[ ! -s "${user_keys}" && ( "${source_user}" == "${ADMIN_USER}" || ! -s "${source_keys}" ) ]]; then
-        die "No SSH keys for ${ADMIN_USER} and none to copy from ${source_keys}; add one and run again."
-    fi
+    local tmp=""
 
     if getent passwd "${ADMIN_USER}" >/dev/null; then
         log_info "User ${ADMIN_USER} exists"
@@ -218,14 +358,17 @@ setup_admin_user() {
     write_file "${ROOT_PREFIX}/etc/sudoers.d/90-${ADMIN_USER}" 440 \
         "${ADMIN_USER} ALL=(ALL) NOPASSWD:ALL" visudo -cf
 
-    if [[ -s "${user_keys}" ]]; then
-        log_info "${user_keys} already has keys"
+    if [[ -n "$(usable_keys "${USER_KEYS}")" ]]; then
+        log_info "${USER_KEYS} already has keys"
     elif [[ "${DRY_RUN}" -eq 1 ]]; then
-        log_info "would copy ${source_user}'s SSH keys to ${user_keys}"
+        log_info "would copy ${SOURCE_USER}'s SSH keys to ${USER_KEYS}"
     else
-        install -d -m 700 -o "${ADMIN_USER}" -g "${ADMIN_USER}" "${user_home}/.ssh"
-        install -m 600 -o "${ADMIN_USER}" -g "${ADMIN_USER}" "${source_keys}" "${user_keys}"
-        log_info "Copied ${source_user}'s SSH keys to ${user_keys}"
+        tmp="$(mktemp)"
+        usable_keys "${SOURCE_KEYS}" > "${tmp}"
+        install -d -m 700 -o "${ADMIN_USER}" -g "${ADMIN_USER}" "${USER_HOME}/.ssh"
+        install -m 600 -o "${ADMIN_USER}" -g "${ADMIN_USER}" "${tmp}" "${USER_KEYS}"
+        rm -f "${tmp}"
+        log_info "Copied ${SOURCE_USER}'s SSH keys to ${USER_KEYS}"
     fi
 }
 
@@ -324,22 +467,89 @@ X11Forwarding no"
     log_info "SSH reloaded: keys only, no root, only ${ADMIN_USER}"
 }
 
-cloudflare_ranges() {
-    curl -fsSL https://www.cloudflare.com/ips-v4
-    printf '\n'
-    curl -fsSL https://www.cloudflare.com/ips-v6
-    printf '\n'
+# Where this session came from: SSH_CONNECTION (kept through the sudo
+# re-exec), else what who knows about this terminal; empty at the console.
+session_client() {
+    local client="${SSH_CONNECTION:-}"
+
+    [[ -n "${client}" ]] || client="${SSH_CLIENT:-}"
+    client="${client%% *}"
+    [[ -n "${client}" ]] || client="$(who -m 2>/dev/null | sed -nE 's/.*\((.*)\)[[:space:]]*$/\1/p' | head -n 1 || true)"
+    printf '%s\n' "${client}"
+}
+
+# Tailscale addresses: 100.64.0.0/10 and fd7a:115c:a1e0::/48.
+tailnet_address() {
+    local address=""
+
+    # No ${1,,}: the tests run this under macOS's bash 3.2.
+    address="$(tr '[:upper:]' '[:lower:]' <<< "$1")"
+
+    if [[ "${address}" =~ ^100\.([0-9]+)\.[0-9]+\.[0-9]+$ ]]; then
+        (( BASH_REMATCH[1] >= 64 && BASH_REMATCH[1] <= 127 ))
+        return
+    fi
+    [[ "${address}" == fd7a:115c:a1e0:* ]]
+}
+
+# Whether this run may close public SSH: only when the tailnet door is
+# proven to work, by this session having come through it, or when no SSH
+# session is at stake. "tailscale ip" says Tailscale is up, not that its ACLs
+# let you in.
+ssh_mode() {
+    local client=""
+
+    if [[ "${KEEP_PUBLIC_SSH}" -eq 1 ]]; then
+        printf 'public\n'
+        return 0
+    fi
+    if ! tailscale_connected; then
+        log_warn "Tailscale is not connected, so public SSH stays open; run this again over Tailscale once it is."
+        printf 'public\n'
+        return 0
+    fi
+    client="$(session_client)"
+    if [[ -n "${client}" ]] && ! tailnet_address "${client}"; then
+        log_warn "This session came in from ${client}, not over Tailscale, so public SSH stays open; log in as ${ADMIN_USER} over Tailscale and run this again to close it."
+        printf 'public\n'
+        return 0
+    fi
+    printf 'tailnet\n'
+}
+
+# Services listening on every address that only the tailnet and the LAN
+# rules will reach once ufw is on, so nothing goes dark unnoticed.
+report_other_listeners() {
+    local covered=" ${SSH_PORT}/tcp 41641/udp " spec proto address host port hidden=""
+
+    for spec in ${ALLOW_PORTS[@]+"${ALLOW_PORTS[@]}"} ${LAN_PORTS[@]+"${LAN_PORTS[@]}"}; do
+        covered="${covered}$(port_proto "${spec}") "
+    done
+    while read -r proto address; do
+        [[ -n "${address}" ]] || continue
+        port="${address##*:}"
+        host="${address%:*}"
+        host="${host#[}"
+        host="${host%]}"
+        case "${host}" in
+            127.*|::1|::ffff:127.*) continue ;;
+        esac
+        ! tailnet_address "${host}" || continue
+        spec="${port}/${proto}"
+        [[ "${covered}" == *" ${spec} "* || "${hidden}" == *" ${spec}"* ]] || hidden="${hidden} ${spec}"
+    done < <(ss -tulnH 2>/dev/null | awk '$1 == "tcp" || $1 == "udp" { print $1, $5 }' || true)
+    [[ -z "${hidden}" ]] || log_warn "Listening, and reachable only over the tailnet once ufw is on:${hidden}"
 }
 
 # ufw keeps existing connections when it enables, so the session running this
 # survives even when public SSH closes.
 setup_firewall() {
+    local ssh_mode="$1"
     local port=""
+    local proto=""
     local range=""
     local spec=""
-    local proto=""
-    local -a ranges=()
-    local ssh="$1"
+    local pair=""
 
     run ufw default deny incoming
     run ufw default allow outgoing
@@ -347,21 +557,14 @@ setup_firewall() {
     # Lets peers reach this node directly instead of through a relay.
     run ufw allow 41641/udp comment 'tailscale direct'
 
-    if [[ "${CLOUDFLARE}" -eq 1 && "${#ALLOW_PORTS[@]}" -gt 0 ]]; then
-        while IFS= read -r range; do
-            [[ -n "${range}" ]] && ranges+=("${range}")
-        done < <(cloudflare_ranges)
-        [[ "${#ranges[@]}" -gt 0 ]] || die "Could not fetch Cloudflare's IP ranges"
-    fi
-
     for spec in ${ALLOW_PORTS[@]+"${ALLOW_PORTS[@]}"}; do
+        spec="$(port_proto "${spec}")"
         port="${spec%%/*}"
-        proto="tcp"
-        [[ "${spec}" == */* ]] && proto="${spec##*/}"
+        proto="${spec##*/}"
         if [[ "${CLOUDFLARE}" -eq 1 ]]; then
             # Drop an open-to-all rule from an earlier run.
             run ufw --force delete allow "${port}/${proto}" || true
-            for range in "${ranges[@]}"; do
+            for range in "${CLOUDFLARE_RANGES[@]}"; do
                 run ufw allow proto "${proto}" from "${range}" to any port "${port}" comment 'cloudflare'
             done
         else
@@ -369,7 +572,15 @@ setup_firewall() {
         fi
     done
 
-    if [[ "${ssh}" == public ]]; then
+    for spec in ${LAN_PORTS[@]+"${LAN_PORTS[@]}"}; do
+        port="${spec%%/*}"
+        proto="${spec##*/}"
+        for pair in "${LAN_SUBNETS[@]}"; do
+            run ufw allow in on "${pair%%$'\t'*}" from "${pair#*$'\t'}" to any port "${port}" proto "${proto}" comment 'lan'
+        done
+    done
+
+    if [[ "${ssh_mode}" == public ]]; then
         run ufw limit "${SSH_PORT}/tcp" comment 'public ssh'
     else
         for spec in "${SSH_PORT}/tcp" "${SSH_PORT}" OpenSSH; do
@@ -379,6 +590,7 @@ setup_firewall() {
         log_info "Public SSH closed; SSH only over Tailscale"
     fi
 
+    report_other_listeners
     run ufw --force enable
 }
 
@@ -389,32 +601,35 @@ APT::Periodic::Unattended-Upgrade "1";'
 }
 
 main() {
-    local ssh_mode="tailnet"
+    local mode=""
     local ts_name=""
 
     parse_args "$@"
     preflight
     [[ "${DRY_RUN}" -eq 1 ]] && log_info "Dry run: nothing will change"
 
+    # Everything that can stop the run, before the first change.
+    plan_admin_user
+    plan_lan
+    plan_cloudflare
+
     install_packages
     setup_admin_user
     setup_tailscale
     harden_ssh
     SSH_PORT="$(ssh_port)"
-
-    if [[ "${KEEP_PUBLIC_SSH}" -eq 1 ]]; then
-        ssh_mode="public"
-    elif ! tailscale_connected; then
-        ssh_mode="public"
-        log_warn "Tailscale is not connected, so public SSH stays open; run this again once it is."
-    fi
-    setup_firewall "${ssh_mode}"
+    mode="$(ssh_mode)"
+    setup_firewall "${mode}"
     enable_auto_upgrades
 
     if tailscale_connected; then
         ts_name="$(tailscale status --self --peers=false 2>/dev/null | awk 'NR == 1 { print $2 }' || true)"
     fi
     log_info "Done. In a NEW terminal, before closing this one: ssh ${ADMIN_USER}@${ts_name:-<tailscale name>}"
+    [[ "${#LAN_PORTS[@]}" -eq 0 ]] || log_info "Open to the LAN: ${LAN_PORTS[*]}"
+    if [[ -f "${ROOT_PREFIX}/var/run/reboot-required" ]]; then
+        log_warn "A reboot is required to finish the package upgrade."
+    fi
     if command -v docker >/dev/null 2>&1; then
         log_warn "Docker publishes ports around ufw; bind them to 127.0.0.1 or the tailnet IP."
     fi

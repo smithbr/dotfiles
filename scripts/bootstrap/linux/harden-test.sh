@@ -2,8 +2,10 @@
 # Check whether a Debian box is hardened the way harden.sh leaves it,
 # changing nothing: key-only SSH with no root login and one allowed user, an
 # admin user with sudo and keys, Tailscale connected, ufw denying all inbound
-# but the tailnet, unattended upgrades, and what is pending (upgrades, a
-# reboot, Docker ports published around ufw). Run it ad hoc on any Linux box;
+# but the tailnet (ports open to this box's own network are listed apart
+# from those open to the internet, and a Pi-hole must have DNS open to the
+# LAN), unattended upgrades, and what is pending (upgrades, a reboot, Docker
+# ports published around ufw). Run it ad hoc on any Linux box;
 # it needs nothing else from this repo:
 #   ssh HOST 'bash -s' < scripts/bootstrap/linux/harden-test.sh
 #   ssh HOST 'sudo bash -s -- --user NAME' < scripts/bootstrap/linux/harden-test.sh
@@ -272,11 +274,24 @@ check_tailscale() {
     fi
 }
 
+# RFC 1918, ULA, and link-local: this box's own network, not the internet.
+private_source() {
+    local from=""
+
+    from="$(lower "${1%% *}")"
+    [[ "${from}" =~ ^10\. || "${from}" =~ ^192\.168\. || "${from}" =~ ^172\.(1[6-9]|2[0-9]|3[01])\. ||
+        "${from}" =~ ^f[cd] || "${from}" =~ ^fe[89ab] ]]
+}
+
+pihole_here() {
+    [[ -x "${ROOT_PREFIX}/usr/bin/pihole-FTL" ]]
+}
+
 # ufw's live rules when ufw status works (root); else the files that say
 # whether it is enabled and what it denies by default, and the rules are
 # skipped.
 check_firewall() {
-    local status="" line rule open="" tailnet=0
+    local status="" line to action from open="" lan="" lan_dns=0 tailnet=0
 
     section "Firewall"
     if ! command -v ufw >/dev/null 2>&1 && [[ ! -f "${ROOT_PREFIX}/etc/ufw/ufw.conf" ]]; then
@@ -296,26 +311,38 @@ check_firewall() {
         else
             fail "incoming connections are not denied by default"
         fi
-        # One rule per line: "TO  ACTION IN  FROM  # comment", v6 lines doubled.
+        # One rule per line, the columns two or more spaces apart:
+        # "TO  ACTION IN  FROM  # comment"; v6 lines doubled.
         while IFS= read -r line; do
             [[ "${line}" == *" IN "* ]] || continue
             [[ "${line}" != *"(v6)"* ]] || continue
-            rule="${line%%  *}"
-            case "${line}" in
-                *"on tailscale0"*)
+            line="${line%%#*}"
+            IFS=$'\t' read -r to action from <<< "$(sed -E 's/ {2,}/\t/g; s/\t$//' <<< "${line}")"
+            [[ "${action}" == "ALLOW IN" || "${action}" == "LIMIT IN" ]] || continue
+            case "${to}" in
+                *"on tailscale0")
                     tailnet=1
+                    continue
                     ;;
-                "${SSH_PORT}/tcp "*|"${SSH_PORT} "*|"OpenSSH "*)
-                    if [[ "${line}" == *" LIMIT IN "* ]]; then
+                "41641/udp")
+                    continue
+                    ;;
+            esac
+            if private_source "${from}"; then
+                lan="${lan} ${to%% on *}"
+                [[ "${to}" != 53/* && "${to}" != 53 && "${to}" != "53 on "* ]] || lan_dns=1
+                continue
+            fi
+            case "${to}" in
+                "${SSH_PORT}/tcp"|"${SSH_PORT}"|OpenSSH)
+                    if [[ "${action}" == "LIMIT IN" ]]; then
                         PUBLIC_SSH=limited
                     else
                         PUBLIC_SSH=open
                     fi
                     ;;
-                "41641/udp "*)
-                    ;;
-                *" ALLOW IN "*|*" LIMIT IN "*)
-                    open="${open} ${rule}"
+                *)
+                    open="${open} ${to}"
                     ;;
             esac
         done <<< "${status}"
@@ -329,7 +356,7 @@ check_firewall() {
                 fail "SSH port ${SSH_PORT} is open to the internet without rate limiting"
                 ;;
             limited)
-                warn "SSH port ${SSH_PORT} is open to the internet, rate limited (--keep-public-ssh)"
+                warn "SSH port ${SSH_PORT} is open to the internet, rate limited (harden.sh closes it when run over Tailscale; --keep-public-ssh keeps it)"
                 ;;
             *)
                 if [[ "${TAILSCALE_UP}" -eq 1 ]]; then
@@ -339,6 +366,16 @@ check_firewall() {
                 fi
                 ;;
         esac
+        if pihole_here; then
+            if [[ "${lan_dns}" -eq 1 ]]; then
+                pass "the LAN's DNS queries reach this Pi-hole (53 is allowed from the LAN)"
+            else
+                fail "ufw blocks the LAN's DNS queries to this Pi-hole (53 is not allowed from the LAN; harden.sh opens it)"
+            fi
+        fi
+        if [[ -n "${lan}" ]]; then
+            info "open to this box's network:${lan}"
+        fi
         if [[ -n "${open}" ]]; then
             info "open to the internet:${open}"
         else

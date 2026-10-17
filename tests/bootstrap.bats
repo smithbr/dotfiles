@@ -541,8 +541,12 @@ git clone --quiet file://${TEST_TMPDIR}/origin ${TEST_TMPDIR}/home/.dotfiles"
 
 # Runs harden.sh with HARDEN_ROOT pointing at a scratch tree. TS_UP=1 makes
 # the mocked tailscale report a connection; ROOT_KEYS=0 leaves root without
-# SSH keys; SUDO_MOCK=1 replaces sudo with one that only prints its arguments.
-# Arguments go to harden.sh.
+# SSH keys and ROOT_KEYS=2 gives root only a key tied to a command; SUDO_MOCK=1
+# replaces sudo with one that only prints its arguments; SSH_FROM=IP makes
+# this an SSH session from IP (else the console); the mocked ip routes
+# 192.168.0.0/24 and fe80::/64 on eth0 unless NO_ROUTE=1; PIHOLE=1 puts a
+# Pi-hole on the box (PIHOLE_DHCP=true with its DHCP on); CF_BAD=1 makes
+# Cloudflare's range list garbage. Arguments go to harden.sh.
 _run_harden() {
     run bash -c '
         set -euo pipefail
@@ -553,6 +557,22 @@ _run_harden() {
         printf "Include /etc/ssh/sshd_config.d/*.conf\n" > "${HARDEN_ROOT}/etc/ssh/sshd_config"
         if [[ "${ROOT_KEYS:-1}" -eq 1 ]]; then
             printf "ssh-ed25519 AAAA test\n" > "${HARDEN_ROOT}/root/.ssh/authorized_keys"
+        elif [[ "${ROOT_KEYS:-1}" -eq 2 ]]; then
+            printf "command=\"echo log in as admin\" ssh-ed25519 AAAA test\n" > "${HARDEN_ROOT}/root/.ssh/authorized_keys"
+        fi
+        unset SSH_CONNECTION SSH_CLIENT
+        [[ -z "${SSH_FROM:-}" ]] || export SSH_CONNECTION="${SSH_FROM} 50000 10.0.0.2 22"
+        if [[ "${PIHOLE:-0}" -eq 1 ]]; then
+            mkdir -p "${HARDEN_ROOT}/usr/bin"
+            printf "#!/usr/bin/env bash\n" > "${HARDEN_ROOT}/usr/bin/pihole-FTL"
+            chmod +x "${HARDEN_ROOT}/usr/bin/pihole-FTL"
+            cat > "${TEST_BIN}/pihole-FTL" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+case "$2" in
+    dhcp.active) printf "%s\n" "${PIHOLE_DHCP:-false}" ;;
+    *) printf "false\n" ;;
+esac
+MOCK
         fi
         cat > "${TEST_BIN}/getent" <<'"'"'MOCK'"'"'
 #!/usr/bin/env bash
@@ -567,10 +587,29 @@ MOCK
         cat > "${TEST_BIN}/curl" <<'"'"'MOCK'"'"'
 #!/usr/bin/env bash
 case "$*" in
-    *ips-v4) printf "173.245.48.0/20\n104.16.0.0/13" ;;
+    *ips-v4) if [[ "${CF_BAD:-0}" -eq 1 ]]; then printf "garbage\n"; else printf "173.245.48.0/20\n104.16.0.0/13"; fi ;;
     *ips-v6) printf "2400:cb00::/32" ;;
 esac
 MOCK
+        cat > "${TEST_BIN}/ip" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+[[ "${NO_ROUTE:-0}" -eq 0 ]] || exit 0
+case "$*" in
+    "-o -4 route show default") printf "default via 192.168.0.1 dev eth0 proto dhcp src 192.168.0.101 metric 100\n" ;;
+    "-o -6 route show default") printf "default via fe80::1 dev eth0 proto ra metric 1024\n" ;;
+    "-o -4 route show dev eth0 scope link") printf "192.168.0.0/24 proto kernel scope link src 192.168.0.101\n" ;;
+    "-o -6 route show dev eth0") printf "fe80::/64 proto kernel metric 256\ndefault via fe80::1 proto ra metric 1024\n" ;;
+esac
+MOCK
+        cat > "${TEST_BIN}/ss" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+printf "udp UNCONN 0 0 127.0.0.1:5335 0.0.0.0:*\n"
+printf "tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"
+printf "tcp LISTEN 0 128 0.0.0.0:8080 0.0.0.0:*\n"
+printf "tcp LISTEN 0 128 [::]:8080 [::]:*\n"
+printf "tcp LISTEN 0 128 100.64.0.1:9000 0.0.0.0:*\n"
+MOCK
+        printf "#!/usr/bin/env bash\nexit 1\n" > "${TEST_BIN}/who"
         printf "#!/usr/bin/env bash\nexit 0\n" > "${TEST_BIN}/apt-get"
         printf "#!/usr/bin/env bash\nexit 0\n" > "${TEST_BIN}/systemctl"
         printf "#!/usr/bin/env bash\nexit 1\n" > "${TEST_BIN}/sshd"
@@ -599,9 +638,9 @@ MOCK
 
 @test "harden.sh re-runs itself through sudo when not root, for the user who ran it" {
     [[ "${EUID}" -ne 0 ]] || skip "running as root"
-    SUDO_MOCK=1 _run_harden --allow 443 --cloudflare
+    SUDO_MOCK=1 _run_harden --allow 443 --cloudflare --lan 8096
     assert_success
-    assert_output --regexp "^sudo bash .*/scripts/bootstrap/linux/harden.sh --user $(id -un) --allow 443 --cloudflare$"
+    assert_output --regexp "^sudo --preserve-env=SSH_CONNECTION,SSH_CLIENT,TS_AUTHKEY bash .*/scripts/bootstrap/linux/harden.sh --user $(id -un) --allow 443 --cloudflare --lan 8096$"
 }
 
 @test "harden.sh closes public SSH once Tailscale is connected" {
@@ -640,13 +679,87 @@ MOCK
     refute_output --partial "would run: ufw allow 443/tcp"
 }
 
-@test "harden.sh stops before touching SSH when there is no key to copy" {
+@test "harden.sh stops before any change when there is no key to copy, counting none tied to a command" {
     ROOT_KEYS=0 TS_UP=1 _run_harden --dry-run --user admin
     assert_failure
     assert_output --partial "No SSH keys for admin"
+    refute_output --partial "would run: env"
     refute_output --partial "useradd"
     refute_output --partial "PermitRootLogin"
     refute_output --partial "would run: ufw"
+
+    ROOT_KEYS=2 TS_UP=1 _run_harden --dry-run --user admin
+    assert_failure
+    assert_output --partial "No SSH keys for admin"
+    assert_output --partial "keys tied to a command= do not count"
+    refute_output --partial "would run: env"
+}
+
+@test "harden.sh stops before any change when Cloudflare's range list is not CIDRs" {
+    CF_BAD=1 TS_UP=1 _run_harden --dry-run --user admin --allow 443 --cloudflare
+    assert_failure
+    assert_output --partial "not a CIDR: garbage"
+    refute_output --partial "would run: env"
+    refute_output --partial "would run: ufw"
+}
+
+@test "harden.sh closes public SSH from the console or over Tailscale, never from elsewhere" {
+    SSH_FROM=203.0.113.9 TS_UP=1 _run_harden --dry-run --user admin
+    assert_success
+    assert_output --partial "This session came in from 203.0.113.9, not over Tailscale, so public SSH stays open"
+    assert_output --partial "would run: ufw limit 22/tcp"
+    refute_output --partial "Public SSH closed"
+
+    SSH_FROM=100.101.102.103 TS_UP=1 _run_harden --dry-run --user admin
+    assert_success
+    assert_output --partial "Public SSH closed"
+    refute_output --partial "not over Tailscale"
+    refute_output --partial "would run: ufw limit 22/tcp"
+
+    SSH_FROM=fd7a:115c:a1e0::1234 TS_UP=1 _run_harden --dry-run --user admin
+    assert_success
+    assert_output --partial "Public SSH closed"
+}
+
+@test "harden.sh opens a Pi-hole's DNS and admin page to the LAN and names what only the tailnet will reach" {
+    PIHOLE=1 TS_UP=1 _run_harden --dry-run --user admin
+    assert_success
+    assert_output --partial "Pi-hole found: 53/tcp 53/udp 80/tcp 443/tcp stay open to the LAN"
+    assert_output --partial "LAN: 192.168.0.0/24 on eth0, fe80::/64 on eth0"
+    assert_output --partial "would run: ufw allow in on eth0 from 192.168.0.0/24 to any port 53 proto udp comment lan"
+    assert_output --partial "would run: ufw allow in on eth0 from 192.168.0.0/24 to any port 53 proto tcp comment lan"
+    assert_output --partial "would run: ufw allow in on eth0 from fe80::/64 to any port 53 proto udp comment lan"
+    assert_output --partial "would run: ufw allow in on eth0 from 192.168.0.0/24 to any port 80 proto tcp comment lan"
+    assert_output --partial "would run: ufw allow in on eth0 from 192.168.0.0/24 to any port 443 proto tcp comment lan"
+    refute_output --partial "to any port 67 "
+    refute_output --partial "would run: ufw allow 53"
+    assert_output --partial "Listening, and reachable only over the tailnet once ufw is on: 8080/tcp"
+    refute_output --partial "5335"
+    refute_output --partial "9000"
+    assert_output --partial "Open to the LAN: 53/tcp 53/udp 80/tcp 443/tcp"
+
+    PIHOLE=1 PIHOLE_DHCP=true TS_UP=1 _run_harden --dry-run --user admin
+    assert_success
+    assert_output --partial "would run: ufw allow in on eth0 from 192.168.0.0/24 to any port 67 proto udp comment lan"
+}
+
+@test "harden.sh --lan opens a port to the LAN only, and stops before any change when there is no LAN" {
+    TS_UP=1 _run_harden --dry-run --user admin --lan 8096 --lan 1900/udp
+    assert_success
+    assert_output --partial "would run: ufw allow in on eth0 from 192.168.0.0/24 to any port 8096 proto tcp comment lan"
+    assert_output --partial "would run: ufw allow in on eth0 from 192.168.0.0/24 to any port 1900 proto udp comment lan"
+    refute_output --partial "would run: ufw allow 8096"
+    refute_output --partial "Pi-hole found"
+
+    NO_ROUTE=1 TS_UP=1 _run_harden --dry-run --user admin --lan 8096
+    assert_failure
+    assert_output --partial "No default route, so there is no LAN to open 8096/tcp to; nothing changed."
+    refute_output --partial "would run: env"
+    refute_output --partial "would run: ufw"
+
+    _run_harden --dry-run --user admin --lan 70000
+    assert_failure
+    assert_output --partial "Not a port: 70000"
 }
 
 # ---------------------------------------------------------------------------

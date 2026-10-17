@@ -216,7 +216,7 @@ run_harden_test() {
     printf '22/tcp                     LIMIT IN    Anywhere                   # public ssh\n' >> "${HARDEN_ROOT}/ufw-status"
     run_harden_test --user admin
     assert_success
-    assert_line "  warn: SSH port 22 is open to the internet, rate limited (--keep-public-ssh)"
+    assert_line "  warn: SSH port 22 is open to the internet, rate limited (harden.sh closes it when run over Tailscale; --keep-public-ssh keeps it)"
 
     sed -i.bak 's/LIMIT IN/ALLOW IN/' "${HARDEN_ROOT}/ufw-status"
     run_harden_test --user admin
@@ -234,6 +234,41 @@ run_harden_test() {
     run_harden_test --user admin
     assert_failure 1
     assert_line "  FAIL: ufw is not active (sudo ufw enable)"
+}
+
+@test "harden-test.sh lists ports open to the box's own network apart from the internet, and wants a Pi-hole's DNS open to the LAN" {
+    cat >> "${HARDEN_ROOT}/ufw-status" <<'EOF'
+53/udp on eth0             ALLOW IN    192.168.0.0/24             # lan
+53/tcp on eth0             ALLOW IN    192.168.0.0/24             # lan
+80/tcp on eth0             ALLOW IN    192.168.0.0/24             # lan
+8096/tcp                   ALLOW IN    10.0.0.0/8
+53/udp (v6) on eth0        ALLOW IN    fe80::/64                  # lan
+EOF
+    run_harden_test --user admin
+    assert_success
+    assert_line "  open to this box's network: 53/udp 53/tcp 80/tcp 8096/tcp"
+    assert_line "  open to the internet: 443/tcp"
+    refute_output --partial "Pi-hole"
+
+    # A Pi-hole with DNS open to the LAN passes; one with ufw blocking it fails.
+    mkdir -p "${HARDEN_ROOT}/usr/bin"
+    printf '#!/bin/sh\n' > "${HARDEN_ROOT}/usr/bin/pihole-FTL"
+    chmod +x "${HARDEN_ROOT}/usr/bin/pihole-FTL"
+    run_harden_test --user admin
+    assert_success
+    assert_line "  ok: the LAN's DNS queries reach this Pi-hole (53 is allowed from the LAN)"
+
+    sed -i.bak '/^53\//d' "${HARDEN_ROOT}/ufw-status"
+    run_harden_test --user admin
+    assert_failure 1
+    assert_line "  FAIL: ufw blocks the LAN's DNS queries to this Pi-hole (53 is not allowed from the LAN; harden.sh opens it)"
+    assert_line "  open to this box's network: 80/tcp 8096/tcp"
+
+    # Without root the rules are unknown, so the Pi-hole check is not a failure.
+    rm "${TEST_BIN}/ufw"
+    run_harden_test --user admin
+    refute_output --partial "Pi-hole"
+    assert_line "  skipped: the rules (tailnet in, public SSH, open ports) need root: run again with sudo"
 }
 
 @test "harden-test.sh warns about Docker ports published around ufw, pending upgrades, and a needed reboot" {

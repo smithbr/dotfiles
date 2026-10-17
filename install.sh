@@ -585,7 +585,7 @@ resolve_installs() {
 # tailnet's and allows only one SSH user. The question is asked in a dry run
 # as well, so the dry run shows the step.
 resolve_harden() {
-    local gap
+    local gap question
     HARDEN=0 HARDEN_SOURCE="" HARDEN_GAPS=""
     if [[ "${harden_arg}" == yes ]]; then
         if [[ "${os_dir}" != linux ]]; then
@@ -604,7 +604,9 @@ resolve_harden() {
     while IFS= read -r gap; do
         _item "${gap}"
     done <<< "${HARDEN_GAPS}"
-    if [[ "$(choose_one "Harden it first? harden.sh: key-only SSH over Tailscale, ufw, unattended upgrades. On a server in use this closes every port but the tailnet's and allows only your SSH user." no yes no)" == yes ]]; then
+    question="Harden it first? harden.sh: key-only SSH over Tailscale, ufw, unattended upgrades. On a server in use this closes every port but the tailnet's and allows only your SSH user."
+    [[ ! -x /usr/bin/pihole-FTL ]] || question="${question} On this Pi-hole, DNS and the admin page stay open to the LAN."
+    if [[ "$(choose_one "${question}" no yes no)" == yes ]]; then
         HARDEN=1 HARDEN_SOURCE=chosen
     fi
 }
