@@ -7,16 +7,21 @@ load test_helper
 
 LINK="scripts/link.sh"
 
-setup() {
-    setup_tmpdir
-    DEST="${TEST_TMPDIR}/home"
-    mkdir -p "${DEST}"
-
-    # Stands in for the private agents repo.
-    AGENTS_FIXTURE="${TEST_TMPDIR}/agents-origin"
+# Stands in for the private agents repo. Built once: link.sh only clones from
+# it, so every test shares it; a test that commits to it copies it first
+# (own_agents_fixture).
+setup_file() {
+    export AGENTS_FIXTURE="${BATS_FILE_TMPDIR}/agents-origin"
     mkdir -p "${AGENTS_FIXTURE}/skills/core/demo" "${AGENTS_FIXTURE}/skills/extra/other" \
         "${AGENTS_FIXTURE}/skills/vault/notes" \
         "${AGENTS_FIXTURE}/agents"
+    # Every bundle a shipped persona asks for, so no run warns about one
+    # missing (each warning is a gum process).
+    local bundle
+    for bundle in $(sed -n 's/^skills=//p' "${PROJECT_ROOT}"/personas/* | tr ' ' '\n' | sort -u); do
+        mkdir -p "${AGENTS_FIXTURE}/skills/${bundle}/${bundle}-demo"
+        printf 'skill\n' > "${AGENTS_FIXTURE}/skills/${bundle}/${bundle}-demo/SKILL.md"
+    done
     printf 'rules\n' > "${AGENTS_FIXTURE}/AGENTS.md"
     printf 'agent\n' > "${AGENTS_FIXTURE}/agents/demo.md"
     printf 'skill\n' > "${AGENTS_FIXTURE}/skills/core/demo/SKILL.md"
@@ -25,6 +30,19 @@ setup() {
     git -C "${AGENTS_FIXTURE}" init -q
     git -C "${AGENTS_FIXTURE}" add -A
     git -C "${AGENTS_FIXTURE}" -c user.name=test -c user.email=test@example.com commit -q -m fixture
+}
+
+# A private copy of the agents fixture for a test that changes it.
+own_agents_fixture() {
+    cp -R "${AGENTS_FIXTURE}" "${TEST_TMPDIR}/agents-origin"
+    AGENTS_FIXTURE="${TEST_TMPDIR}/agents-origin"
+    export AGENTS_REPO_URL="file://${AGENTS_FIXTURE}"
+}
+
+setup() {
+    setup_tmpdir
+    DEST="${TEST_TMPDIR}/home"
+    mkdir -p "${DEST}"
     export AGENTS_REPO_URL="file://${AGENTS_FIXTURE}"
     export DOTFILES_OS=darwin
     # Keeps the machine's own Homebrew (and its tool skills) out of the tests.
@@ -243,7 +261,9 @@ stat_mode() {
     assert_output --partial "Linked ${DEST}/.zshenv -> stow/common/.zshenv"
     assert_output --partial "Linked ${DEST}/.claude/CLAUDE.md -> ${DEST}/.config/agents/AGENTS.md"
     assert_output --partial "Agents checkout ${DEST}/.config/agents: cloned from ${AGENTS_REPO_URL}"
-    assert_output --partial "Skill bundles core, vault: stowed into ${DEST}/.agents/skills"
+    local bundles
+    bundles="$(sed -n 's/^skills=//p' "${PROJECT_ROOT}/personas/home" | sed 's/ /, /g')"
+    assert_output --partial "Skill bundles ${bundles}: stowed into ${DEST}/.agents/skills"
     assert_output --regexp "Seed files: 0 of [0-9]+ were present"
     assert_output --regexp "Layers common, tools, [a-z, .]*desktop.darwin: [0-9]+ of [0-9]+ linked"
     local summary
@@ -497,6 +517,7 @@ stat_mode() {
 
 @test "a recent checkout is pulled only with --refresh" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    own_agents_fixture
     run_link
     assert_success
     printf 'new rules\n' > "${AGENTS_FIXTURE}/AGENTS.md"

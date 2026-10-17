@@ -545,17 +545,35 @@ find_owner() {
         fi
     done
     if [[ "$(uname -s)" == Darwin ]]; then
-        for app in /Applications/*.app "${DEST_DIR}/Applications"/*.app; do
-            [[ -e "${app}" ]] || continue
-            candidate="$(basename "${app}" .app | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
+        while IFS=$'\t' read -r candidate app; do
+            [[ -n "${app}" ]] || continue
             # The app's name, or one starting with it when it is long enough
             # not to match by chance (amp is not Amphetamine).
             if [[ "${candidate}" == "${base}" || ( "${#base}" -ge 4 && "${candidate}" == "${base%%[-_.]*}"* ) ]]; then
-                basename "${app}"
+                printf '%s\n' "${app}"
                 return
             fi
-        done
+        done <<< "$(installed_apps)"
     fi
+}
+
+# Installed apps as "lowercased name without spaces<TAB>Name.app", listed once:
+# find_owner runs for every unmanaged path.
+INSTALLED_APPS_CACHE=""
+INSTALLED_APPS_LISTED=0
+installed_apps() {
+    local app name
+    if [[ "${INSTALLED_APPS_LISTED}" -eq 0 ]]; then
+        INSTALLED_APPS_LISTED=1
+        INSTALLED_APPS_CACHE="$(
+            for app in /Applications/*.app "${DEST_DIR}/Applications"/*.app; do
+                [[ -e "${app}" ]] || continue
+                name="${app##*/}"
+                printf '%s\t%s\n' "${name%.app}" "${name}"
+            done | awk -F'\t' -v OFS='\t' '{ $1 = tolower($1); gsub(/ /, "", $1); print }'
+        )"
+    fi
+    printf '%s\n' "${INSTALLED_APPS_CACHE}"
 }
 
 size_of() {

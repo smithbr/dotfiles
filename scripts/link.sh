@@ -254,16 +254,17 @@ parse_args() {
     done
 }
 
-platform() {
-    if [[ -n "${DOTFILES_OS:-}" ]]; then
-        printf '%s\n' "${DOTFILES_OS}"
-        return
-    fi
+# Detected once here: platform() runs in subshells, where a cache would not stick.
+PLATFORM_DETECTED="${DOTFILES_OS:-}"
+if [[ -z "${PLATFORM_DETECTED}" ]]; then
     case "$(uname -s)" in
-        Darwin) printf 'darwin\n' ;;
-        Linux) printf 'linux\n' ;;
-        *) printf 'unknown\n' ;;
+        Darwin) PLATFORM_DETECTED=darwin ;;
+        Linux) PLATFORM_DETECTED=linux ;;
+        *) PLATFORM_DETECTED=unknown ;;
     esac
+fi
+platform() {
+    printf '%s\n' "${PLATFORM_DETECTED}"
 }
 
 # The persona in effect, set by load_persona.
@@ -327,7 +328,8 @@ persona_settings() {
         key="${line%%=*}"
         value="${line#*=}"
         key="${key//[[:space:]]/}"
-        value="$(printf '%s' "${value}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
         printf '%s=%s\n' "${key}" "${value}"
     done < "$1"
 }
@@ -688,7 +690,16 @@ package_files() {
     (cd "${dir}" && find . \( -type f -o -type l \) ! -name .DS_Store -print | sed 's#^\./##' | LC_ALL=C sort)
 }
 
+# The directory part of a path, as dirname gives it, without the process.
+dir_of() {
+    local path="$1"
+    [[ "${path}" == */* ]] || { printf '.\n'; return; }
+    path="${path%/*}"
+    printf '%s\n' "${path:-/}"
+}
+
 # Follow every symlink in a path, portably (no GNU readlink -f on older macOS).
+# Called for every package file, so only the readlink and the final cd fork.
 physical_path() {
     local path="$1" link dir hops=0
     while [[ -L "${path}" && "${hops}" -lt 40 ]]; do
@@ -696,18 +707,41 @@ physical_path() {
         if [[ "${link}" == /* ]]; then
             path="${link}"
         else
-            path="$(dirname "${path}")/${link}"
+            path="$(dir_of "${path}")/${link}"
         fi
         hops=$((hops + 1))
     done
-    dir="$(cd -P "$(dirname "${path}")" 2>/dev/null && pwd)" || return 1
-    printf '%s/%s\n' "${dir}" "$(basename "${path}")"
+    dir="$(cd -P "$(dir_of "${path}")" 2>/dev/null && pwd)" || return 1
+    printf '%s/%s\n' "${dir}" "${path##*/}"
 }
 
-# True when the destination already resolves to the package file.
+# An absolute path with its . and .. segments folded, by string alone: no
+# symlink is followed and nothing is forked.
+normalize_path() {
+    local part out=""
+    local -a parts=()
+    IFS=/ read -r -a parts <<< "$1"
+    for part in ${parts[@]+"${parts[@]}"}; do
+        case "${part}" in
+            '' | .) ;;
+            ..) out="${out%/*}" ;;
+            *) out="${out}/${part}" ;;
+        esac
+    done
+    printf '%s\n' "${out:-/}"
+}
+
+# True when the destination already resolves to the package file. A link this
+# script made points at the source path itself, and one stow made is relative
+# to the target's directory, so one readlink and some string work settle most
+# files; resolving both sides physically is the fallback for a repo or home
+# reached through a symlink.
 is_linked() {
     local target="$1" source="$2" resolved
     [[ -L "${target}" ]] || return 1
+    resolved="$(readlink "${target}")" || return 1
+    [[ "${resolved}" == /* ]] || resolved="$(normalize_path "$(dir_of "${target}")/${resolved}")"
+    [[ "${resolved}" == "${source}" ]] && return 0
     resolved="$(physical_path "${target}")" || return 1
     [[ "${resolved}" == "$(physical_path "${source}")" ]]
 }
@@ -722,7 +756,7 @@ link_destination() {
     if [[ "${link}" == /* ]]; then
         path="${link}"
     else
-        path="$(cd -P "$(dirname "${target}")" 2>/dev/null && pwd)/${link}" || return 1
+        path="$(cd -P "$(dir_of "${target}")" 2>/dev/null && pwd)/${link}" || return 1
     fi
     IFS=/ read -r -a parts <<< "${path}"
     for part in ${parts[@]+"${parts[@]}"}; do
@@ -754,6 +788,12 @@ link_destination() {
 is_repo_link() {
     local destination
     [[ -L "$1" ]] || return 1
+    # Links made here point straight into the repo and stow's are relative to
+    # their directory; resolving physically is only needed for a repo reached
+    # through a symlink.
+    destination="$(readlink "$1")" || return 1
+    [[ "${destination}" == /* ]] || destination="$(normalize_path "$(dir_of "$1")/${destination}")"
+    [[ "${destination}" == "${REPO}/stow/"* || "${destination}" == "${REPO}/editors/"* ]] && return 0
     destination="$(link_destination "$1")" || return 1
     [[ "${destination}" == "${REPO}/stow/"* || "${destination}" == "${REPO}/editors/"* ]]
 }
