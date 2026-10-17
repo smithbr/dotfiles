@@ -90,6 +90,13 @@ AGENT_APPS="claude codex cursor"
 SKILLS_DIR=".agents/skills"
 SKILL_LINKS=(.claude/skills .cursor/skills)
 
+# Skills that ship with a Homebrew CLI, so they always match its version:
+# name in SKILLS_DIR|path under Homebrew's opt directory. Each is linked while
+# the CLI is installed, and its link is removed once the CLI is gone.
+TOOL_SKILLS=(
+    "agent-browser|agent-browser/libexec/lib/node_modules/agent-browser/skills/agent-browser"
+)
+
 # destination directory|directory under editors/, one line per editor. Every
 # file in the editors/ directory is linked into the destination directory.
 # Takes a platform; defaults to this one.
@@ -1225,6 +1232,44 @@ link_skills() {
     )
 }
 
+# Homebrew's prefix on this machine (HOMEBREW_PREFIX when set, else its usual
+# prefixes), whether or not brew is on PATH yet.
+brew_prefixes() {
+    local dir
+    while IFS= read -r dir; do
+        [[ "${dir}" == */bin && "${dir}" != "${HOME}/.local/bin" ]] && printf '%s\n' "${dir%/bin}"
+    done < <(tool_bin_dirs)
+}
+
+# Link each TOOL_SKILLS skill whose CLI is installed into SKILLS_DIR, and
+# remove the link of one whose CLI is gone (only a link into Homebrew's opt
+# directory, never a skill someone put there by hand).
+link_tool_skills() {
+    local skills="${DEST}/${SKILLS_DIR}" entry name source prefix link
+    local -a wanted=()
+    for entry in "${TOOL_SKILLS[@]}"; do
+        name="${entry%%|*}" source=""
+        while IFS= read -r prefix; do
+            [[ -f "${prefix}/opt/${entry#*|}/SKILL.md" ]] || continue
+            source="${prefix}/opt/${entry#*|}"
+            break
+        done < <(brew_prefixes)
+        link="${skills}/${name}"
+        if [[ -n "${source}" ]]; then
+            wanted+=("${link}|${source}")
+        elif [[ -L "${link}" && "$(readlink "${link}")" == */opt/"${entry#*|}" ]]; then
+            if [[ "${DRY_RUN}" -eq 1 ]]; then
+                printf 'Would remove %s (%s is not installed)\n' "$(show_path "${link}")" "${name}"
+            else
+                rm -f "${link}"
+                printf 'Removed %s (%s is not installed)\n' "$(show_path "${link}")" "${name}"
+            fi
+        fi
+    done
+    [[ "${#wanted[@]}" -gt 0 ]] || return 0
+    place_links "Tool skill links" < <(printf '%s\n' "${wanted[@]}")
+}
+
 warn_unused_agents_checkout() {
     [[ -e "${DEST}/.config/agents" ]] || return 0
     log_warn "${DEST}/.config/agents holds the private agents repo, which this persona does not use. It is left in place; delete it yourself if this machine should not keep it."
@@ -2097,6 +2142,7 @@ main() {
                 sync_agents_repo
                 link_agents
                 link_skills
+                link_tool_skills
             else
                 warn_unused_agents_checkout
             fi

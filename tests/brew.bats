@@ -232,7 +232,7 @@ MOCK
     # htop and tree are installed, so wget and the first cask are the first two offered.
     run cat "${TEST_BUNDLE}"
     assert_output 'brew "wget"
-brew "agent-browser"'
+cask "brave-browser"'
     run grep -c "bundle install" "${TEST_LOG}"
     assert_output "1"
 }

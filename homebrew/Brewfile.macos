@@ -10,7 +10,6 @@ cask "chatgpt"
 cask "claude"
 
 # Browsers
-brew "agent-browser"
 cask "brave-browser"
 cask "comet"
 cask "firefox"

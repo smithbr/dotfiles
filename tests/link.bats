@@ -27,6 +27,8 @@ setup() {
     git -C "${AGENTS_FIXTURE}" -c user.name=test -c user.email=test@example.com commit -q -m fixture
     export AGENTS_REPO_URL="file://${AGENTS_FIXTURE}"
     export DOTFILES_OS=darwin
+    # Keeps the machine's own Homebrew (and its tool skills) out of the tests.
+    export HOMEBREW_PREFIX="${TEST_TMPDIR}/brew"
 }
 
 teardown() {
@@ -379,6 +381,30 @@ stat_mode() {
         [ ! -e "${DEST}/.agents/skills/other" ]
         [ "$(readlink "${DEST}/${app}/skills")" = "${DEST}/.agents/skills" ]
     done
+}
+
+@test "links a Homebrew CLI's own skill while the CLI is installed, then removes the link" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    local skill="${HOMEBREW_PREFIX}/opt/agent-browser/libexec/lib/node_modules/agent-browser/skills/agent-browser"
+    mkdir -p "${skill}"
+    printf 'browser\n' > "${skill}/SKILL.md"
+
+    run_link --persona home --dry-run
+    assert_success
+    assert_output --partial "Would link ${DEST}/.agents/skills/agent-browser"
+    [ ! -L "${DEST}/.agents/skills/agent-browser" ]
+
+    run_link --persona home
+    assert_success
+    [ "$(readlink "${DEST}/.agents/skills/agent-browser")" = "${skill}" ]
+    [ "$(cat "${DEST}/.claude/skills/agent-browser/SKILL.md")" = browser ]
+
+    rm -rf "${HOMEBREW_PREFIX}/opt/agent-browser"
+    run_link --persona home
+    assert_success
+    assert_output --partial "Removed ${DEST}/.agents/skills/agent-browser"
+    [ ! -L "${DEST}/.agents/skills/agent-browser" ]
+    [ -L "${DEST}/.agents/skills/demo" ]
 }
 
 @test "only home stows the vault bundle, and leaving home removes it" {
