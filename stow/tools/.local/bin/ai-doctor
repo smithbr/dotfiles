@@ -1,0 +1,716 @@
+#!/usr/bin/env python3
+"""List what to fix or trim in Claude Code, Codex, and Cursor, and fix it.
+
+  ai-doctor             what needs doing, as a short numbered list
+  ai-doctor --fix       do it: asks before each fix (--yes asks nothing)
+  ai-doctor -v          also everything checked: instructions, skills per
+                        bundle, plugins, and MCP servers, with token sizes
+  ai-doctor --app NAME  only claude, codex, or cursor (repeatable)
+
+It looks for MCP servers that cannot start, secrets written into MCP config,
+broken skill links, skill bundles beyond what the dotfiles persona asks for,
+plugins loaded twice, and plugins whose servers wait for a sign-in. Each item
+says what to do. An item marked [auto] is one --fix can do: it unlinks skill
+bundles with skills-add, removes or repairs a server with the app's own
+command (or edits its config, after a backup), and deletes broken links.
+Backups go to ~/.local/state/ai-doctor/<time>/.
+
+Exits 1 while something is broken (not just worth trimming), otherwise 0.
+Connectors kept only on claude.ai, and the tools the desktop apps add
+themselves, are not on disk; turn those off in the app. Sizes are rough,
+about 4 characters a token.
+"""
+
+import argparse
+import json
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+try:
+    import tomllib
+except ImportError:  # Python before 3.11
+    tomllib = None
+
+APPS = ("claude", "codex", "cursor")
+HOME = Path.home()
+CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config")
+STATE_HOME = Path(os.environ.get("XDG_STATE_HOME") or HOME / ".local" / "state")
+AGENTS_DIR = CONFIG_HOME / "agents"
+# The script lives at <repo>/stow/tools/.local/bin/ai-doctor, reached through its stow link.
+DOTFILES_DIR = Path(os.environ.get("DOTFILES_DIR") or Path(__file__).resolve().parents[4])
+
+SECRET_KEY = re.compile(r"token|secret|password|api[-_]?key|authorization|bearer", re.I)
+SECRET_VALUE = re.compile(r"^(bearer\s+)?(gh[opsur]_|github_pat_|sk-|xox[abp]-|glpat-)", re.I)
+
+
+# Output -------------------------------------------------------------------
+
+
+class Finding:
+    """One thing to do: broken (fix) or worth trimming (trim)."""
+
+    def __init__(self, kind, title, todo, apply=None):
+        self.kind = kind
+        self.title = title
+        self.todo = todo  # one line: the command or the step
+        self.apply = apply  # callable(backup_dir) -> message, when --fix can do it
+
+
+class Report:
+    def __init__(self, color, verbose):
+        self.color = color
+        self.verbose = verbose
+        self.findings = []
+        self.stats = {}
+
+    def paint(self, code, text):
+        return f"\033[{code}m{text}\033[0m" if self.color else text
+
+    # Inventory lines show only with -v.
+    def section(self, title):
+        if self.verbose:
+            print()
+            print(self.paint("1", title))
+
+    def line(self, text, indent=2):
+        if self.verbose:
+            print(" " * indent + text)
+
+    def ok(self, text):
+        self.line(f"{self.paint('32', 'ok')}  {text}")
+
+    def note(self, text):
+        self.line(f"{self.paint('2', '--')}  {text}")
+
+    def fix(self, title, todo, apply=None):
+        self.findings.append(Finding("fix", title, todo, apply))
+
+    def trim(self, title, todo, apply=None):
+        self.findings.append(Finding("trim", title, todo, apply))
+
+
+def tilde(path):
+    text = str(path)
+    for home in (str(HOME), str(HOME.resolve())):
+        if text == home or text.startswith(home + "/"):
+            return "~" + text[len(home):]
+    return text
+
+
+def plural(count, word):
+    return f"{count} {word}" if count == 1 else f"{count} {word}s"
+
+
+def tokens(chars):
+    return f"~{(chars + 2) // 4:,} tokens"
+
+
+def read_text(path):
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def read_json(path):
+    text = read_text(path)
+    if text is None:
+        return None
+    try:
+        return json.loads(text)
+    except ValueError:
+        return None
+
+
+def others_can_read(path):
+    try:
+        return bool(Path(path).stat().st_mode & (stat.S_IRGRP | stat.S_IROTH))
+    except OSError:
+        return False
+
+
+# Fixes --------------------------------------------------------------------
+
+
+def backup(path, backup_dir):
+    """Copy path into backup_dir before changing it; the first copy, the original, is kept."""
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    target = backup_dir / str(Path(path)).lstrip("/").replace("/", "__")
+    if target.exists():
+        return
+    if Path(path).is_dir():
+        shutil.copytree(path, target, symlinks=True)
+    else:
+        shutil.copy2(path, target)
+
+
+def write_json(path, data):
+    path = Path(path)
+    tmp = path.with_name(path.name + ".ai-doctor")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
+    os.replace(tmp, path)
+
+
+def edit_json(path, change):
+    """A fix that backs up a JSON file, then changes it in place."""
+    def apply(backup_dir):
+        data = read_json(path)
+        if data is None:
+            raise RuntimeError(f"cannot read {tilde(path)}")
+        backup(path, backup_dir)
+        change(data)
+        write_json(path, data)
+    return apply
+
+
+def run(command):
+    """A fix that runs a command."""
+    def apply(_backup_dir):
+        subprocess.run(command, check=True)
+    return apply
+
+
+def drop_toml_table(path, name):
+    """A fix that removes [mcp_servers.NAME] and its sub-tables from a TOML file."""
+    def apply(backup_dir):
+        lines = Path(path).read_text(encoding="utf-8").splitlines(keepends=True)
+        header = re.compile(r"\s*\[\s*mcp_servers\.(\"?)" + re.escape(name) + r"\1\s*(\.|\])")
+        kept, skipping = [], False
+        for line in lines:
+            if line.lstrip().startswith("["):
+                skipping = bool(header.match(line))
+            if not skipping:
+                kept.append(line)
+        backup(path, backup_dir)
+        Path(path).write_text("".join(kept), encoding="utf-8")
+    return apply
+
+
+# Instructions -------------------------------------------------------------
+
+
+def memory_dir(cwd):
+    return HOME / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(cwd)) / "memory"
+
+
+def check_instructions(report, apps, cwd):
+    report.section("Instructions (read into every session)")
+    files = []
+    if "claude" in apps:
+        files += [("Claude global", HOME / ".claude" / "CLAUDE.md"),
+                  ("Claude memory", memory_dir(cwd) / "MEMORY.md")]
+    if "codex" in apps:
+        files.append(("Codex global", HOME / ".codex" / "AGENTS.md"))
+    for name in ("CLAUDE.md", "AGENTS.md", "CLAUDE.local.md"):
+        files.append(("project", cwd / name))
+    seen = {}
+    total = 0
+    for label, path in files:
+        if not path.is_file():
+            continue
+        real = path.resolve()
+        if real in seen:
+            report.note(f"{label} {tilde(path)}: same file as {seen[real]}")
+            continue
+        seen[real] = label
+        size = len(read_text(path) or "")
+        total += size
+        report.ok(f"{label} {tilde(path)}: {tokens(size)}")
+    rules = AGENTS_DIR / "rules"
+    if rules.is_dir():
+        size = sum(len(read_text(p) or "") for p in sorted(rules.iterdir()) if p.is_file())
+        report.note(f"rules in {tilde(rules)}: {tokens(size)} when the instructions say to read them")
+    if not seen:
+        report.note("no instruction files found")
+    elif total > 40_000:
+        report.trim(f"Instruction files cost {tokens(total)} a session",
+                    "shorten the largest one (ai-doctor -v lists them)")
+
+
+# Skills -------------------------------------------------------------------
+
+
+def frontmatter_text(skill_md):
+    text = read_text(skill_md) or ""
+    match = re.match(r"---\s*\n(.*?)\n---", text, re.S)
+    if not match:
+        return ""
+    kept = []
+    keep = False
+    for line in match.group(1).splitlines():
+        key = re.match(r"(\w[\w-]*):\s*(.*)", line)
+        if key:
+            keep = key.group(1) in ("name", "description")
+            if keep:
+                kept.append(key.group(2).strip("'\" |>"))
+        elif keep and line.startswith((" ", "\t")):
+            kept.append(line.strip())
+    return " ".join(kept)
+
+
+def bundle_of(path):
+    """The agents-checkout bundle a skill links into, or where else it lives."""
+    real = Path(os.path.realpath(path))
+    try:
+        parts = real.relative_to(AGENTS_DIR.resolve() / "skills").parts
+    except ValueError:
+        return "linked elsewhere" if path.is_symlink() else "local"
+    return parts[0] if len(parts) > 1 else "local"
+
+
+def persona_bundles():
+    """Skill bundles the dotfiles persona asks for, or None without a persona."""
+    name = os.environ.get("DOTFILES_PERSONA") or (read_text(STATE_HOME / "dotfiles" / "persona") or "").strip()
+    text = read_text(DOTFILES_DIR / "personas" / name) if name else None
+    if text is None:
+        return None, None
+    for line in text.splitlines():
+        if line.startswith("skills="):
+            return name, line.split("=", 1)[1].split()
+    return name, ["core"]
+
+
+def check_skills(report, apps):
+    report.section("Skills (each name and description is in every session)")
+    dirs = []
+    if "claude" in apps:
+        dirs.append(HOME / ".claude" / "skills")
+    if "codex" in apps:
+        dirs += [HOME / ".codex" / "skills", HOME / ".agents" / "skills"]
+    if "cursor" in apps:
+        dirs.append(HOME / ".cursor" / "skills")
+    seen = {}
+    shared = (HOME / ".agents" / "skills").resolve()
+    for folder in dirs:
+        if not folder.is_dir():
+            continue
+        real = folder.resolve()
+        if real in seen:
+            report.note(f"{tilde(folder)}: same folder as {tilde(seen[real])}")
+            continue
+        seen[real] = folder
+        bundles = {}
+        chars = 0
+        for entry in sorted(folder.iterdir()):
+            if entry.name.startswith("."):
+                continue
+            if entry.is_symlink() and not entry.exists():
+                link = real / entry.name
+                report.fix(f"Skill link {tilde(link)} is broken",
+                           f"rm {tilde(link)}", lambda _b, link=link: link.unlink())
+                continue
+            skill_md = entry / "SKILL.md"
+            if not skill_md.is_file():
+                continue
+            size = len(frontmatter_text(skill_md))
+            chars += size
+            bundles.setdefault(bundle_of(entry), []).append((entry.name, size))
+        count = sum(len(v) for v in bundles.values())
+        report.stats["skills"] = report.stats.get("skills", 0) + count
+        report.stats["skill_chars"] = report.stats.get("skill_chars", 0) + chars
+        where = f" -> {tilde(real)}" if real != folder.absolute() else ""
+        report.ok(f"{tilde(folder)}{where}: {count} skills, {tokens(chars)}")
+        for bundle, skills in sorted(bundles.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+            report.line(f"{bundle:<18} {len(skills):>3} skills  {tokens(sum(s for _, s in skills))}", 6)
+        if real == shared and (AGENTS_DIR / "skills").is_dir():
+            compare_persona(report, bundles)
+
+
+def compare_persona(report, bundles):
+    persona, wanted = persona_bundles()
+    if persona is None:
+        return
+    linked = set(bundles) - {"local", "linked elsewhere"}
+    extra = sorted(linked - set(wanted))
+    missing = sorted(set(wanted) - linked)
+    skills_add = AGENTS_DIR / "scripts" / "skills-add"
+    if extra:
+        chars = sum(s for b in extra for _, s in bundles[b])
+        report.trim(
+            f"{plural(len(extra), 'skill bundle')} beyond the {persona} persona cost {tokens(chars)} a session",
+            f"skill-drop {' '.join(extra)}",
+            run([str(skills_add), "-D", *extra]) if skills_add.is_file() else None)
+    if missing:
+        report.fix(f"{plural(len(missing), 'skill bundle')} the {persona} persona asks for are not linked",
+                   f"skills-add {' '.join(missing)}",
+                   run([str(skills_add), *missing]) if skills_add.is_file() else None)
+    if not extra and not missing:
+        report.ok(f"linked bundles match the {persona} persona")
+
+
+# Plugins ------------------------------------------------------------------
+
+
+def plugin_contents(root):
+    root = Path(root)
+    skills = sum(len(list(root.glob(p))) for p in ("SKILL.md", "skills/*/SKILL.md", "commands/*.md"))
+    servers = (read_json(root / ".mcp.json") or {}).get("mcpServers", {})
+    return skills, servers if isinstance(servers, dict) else {}
+
+
+def plugin_name(root):
+    meta = read_json(Path(root) / ".claude-plugin" / "plugin.json") or {}
+    return meta.get("name") or Path(root).name
+
+
+def claude_plugins():
+    """(name, source, root, install key) for every installed and synced Claude Code plugin."""
+    found = []
+    installed = read_json(HOME / ".claude" / "plugins" / "installed_plugins.json") or {}
+    for key, entries in (installed.get("plugins") or {}).items():
+        entries = [e for e in (entries if isinstance(entries, list) else [entries])
+                   if isinstance(e, dict) and e.get("installPath") and Path(e["installPath"]).is_dir()]
+        if entries:
+            found.append((key.split("@")[0], "installed", Path(entries[-1]["installPath"]), key))
+    for root in sorted((HOME / ".claude" / "plugins" / "synced").glob("*/*/.claude-plugin")):
+        found.append((plugin_name(root.parent), "claude.ai", root.parent, None))
+    return found
+
+
+def uninstall_plugin(key, root):
+    """Remove a locally installed plugin: its entry and its cached copy."""
+    index = HOME / ".claude" / "plugins" / "installed_plugins.json"
+    cache = HOME / ".claude" / "plugins" / "cache"
+
+    def apply(backup_dir):
+        if shutil.which("claude"):
+            subprocess.run(["claude", "plugin", "uninstall", key], check=True)
+            return
+        edit_json(index, lambda data: data.get("plugins", {}).pop(key, None))(backup_dir)
+        folder = Path(root)
+        while folder.parent != cache and cache in folder.parents:
+            folder = folder.parent
+        if cache in folder.parents:
+            shutil.move(str(folder), str(backup_dir / f"plugin-cache-{folder.name}"))
+    return apply
+
+
+def check_plugins(report, plugins):
+    report.section("Claude Code plugins")
+    report.stats["plugins"] = len(plugins)
+    if not plugins:
+        report.note("none installed")
+        return
+    sources = {}
+    for name, source, root, key in plugins:
+        skills, servers = plugin_contents(root)
+        extra = f", {plural(len(servers), 'MCP server')}" if servers else ""
+        report.ok(f"{name} ({source}): {plural(skills, 'skill')}{extra}")
+        sources.setdefault(name, {})[source] = (key, root)
+    for name, found in sorted(sources.items()):
+        if "installed" in found and "claude.ai" in found:
+            key, root = found["installed"]
+            report.trim(f"Plugin {name} loads twice: installed here and synced from claude.ai",
+                        f"claude plugin uninstall {key}", uninstall_plugin(key, root))
+
+
+# MCP servers --------------------------------------------------------------
+
+
+def toml_servers(path):
+    if not path.is_file():
+        return {}
+    if tomllib is None:
+        return None
+    try:
+        with path.open("rb") as handle:
+            return tomllib.load(handle).get("mcp_servers", {})
+    except (OSError, ValueError):
+        return {}
+
+
+def collect_servers(apps, cwd, plugins):
+    """(app, file, scope, name, config) for every MCP server the apps would start."""
+    servers = []
+    if "claude" in apps:
+        state_file = HOME / ".claude.json"
+        state = read_json(state_file) or {}
+        for name, conf in (state.get("mcpServers") or {}).items():
+            servers.append(("claude", state_file, "user", name, conf))
+        project = (state.get("projects") or {}).get(str(cwd)) or {}
+        for name, conf in (project.get("mcpServers") or {}).items():
+            servers.append(("claude", state_file, "local", name, conf))
+        for name, conf in ((read_json(cwd / ".mcp.json") or {}).get("mcpServers") or {}).items():
+            servers.append(("claude", cwd / ".mcp.json", "project", name, conf))
+        for plugin, _source, root, _key in plugins:
+            for name, conf in plugin_contents(root)[1].items():
+                servers.append(("claude", root / ".mcp.json", f"plugin {plugin}", f"plugin:{plugin}:{name}", conf))
+    if "codex" in apps:
+        config = HOME / ".codex" / "config.toml"
+        codex = toml_servers(config)
+        if codex is None:
+            servers.append(("codex", config, "user", None, None))
+        for name, conf in (codex or {}).items():
+            servers.append(("codex", config, "user", name, conf))
+    if "cursor" in apps:
+        for path in (HOME / ".cursor" / "mcp.json", cwd / ".cursor" / "mcp.json"):
+            for name, conf in ((read_json(path) or {}).get("mcpServers") or {}).items():
+                servers.append(("cursor", path, "user", name, conf))
+    return servers
+
+
+def literal_secrets(conf):
+    """Names of headers and env values that hold a secret written out, not a variable."""
+    found = []
+    for field in ("headers", "env", "http_headers"):
+        values = conf.get(field)
+        if not isinstance(values, dict):
+            continue
+        for key, value in values.items():
+            if not isinstance(value, str) or not value.strip() or "$" in value:
+                continue
+            if SECRET_KEY.search(key) or SECRET_VALUE.search(value):
+                found.append((field, key))
+    return found
+
+
+def server_problem(conf):
+    """Why a server cannot start, or None."""
+    command = conf.get("command")
+    if isinstance(command, str) and command:
+        if re.match(r"https?://", command):
+            return "url"
+        if "/" in command or command.startswith("~"):
+            path = Path(os.path.expanduser(command))
+            if not (path.is_file() and os.access(path, os.X_OK)):
+                return f"{command} is missing"
+        elif shutil.which(command) is None:
+            return f"{command} is not installed"
+        for arg in conf.get("args") or []:
+            if isinstance(arg, str) and arg.startswith(("/", "~/")) and not Path(os.path.expanduser(arg)).exists():
+                return f"{arg} is missing"
+        return None
+    if not (conf.get("url") or conf.get("serverUrl")):
+        return "it has neither a command nor a url"
+    return None
+
+
+def json_servers_path(app, scope, cwd):
+    if app == "claude" and scope == "local":
+        return ["projects", str(cwd), "mcpServers"]
+    return ["mcpServers"]
+
+
+def pop_server(keys, name):
+    def change(data):
+        for key in keys:
+            data = data.get(key, {})
+        data.pop(name, None)
+    return change
+
+
+def remove_server(app, file, scope, name, cwd):
+    """(todo, apply) that removes a server from its app's config."""
+    if app == "claude":
+        todo = f"claude mcp remove {name} -s {scope}"
+        if shutil.which("claude"):
+            return todo, run(["claude", "mcp", "remove", name, "-s", scope])
+        return todo, edit_json(file, pop_server(json_servers_path(app, scope, cwd), name))
+    if app == "codex":
+        if shutil.which("codex"):
+            return f"codex mcp remove {name}", run(["codex", "mcp", "remove", name])
+        return f"delete [mcp_servers.{name}] from {tilde(file)}", drop_toml_table(file, name)
+    return f"delete \"{name}\" from {tilde(file)}", edit_json(file, pop_server(["mcpServers"], name))
+
+
+def command_to_url(file, name):
+    def change(data):
+        conf = data["mcpServers"][name]
+        conf["url"] = conf.pop("command")
+        conf.pop("args", None)
+    return edit_json(file, change)
+
+
+def secret_todo(app, file, field, key):
+    var = "MCP_TOKEN" if key.lower() == "authorization" else re.sub(r"[^A-Z0-9]", "_", key.upper())
+    ref = {"claude": f"${{{var}}}", "cursor": f"${{env:{var}}}"}.get(app)
+    if ref is None:
+        return f"rotate it, then name an environment variable instead (bearer_token_env_var = \"{var}\")"
+    prefix = "Bearer " if key.lower() == "authorization" else ""
+    return f"rotate it, set {field}.{key} to \"{prefix}{ref}\", and export {var} from your shell startup"
+
+
+def check_servers(report, apps, cwd, plugins):
+    report.section("MCP servers (each one's tool names are in every session)")
+    needs_auth = read_json(HOME / ".claude" / "mcp-needs-auth-cache.json") or {}
+    waiting = {}
+    seen = set()
+    for app, file, scope, name, conf in collect_servers(apps, cwd, plugins):
+        if name is None:
+            report.note(f"{app}: {tilde(file)} needs Python 3.11 to read; skipped")
+            continue
+        if (app, name) in seen or not isinstance(conf, dict):
+            continue
+        seen.add((app, name))
+        report.stats["servers"] = report.stats.get("servers", 0) + 1
+        label = f"{app}: {name}"
+        if conf.get("enabled") is False or conf.get("disabled") is True:
+            report.note(f"{label}: turned off")
+            continue
+        if conf.get("type") in ("http", "sse") and not conf.get("url") and not conf.get("command"):
+            report.note(f"{label}: a claude.ai connector fills in its url")
+            continue
+        problem = server_problem(conf)
+        plugin = scope[7:] if scope.startswith("plugin ") else None
+        if problem and plugin:
+            report.note(f"{label}: {problem}; the {plugin} plugin ships it that way")
+        elif problem == "url":
+            report.fix(f"{app.capitalize()}'s {name} MCP server can't start: its URL is in \"command\"",
+                       f"in {tilde(file)}, rename \"command\" to \"url\"",
+                       command_to_url(file, name) if app == "cursor" or file.suffix == ".json" else None)
+        elif problem:
+            todo, apply = remove_server(app, file, scope, name, cwd)
+            report.fix(f"{app.capitalize()}'s {name} MCP server can't start: {problem}", todo, apply)
+        elif app == "claude" and name in needs_auth:
+            waiting.setdefault(plugin or tilde(file), []).append(name)
+        else:
+            report.ok(f"{label} ({scope}): {'remote' if conf.get('url') or conf.get('serverUrl') else 'local'}")
+        for field, key in literal_secrets(conf):
+            title = f"{app.capitalize()}'s {name} MCP server has a token written into {tilde(file)}"
+            if others_can_read(file):
+                report.fix(title + ", and other users can read the file", f"chmod 600 {tilde(file)}",
+                           lambda _b, file=file: os.chmod(file, 0o600))
+            report.fix(title, secret_todo(app, tilde(file), field, key))
+    if waiting:
+        count = sum(len(v) for v in waiting.values())
+        for where, names in waiting.items():
+            report.note(f"waiting for sign-in in {where}: {', '.join(n.rsplit(':', 1)[-1] for n in names)}")
+        report.trim(f"{plural(count, 'MCP server')} from plugins wait for a sign-in",
+                    f"turn off the plugins you don't use in Claude's settings: {', '.join(waiting)}")
+
+
+# Settings -----------------------------------------------------------------
+
+
+def check_settings(report):
+    report.section("Claude Code settings")
+    settings = read_json(HOME / ".claude" / "settings.json") or {}
+    env = settings.get("env") or {}
+    for flag in sorted(k for k, v in env.items() if "EXPERIMENTAL" in k and str(v) not in ("", "0", "false")):
+        report.note(f"{flag} is on in ~/.claude/settings.json")
+    if settings.get("outputStyle"):
+        report.note(f"output style: {settings['outputStyle']}")
+    if settings.get("agent"):
+        report.note(f"every session starts as the {settings['agent']} agent")
+
+
+# Main ---------------------------------------------------------------------
+
+
+def installed_apps():
+    return [app for app in APPS if (HOME / f".{app}").is_dir()]
+
+
+def summary(report, apps):
+    stats = report.stats
+    parts = [", ".join(apps)]
+    if "skills" in stats:
+        parts.append(f"{stats['skills']} skills ({tokens(stats['skill_chars'])})")
+    if "plugins" in stats:
+        parts.append(plural(stats["plugins"], "plugin"))
+    if "servers" in stats:
+        parts.append(plural(stats["servers"], "MCP server"))
+    return " · ".join(parts)
+
+
+def print_findings(report):
+    findings = sorted(report.findings, key=lambda f: f.kind != "fix")
+    print()
+    if not findings:
+        print(f"  {report.paint('32', 'Nothing to do.')}")
+        return findings
+    for number, finding in enumerate(findings, 1):
+        mark = report.paint("31", "fix ") if finding.kind == "fix" else report.paint("33", "trim")
+        auto = report.paint("2", "  [auto]") if finding.apply else ""
+        print(f"  {number:>2}  {mark}  {finding.title}")
+        print(f"            {report.paint('36', finding.todo)}{auto}")
+    return findings
+
+
+def ask(question):
+    try:
+        answer = input(question)
+    except EOFError:
+        print()
+        return False
+    return answer.strip().lower() in ("y", "yes")
+
+
+def apply_findings(report, findings, yes):
+    fixable = [(n, f) for n, f in enumerate(findings, 1) if f.apply]
+    if not fixable:
+        print("\n  Nothing here can be fixed automatically; each item above says what to do.")
+        return
+    if not yes and not sys.stdin.isatty():
+        print("\n  --fix asks before each fix and needs a terminal; --yes applies them all without asking.")
+        return
+    backup_dir = STATE_HOME / "ai-doctor" / time.strftime("%Y%m%d-%H%M%S")
+    print()
+    for number, finding in fixable:
+        if not yes and not ask(f"  {number:>2}  {finding.todo}? [y/N] "):
+            continue
+        try:
+            finding.apply(backup_dir)
+        except (OSError, RuntimeError, KeyError, subprocess.CalledProcessError) as error:
+            print(f"      {report.paint('31', 'failed')}: {error}")
+            continue
+        finding.done = True
+        print(f"      {report.paint('32', 'done')}")
+    if backup_dir.exists():
+        print(f"\n  Backups: {tilde(backup_dir)}")
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="ai-doctor",
+        description=__doc__.split("\n", 1)[0],
+        epilog=__doc__.split("\n", 1)[1],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--fix", action="store_true", help="apply the [auto] fixes, asking before each")
+    parser.add_argument("--yes", action="store_true", help="with --fix, apply them all without asking")
+    parser.add_argument("-v", "--verbose", action="store_true", help="also list everything checked")
+    parser.add_argument("--app", action="append", choices=APPS, help="check only this app (repeatable)")
+    parser.add_argument("--no-color", action="store_true", help="plain output")
+    args = parser.parse_args(argv)
+
+    apps = args.app or installed_apps()
+    if not apps:
+        print("ai-doctor: no Claude Code, Codex, or Cursor config in this home directory")
+        return 0
+    color = sys.stdout.isatty() and not args.no_color and not os.environ.get("NO_COLOR")
+    report = Report(color, args.verbose)
+    cwd = Path.cwd()
+
+    plugins = claude_plugins() if "claude" in apps else []
+    check_instructions(report, apps, cwd)
+    check_skills(report, apps)
+    if "claude" in apps:
+        check_plugins(report, plugins)
+    check_servers(report, apps, cwd, plugins)
+    if "claude" in apps:
+        check_settings(report)
+
+    if args.verbose:
+        print()
+    print(report.paint("1", f"ai-doctor: {summary(report, apps)}"))
+    findings = print_findings(report)
+    if args.fix and findings:
+        apply_findings(report, findings, args.yes)
+        return 1 if any(f.kind == "fix" and not getattr(f, "done", False) for f in findings) else 0
+    auto = [str(n) for n, f in enumerate(findings, 1) if f.apply]
+    if auto:
+        print(f"\n  Run {report.paint('1', 'ai-doctor --fix')} to do {', '.join(auto)} (asks before each). "
+              "-v shows everything checked.")
+    return 1 if any(f.kind == "fix" for f in findings) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

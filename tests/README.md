@@ -69,6 +69,13 @@ This is process-level isolation, not a real container or VM.
 
 ## Test Files
 
+[`ai_doctor.bats`](ai_doctor.bats)
+
+- Runs `ai-doctor` (in `stow/tools/.local/bin`) against a scratch home with fixture Claude Code, Codex, and Cursor config, a fixture agents checkout with a logging `skills-add`, and a fixture persona; only `python3` is on PATH, so no real `claude` or `codex` runs
+- Verifies the default output (a summary line, then only the numbered fixes and trims, or `Nothing to do.`) and `-v` (instruction sizes, skill sizes from names and descriptions only, folded lines too, experimental flags and a default agent)
+- Verifies each finding and its `--fix --yes`: bundles beyond or missing from the persona's `skills=` (through `skills-add`), a broken skill link removed, Claude servers that can't start removed from `~/.claude.json` (user and project scope, other keys kept, the original backed up once), a missing folder reported rather than every file under it, a Cursor URL moved from `command` to `url` and the file made private while its token, never printed, stays a fix, a Codex table and its sub-tables removed (turned-off servers kept; needs Python 3.11), and a plugin both installed and synced removed with its cache while the claude.ai copy stays; servers waiting for sign-in are one trim and connector placeholders none
+- Verifies `--fix` on closed stdin and answering no change nothing, `--help`, a bad `--app`, a home with no AI apps, the exit status, and that a run without `--fix` through its stow link changes nothing
+
 [`bootstrap.bats`](bootstrap.bats)
 
 - Validates `scripts/bootstrap/linux/apt-packages.txt`
