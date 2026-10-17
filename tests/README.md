@@ -150,6 +150,11 @@ This is process-level isolation, not a real container or VM.
 - Tests error handling when `HOME` is unset
 - Runs an isolated integration test for [`install.sh`](../install.sh) with sandboxed home and mocked external commands
 
+[`ph.bats`](ph.bats)
+
+- Runs `ph` (in `stow/personal/.local/bin`) against a mocked `curl` that records each request and answers from fixtures
+- Verifies the login (password on stdin, never in argv; the saved password file; a wrong or missing password) and the logout on exit, blocking on and off with and without a timer (a bad duration fails before any request), allow and deny adds with comments and regexes, URL-encoded removals, API errors, the list, `check`, and the query log by client IP or name with control characters stripped, `--json`, and `api`
+
 [`zsh.bats`](zsh.bats)
 
 - Checks the zsh startup files for the XDG layout and the Homebrew bootstrap, and runs the `na` alias helper and `lg` (following lazygit to the directory it left in)

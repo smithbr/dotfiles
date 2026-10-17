@@ -1,0 +1,390 @@
+#!/usr/bin/env bash
+# Administer a Pi-hole v6 from another machine through its REST API, as the
+# web admin at PIHOLE_URL/admin/ does: blocking on and off, allow and deny
+# lists, and the query log by client.
+set -euo pipefail
+
+PIHOLE_URL="${PIHOLE_URL:-https://pihole.bsm.sh}"
+PIHOLE_URL="${PIHOLE_URL%/}"
+PIHOLE_URL="${PIHOLE_URL%/admin}"
+PASSWORD_FILE="${XDG_CONFIG_HOME:-${HOME}/.config}/ph/password"
+KEYCHAIN_SERVICE="ph"
+
+usage() {
+    cat <<'EOF'
+Usage: ph [--json] COMMAND [ARGS]
+
+Administer a Pi-hole v6 over its API (default https://pihole.bsm.sh; set
+PIHOLE_URL for another, e.g. http://100.x.y.z over Tailscale).
+
+Commands:
+  status                    Blocking state and today's totals
+  enable                    Turn blocking on
+  disable [DURATION]        Turn blocking off, for DURATION if given (30s, 5m, 1h)
+  allow DOMAIN...           Add to the allow list (alias: whitelist)
+  deny DOMAIN...            Add to the deny list (aliases: block, blacklist)
+  unallow DOMAIN...         Remove from the allow list
+  undeny DOMAIN...          Remove from the deny list
+  list [allow|deny]         Show the allow and deny lists
+  check DOMAIN              Show which lists and blocklists match DOMAIN
+  blocked [CLIENT]          Recent blocked queries, optionally from one client
+  queries [CLIENT]          Recent queries, optionally from one client
+  top                       Top blocked domains and top clients
+  gravity                   Update the blocklists (pihole -g)
+  login                     Save the API password (Keychain on macOS)
+  open                      Open the web admin
+  api METHOD PATH [JSON]    Call any API endpoint, e.g. api GET /stats/summary
+
+Options:
+  -j, --json                Print the API's JSON instead of a table
+  -r, --regex               allow/deny/unallow/undeny: DOMAIN is a regex
+  -c, --comment TEXT        allow/deny: comment stored with the entry
+  -n, --count N             blocked/queries/top: how many rows (default 25)
+  -d, --domain PATTERN      blocked/queries: only domains matching (* wildcard)
+  -h, --help                Show this help
+
+CLIENT is an IP address or a client name as Pi-hole shows it.
+
+The password is PIHOLE_PASSWORD, else the one `ph login` saved. With
+two-factor auth on, use an app password (Settings > Web interface / API >
+Configure app password), which skips TOTP. Each run opens one API session and
+closes it on exit, so runs never use up Pi-hole's session slots.
+EOF
+}
+
+die() {
+    printf 'ph: %s\n' "$1" >&2
+    exit 1
+}
+
+JSON=false
+KIND=exact
+COMMENT=""
+COUNT=25
+DOMAIN_FILTER=""
+ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        -j|--json) JSON=true ;;
+        -r|--regex) KIND=regex ;;
+        -c|--comment) [[ $# -ge 2 ]] || die "$1 needs a value"; COMMENT="$2"; shift ;;
+        -n|--count) [[ $# -ge 2 && "$2" =~ ^[0-9]+$ ]] || die "$1 needs a number"; COUNT="$2"; shift ;;
+        -d|--domain) [[ $# -ge 2 ]] || die "$1 needs a value"; DOMAIN_FILTER="$2"; shift ;;
+        --) shift; ARGS+=("$@"); break ;;
+        -?*) die "unknown option: $1 (see ph --help)" ;;
+        *) ARGS+=("$1") ;;
+    esac
+    shift
+done
+[[ "${#ARGS[@]}" -gt 0 ]] || { usage >&2; exit 1; }
+COMMAND="${ARGS[0]}"
+ARGS=(${ARGS[@]+"${ARGS[@]:1}"})
+
+# --- password ---------------------------------------------------------------
+
+saved_password() {
+    if [[ -n "${PIHOLE_PASSWORD:-}" ]]; then
+        printf '%s' "${PIHOLE_PASSWORD}"
+    elif [[ "${OSTYPE}" == darwin* ]] && command -v security >/dev/null 2>&1 \
+        && security find-generic-password -s "${KEYCHAIN_SERVICE}" -a "${PIHOLE_URL}" -w 2>/dev/null; then
+        :
+    elif [[ -r "${PASSWORD_FILE}" ]]; then
+        cat "${PASSWORD_FILE}"
+    fi
+}
+
+cmd_login() {
+    local pw
+    [[ -r /dev/tty ]] || die "login needs a terminal; set PIHOLE_PASSWORD instead"
+    printf 'Pi-hole password or app password for %s: ' "${PIHOLE_URL}" >/dev/tty
+    IFS= read -rs pw </dev/tty || true
+    printf '\n' >/dev/tty
+    [[ -n "${pw}" ]] || die "no password entered"
+    PIHOLE_PASSWORD="${pw}"
+    open_session
+    if [[ "${OSTYPE}" == darwin* ]] && command -v security >/dev/null 2>&1; then
+        # -w last with no value makes security prompt, keeping the password
+        # out of argv; feed it the password twice on stdin.
+        printf '%s\n%s\n' "${pw}" "${pw}" \
+            | security add-generic-password -U -s "${KEYCHAIN_SERVICE}" -a "${PIHOLE_URL}" -w >/dev/null 2>&1 \
+            || die "could not save the password to the Keychain"
+        printf 'Saved to the login Keychain (service %s).\n' "${KEYCHAIN_SERVICE}"
+    else
+        mkdir -p "$(dirname "${PASSWORD_FILE}")"
+        (umask 077 && printf '%s' "${pw}" > "${PASSWORD_FILE}")
+        printf 'Saved to %s (mode 600).\n' "${PASSWORD_FILE}"
+    fi
+}
+
+# --- API --------------------------------------------------------------------
+
+WORK=""
+SID=""
+cleanup() {
+    if [[ -n "${SID}" ]]; then
+        curl -sS --max-time 5 -K "${WORK}/curl.cfg" -X DELETE -o /dev/null "${PIHOLE_URL}/api/auth" 2>/dev/null || true
+    fi
+    [[ -z "${WORK}" ]] || rm -rf "${WORK}"
+}
+
+prepare() {
+    command -v curl >/dev/null 2>&1 || die "curl is required"
+    command -v jq >/dev/null 2>&1 || die "jq is required (brew install jq, or apt install jq)"
+    WORK="$(mktemp -d)"
+    trap cleanup EXIT
+    # The session ID goes in a curl config file, not argv, so ps never shows it.
+    : > "${WORK}/curl.cfg"
+    chmod 600 "${WORK}/curl.cfg"
+}
+
+# The API's error message for a failed response in FILE.
+api_error() {
+    jq -r '[.error.message, .error.hint] | map(select(. != null and . != "")) | join(": ")' "$1" 2>/dev/null || true
+}
+
+# api METHOD PATH [JSON]: the response body on stdout; dies on a failure.
+api() {
+    local method="$1" path="$2" body="${3-}" code msg
+    local args=(-sS --max-time "${PH_TIMEOUT:-20}" -K "${WORK}/curl.cfg" -X "${method}"
+        -o "${WORK}/resp" -w '%{http_code}' "${PIHOLE_URL}/api${path}")
+    if [[ -n "${body}" ]]; then
+        code="$(printf '%s' "${body}" | curl "${args[@]}" -H 'Content-Type: application/json' --data-binary @-)" \
+            || die "cannot reach ${PIHOLE_URL} (on the tailnet?)"
+    else
+        code="$(curl "${args[@]}")" || die "cannot reach ${PIHOLE_URL} (on the tailnet?)"
+    fi
+    case "${code}" in
+        2??) [[ ! -s "${WORK}/resp" ]] || cat "${WORK}/resp" ;;
+        *)
+            msg="$(api_error "${WORK}/resp")"
+            die "${method} ${path}: HTTP ${code}${msg:+: ${msg}}"
+            ;;
+    esac
+}
+
+open_session() {
+    local pw code msg
+    [[ -n "${WORK}" ]] || prepare
+    pw="$(saved_password)"
+    [[ -n "${pw}" ]] || die "no password: run 'ph login' or set PIHOLE_PASSWORD"
+    # The password reaches jq and curl on stdin, never in argv.
+    code="$(printf '%s' "${pw}" | jq -Rsc '{password: .}' \
+        | curl -sS --max-time "${PH_TIMEOUT:-20}" -X POST -H 'Content-Type: application/json' \
+            --data-binary @- -o "${WORK}/resp" -w '%{http_code}' "${PIHOLE_URL}/api/auth")" \
+        || die "cannot reach ${PIHOLE_URL} (on the tailnet?)"
+    if [[ "${code}" != 2?? ]]; then
+        msg="$(api_error "${WORK}/resp")"
+        [[ "${code}" != 401 ]] || msg="wrong password${msg:+ (${msg})}"
+        die "login failed: HTTP ${code}${msg:+: ${msg}}"
+    fi
+    if [[ "$(jq -r '.session.totp // false' "${WORK}/resp")" == true && "$(jq -r '.session.valid' "${WORK}/resp")" != true ]]; then
+        die "two-factor auth is on: use an app password with 'ph login'"
+    fi
+    SID="$(jq -r '.session.sid // empty' "${WORK}/resp" | tr -cd 'A-Za-z0-9+/=_-')"
+    # No SID with a valid session means Pi-hole has no password set.
+    [[ -z "${SID}" ]] || printf 'header = "X-FTL-SID: %s"\n' "${SID}" > "${WORK}/curl.cfg"
+}
+
+# --- output helpers ---------------------------------------------------------
+
+# Strips control characters from strings the network chose (domain and client
+# names), so a crafted query cannot write escape sequences to the terminal.
+JQ_CLEAN='def clean: tostring | gsub("[\u0000-\u001f\u007f-\u009f]"; "");'
+
+# Seconds from 30, 30s, 5m, 2h, or 1d.
+duration_seconds() {
+    local n="${1%[smhd]}" unit="${1##*[0-9]}"
+    [[ "${n}" =~ ^[0-9]+$ ]] || die "bad duration: $1 (try 30s, 5m, 1h)"
+    case "${unit}" in
+        ''|s) printf '%s' "${n}" ;;
+        m) printf '%s' "$((n * 60))" ;;
+        h) printf '%s' "$((n * 3600))" ;;
+        d) printf '%s' "$((n * 86400))" ;;
+        *) die "bad duration: $1 (try 30s, 5m, 1h)" ;;
+    esac
+}
+
+urlencode() {
+    jq -rn --arg s "$1" '$s | @uri'
+}
+
+# --- commands ---------------------------------------------------------------
+
+show_blocking() {
+    jq -r 'if .timer then "Blocking: \(.blocking) (for \(.timer | floor)s more)" else "Blocking: \(.blocking)" end'
+}
+
+cmd_status() {
+    local blocking summary
+    blocking="$(api GET /dns/blocking)"
+    summary="$(api GET /stats/summary)"
+    if [[ "${JSON}" == true ]]; then
+        jq -n --argjson b "${blocking}" --argjson s "${summary}" '{blocking: $b, summary: $s}'
+        return
+    fi
+    printf '%s\n' "${blocking}" | show_blocking
+    printf '%s\n' "${summary}" | jq -r '
+        "Queries today: \(.queries.total)  blocked: \(.queries.blocked) (\(.queries.percent_blocked * 10 | round / 10)%)",
+        "Active clients: \(.clients.active)  domains on blocklists: \(.gravity.domains_being_blocked)",
+        "Blocklists updated: \(if .gravity.last_update then (.gravity.last_update | strflocaltime("%Y-%m-%d %H:%M")) else "never" end)"'
+}
+
+set_blocking() {
+    local body
+    body="$(jq -nc --argjson on "$1" --argjson timer "${2:-null}" '{blocking: $on, timer: $timer}')"
+    api POST /dns/blocking "${body}" | if [[ "${JSON}" == true ]]; then cat; else show_blocking; fi
+}
+
+cmd_domains_add() {
+    local list="$1" body
+    shift
+    [[ $# -gt 0 ]] || die "${COMMAND} needs at least one domain"
+    body="$(jq -nc --arg c "${COMMENT}" '{domain: $ARGS.positional, comment: (if $c == "" then null else $c end), enabled: true}' --args "$@")"
+    api POST "/domains/${list}/${KIND}" "${body}" | if [[ "${JSON}" == true ]]; then cat; else
+        jq -r --arg list "${list}" --arg kind "${KIND}" "${JQ_CLEAN}"'
+            (.processed.success[]? | "Added to \($list) (\($kind)): \(.item | clean)"),
+            (.processed.errors[]? | "Not added: \(.item | clean): \(.error | clean)")'
+    fi
+}
+
+cmd_domains_remove() {
+    local list="$1" domain
+    shift
+    [[ $# -gt 0 ]] || die "${COMMAND} needs at least one domain"
+    for domain in "$@"; do
+        api DELETE "/domains/${list}/${KIND}/$(urlencode "${domain}")" >/dev/null
+        [[ "${JSON}" == true ]] || printf 'Removed from %s (%s): %s\n' "${list}" "${KIND}" "${domain}"
+    done
+}
+
+cmd_list() {
+    local which="${1:-}" path=/domains
+    case "${which}" in
+        '') ;;
+        allow|deny) path="/domains/${which}" ;;
+        *) die "list takes allow or deny, not ${which}" ;;
+    esac
+    api GET "${path}" | if [[ "${JSON}" == true ]]; then cat; else
+        jq -r "${JQ_CLEAN}"'
+            if (.domains | length) == 0 then "(none)" else
+            .domains | sort_by(.type, .kind, .domain)[]
+            | "\(.type)\t\(.kind)\t\(if .enabled then "" else "off" end)\t\(.domain | clean)\t\(.comment // "" | clean)" end' \
+        | awk -F'\t' 'NF == 1 { print; next } { printf "%-6s %-6s %-4s %-40s %s\n", $1, $2, $3, $4, $5 }'
+    fi
+}
+
+cmd_check() {
+    [[ $# -eq 1 ]] || die "check takes one domain"
+    api GET "/search/$(urlencode "$1")?partial=false&N=20" | if [[ "${JSON}" == true ]]; then cat; else
+        jq -r --arg d "$1" "${JQ_CLEAN}"'
+            .search as $s
+            | ([$s.domains[]? | "  \(.type) list (\(.kind)\(if .enabled then "" else ", disabled" end)): \(.domain | clean)\(if .comment then "  # \(.comment | clean)" else "" end)"]
+               + [$s.gravity[]? | "  \(if .type == "block" then "blocklist" else "allowlist" end): \(.address | clean)"]) as $lines
+            | if ($lines | length) == 0 then "\($d): on no list, so not blocked"
+              else "\($d):", $lines[] end'
+    fi
+}
+
+# queries_path BLOCKED_ONLY CLIENT: the /queries URL with its filters.
+queries_path() {
+    local path="/queries?length=${COUNT}" client="${2:-}"
+    [[ "$1" != true ]] || path+="&upstream=blocklist"
+    if [[ -n "${client}" ]]; then
+        if [[ "${client}" =~ ^[0-9.]+$ || "${client}" == *:* ]]; then
+            path+="&client_ip=$(urlencode "${client}")"
+        else
+            path+="&client_name=$(urlencode "${client}")"
+        fi
+    fi
+    [[ -z "${DOMAIN_FILTER}" ]] || path+="&domain=$(urlencode "${DOMAIN_FILTER}")"
+    printf '%s' "${path}"
+}
+
+cmd_queries() {
+    local blocked="$1"
+    shift
+    [[ $# -le 1 ]] || die "${COMMAND} takes at most one client"
+    api GET "$(queries_path "${blocked}" "${1:-}")" | if [[ "${JSON}" == true ]]; then cat; else
+        jq -r "${JQ_CLEAN}"'
+            if (.queries | length) == 0 then "(no matching queries)" else
+            .queries[]
+            | "\(.time | floor | strflocaltime("%m-%d %H:%M:%S"))\t\(.client.name // .client.ip | clean)\t\(.type // "" | clean)\t\(.status // "" | clean)\t\(.domain | clean)" end' \
+        | awk -F'\t' 'NF == 1 { print; next } { printf "%-14s  %-24s %-6s %-16s %s\n", $1, $2, $3, $4, $5 }'
+    fi
+}
+
+cmd_top() {
+    local domains clients
+    domains="$(api GET "/stats/top_domains?blocked=true&count=${COUNT}")"
+    clients="$(api GET "/stats/top_clients?count=${COUNT}")"
+    if [[ "${JSON}" == true ]]; then
+        jq -n --argjson d "${domains}" --argjson c "${clients}" '{top_blocked: $d, top_clients: $c}'
+        return
+    fi
+    printf 'Top blocked domains:\n'
+    printf '%s\n' "${domains}" | jq -r "${JQ_CLEAN}"'.domains[]? | "\(.count)\t\(.domain | clean)"' \
+        | awk -F'\t' '{ printf "  %7s  %s\n", $1, $2 }'
+    printf '\nTop clients:\n'
+    printf '%s\n' "${clients}" | jq -r "${JQ_CLEAN}"'.clients[]? | "\(.count)\t\(.ip | clean)\t\(.name // "" | clean)"' \
+        | awk -F'\t' '{ printf "  %7s  %-16s %s\n", $1, $2, $3 }'
+}
+
+cmd_gravity() {
+    # Streams pihole -g's progress as it runs; it can take a minute or two.
+    curl -sS --no-buffer --fail-with-body --max-time "${PH_GRAVITY_TIMEOUT:-600}" \
+        -K "${WORK}/curl.cfg" -X POST "${PIHOLE_URL}/api/action/gravity" \
+        | tr -d '\r' | sed -e 's/\x1b\[[0-9;]*[A-Za-z]//g'
+}
+
+cmd_api() {
+    [[ $# -ge 2 && $# -le 3 ]] || die "usage: ph api METHOD PATH [JSON]"
+    local path="$2"
+    path="/${path#/}"
+    path="${path#/api}"
+    api "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')" "${path}" "${3-}"
+    printf '\n'
+}
+
+cmd_open() {
+    local url="${PIHOLE_URL}/admin/"
+    if command -v open >/dev/null 2>&1 && [[ "${OSTYPE}" == darwin* ]]; then
+        open "${url}"
+    elif command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "${url}"
+    else
+        printf '%s\n' "${url}"
+    fi
+}
+
+case "${COMMAND}" in
+    login) prepare; cmd_login; exit 0 ;;
+    open) cmd_open; exit 0 ;;
+    status|enable|disable|allow|whitelist|deny|block|blacklist|unallow|undeny|list|check|blocked|queries|top|gravity|api) ;;
+    *) die "unknown command: ${COMMAND} (see ph --help)" ;;
+esac
+
+# Checked before logging in: a bad duration must never become a permanent disable.
+TIMER=""
+if [[ "${COMMAND}" == disable ]]; then
+    [[ "${#ARGS[@]}" -le 1 ]] || die "disable takes at most one duration"
+    [[ "${#ARGS[@]}" -eq 0 ]] || TIMER="$(duration_seconds "${ARGS[0]}")"
+fi
+
+open_session
+case "${COMMAND}" in
+    status) cmd_status ;;
+    enable) set_blocking true ;;
+    disable) set_blocking false "${TIMER}" ;;
+    allow|whitelist) cmd_domains_add allow ${ARGS[@]+"${ARGS[@]}"} ;;
+    deny|block|blacklist) cmd_domains_add deny ${ARGS[@]+"${ARGS[@]}"} ;;
+    unallow) cmd_domains_remove allow ${ARGS[@]+"${ARGS[@]}"} ;;
+    undeny) cmd_domains_remove deny ${ARGS[@]+"${ARGS[@]}"} ;;
+    list) [[ "${#ARGS[@]}" -le 1 ]] || die "list takes allow or deny"; cmd_list ${ARGS[@]+"${ARGS[@]}"} ;;
+    check) cmd_check ${ARGS[@]+"${ARGS[@]}"} ;;
+    blocked) cmd_queries true ${ARGS[@]+"${ARGS[@]}"} ;;
+    queries) cmd_queries false ${ARGS[@]+"${ARGS[@]}"} ;;
+    top) cmd_top ;;
+    gravity) cmd_gravity ;;
+    api) cmd_api ${ARGS[@]+"${ARGS[@]}"} ;;
+esac
