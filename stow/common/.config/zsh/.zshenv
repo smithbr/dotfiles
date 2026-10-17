@@ -53,6 +53,9 @@ export NPM_CONFIG_CACHE="${XDG_CACHE_HOME}/npm"
 export NPM_CONFIG_INIT_MODULE="${XDG_CONFIG_HOME}/npm/npm-init.js"
 export NPM_CONFIG_USERCONFIG="${XDG_CONFIG_HOME}/npm/npmrc"
 
+# pip refuses to install outside a virtualenv; a Python tool you keep goes
+# through `uv tool install` (homebrew/README.md, "Where a tool comes from").
+export PIP_REQUIRE_VIRTUALENV=1
 
 # bun's global packages and their commands (domain-check-mcp, say). Without
 # BUN_INSTALL, bun puts them under XDG_CACHE_HOME, where a cache cleanup would

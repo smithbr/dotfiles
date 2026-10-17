@@ -43,3 +43,21 @@ na() {
     alias "${name}=${value}"
     echo "added: alias ${name}=\"${escaped}\""
 }
+
+# npm: refuse global installs, which bypass the Brewfiles; use npx or bunx, or
+# a Brewfile (homebrew/README.md, "Where a tool comes from"). Global uninstalls
+# and everything else pass through. NPM_ALLOW_GLOBAL=1 allows one.
+npm() {
+    local arg global=false install=false
+    for arg in "$@"; do
+        case "${arg}" in
+            -g | --global | --location=global) global=true ;;
+            i | in | ins | inst | insta | instal | install | isnt | isnta | isntal | isntall | add | update | up | upgrade | link | ln) install=true ;;
+        esac
+    done
+    if [[ "${global}" == true && "${install}" == true && -z "${NPM_ALLOW_GLOBAL:-}" ]]; then
+        printf 'npm: global installs are off on this machine; use npx or bunx, or add it to a Brewfile (NPM_ALLOW_GLOBAL=1 to override)\n' >&2
+        return 1
+    fi
+    command npm "$@"
+}

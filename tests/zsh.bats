@@ -301,3 +301,40 @@ MOCK
     teardown_tmpdir
 }
 
+@test "npm refuses global installs unless NPM_ALLOW_GLOBAL is set, and passes everything else through" {
+    command -v zsh >/dev/null || skip "zsh not installed"
+    setup_tmpdir
+    mkdir -p "${TEST_TMPDIR}/bin"
+    printf '#!/bin/sh\necho "npm $*"\n' > "${TEST_TMPDIR}/bin/npm"
+    chmod +x "${TEST_TMPDIR}/bin/npm"
+    local fns="${PROJECT_ROOT}/stow/common/.config/shell/functions"
+    local path="${TEST_TMPDIR}/bin:/usr/bin:/bin"
+
+    run env -i PATH="${path}" zsh -fc "source '${fns}'; npm install -g left-pad"
+    assert_failure
+    assert_output --partial "global installs are off"
+    run env -i PATH="${path}" zsh -fc "source '${fns}'; npm --location=global i left-pad"
+    assert_failure
+    run env -i PATH="${path}" NPM_ALLOW_GLOBAL=1 zsh -fc "source '${fns}'; npm i -g left-pad"
+    assert_success
+    assert_output "npm i -g left-pad"
+    run env -i PATH="${path}" zsh -fc "source '${fns}'; npm uninstall -g left-pad"
+    assert_output "npm uninstall -g left-pad"
+    run env -i PATH="${path}" zsh -fc "source '${fns}'; npm install left-pad"
+    assert_output "npm install left-pad"
+    teardown_tmpdir
+}
+
+@test "non-interactive zsh makes pip refuse to install outside a virtualenv" {
+    command -v zsh >/dev/null || skip "zsh not installed"
+    setup_tmpdir
+    local home="${TEST_TMPDIR}/home" zdotdir="${TEST_TMPDIR}/home/.config/zsh"
+    mkdir -p "${zdotdir}"
+    cp "${PROJECT_ROOT}/stow/common/.config/zsh/.zshenv" "${zdotdir}/"
+
+    run env -i HOME="${home}" ZDOTDIR="${zdotdir}" PATH="/usr/bin:/bin" \
+        zsh -c 'printf "%s\n" "${PIP_REQUIRE_VIRTUALENV}"'
+    assert_success
+    assert_output "1"
+    teardown_tmpdir
+}
