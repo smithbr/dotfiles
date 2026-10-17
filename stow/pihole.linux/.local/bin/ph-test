@@ -221,13 +221,13 @@ check_deps() {
             fail "Missing dependency: ${cmd}"
             case "${cmd}" in
                 dig)
-                    fix "sudo apt install dnsutils   # Debian/Ubuntu"
+                    fix "sudo apt install dnsutils"
                     fix "sudo dnf install bind-utils  # Fedora/RHEL" ;;
                 unbound-control|unbound-checkconf)
-                    fix "sudo apt install unbound     # Debian/Ubuntu"
+                    fix "sudo apt install unbound"
                     fix "sudo dnf install unbound     # Fedora/RHEL" ;;
                 ss)
-                    fix "sudo apt install iproute2    # Debian/Ubuntu"
+                    fix "sudo apt install iproute2"
                     fix "sudo dnf install iproute     # Fedora/RHEL" ;;
             esac
             missing=1

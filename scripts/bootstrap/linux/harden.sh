@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Harden a fresh Debian/Ubuntu server or VPS before install.sh runs on it:
+# Harden a fresh Debian server or VPS before install.sh runs on it:
 #   - an admin user with sudo and the SSH keys you logged in with
 #   - key-only SSH, root login off, only that user allowed
 #   - Tailscale, so SSH can live on the tailnet
@@ -167,7 +167,7 @@ preflight() {
         fi
         log_warn "Not root: the dry run may miss files only root can read"
     fi
-    command -v apt-get >/dev/null 2>&1 || die "Needs Debian or Ubuntu (apt-get not found)."
+    command -v apt-get >/dev/null 2>&1 || die "Needs Debian (apt-get not found)."
     command -v systemctl >/dev/null 2>&1 || die "Needs systemd (systemctl not found)."
 }
 
@@ -190,7 +190,7 @@ install_packages() {
 
 # The admin user gets the keys of whoever logged in: root's, or the cloud
 # image's default user when this runs under sudo (AWS root keys only print
-# "log in as ubuntu"). Nothing about SSH changes unless the user ends up with
+# "log in as admin"). Nothing about SSH changes unless the user ends up with
 # a key, so this cannot lock you out.
 setup_admin_user() {
     local source_user="${SUDO_USER:-root}"
@@ -280,8 +280,8 @@ ssh_port() {
     printf '%s\n' "${port:-22}"
 }
 
-# sshd keeps the first value it reads for each setting, and Debian and Ubuntu
-# read sshd_config.d before the rest, so a 00- file beats cloud-init's
+# sshd keeps the first value it reads for each setting, and Debian
+# reads sshd_config.d before the rest, so a 00- file beats cloud-init's
 # 50-cloud-init.conf (which turns password logins back on).
 harden_ssh() {
     local config_dir="${ROOT_PREFIX}/etc/ssh/sshd_config.d"

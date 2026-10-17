@@ -43,7 +43,8 @@ Unrecognized arguments and everything after `--` are passed to `stow` through `s
 - Keep repeated installs safe: avoid duplicate configuration entries, needless reinstalls, or overwriting local overrides. For changes to installation state, check both a fresh setup and an already-configured setup.
 - Preserve `install.sh`'s dry-run and skip flags and argument forwarding to stow. Dry-run must not install packages, change the login shell, or write destination files.
 - A closed stdin or absent TTY must not hang bootstrap. It keeps the saved choices or, on a fresh machine, the defaults: the optional installs that are on by default run, and nothing off by default or only offered (`# default: off`, `roles_optional=`, hardening) is opted into. Exercise EOF explicitly when changing prompts; account for `set -e` when `read` fails. Prompts belong in the preflight of `install.sh` (through `choose_one` and `choose_many` in `scripts/common.sh`), not inside a step; a step that must wait for something polls with a timeout (the macOS CLT installer) rather than reading a key.
-- Shared paths must work on macOS and Debian/Ubuntu. Check BSD/GNU utility differences and the shell available at the affected install stage before adding flags or shell features. Keep OS-specific operations in their platform branch.
+- Support only the latest OS release and the one before it. Let older releases degrade rather than adding workarounds for them.
+- Shared paths must work on macOS and Debian. Check BSD/GNU utility differences and the shell available at the affected install stage before adding flags or shell features. Keep OS-specific operations in their platform branch.
 - Reuse `scripts/common.sh` for logging, privilege handling, and command presentation. Required command failures must remain failures through wrappers and pipelines, with useful diagnostics.
 
 ## Verification

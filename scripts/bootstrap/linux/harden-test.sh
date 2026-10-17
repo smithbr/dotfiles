@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Check whether a Debian/Ubuntu box is hardened the way harden.sh leaves it,
+# Check whether a Debian box is hardened the way harden.sh leaves it,
 # changing nothing: key-only SSH with no root login and one allowed user, an
 # admin user with sudo and keys, Tailscale connected, ufw denying all inbound
 # but the tailnet, unattended upgrades, and what is pending (upgrades, a
@@ -117,7 +117,7 @@ home_of() {
 }
 
 # sshd's effective config when sshd -T works (root), else the config files
-# the way sshd reads them: Debian and Ubuntu include sshd_config.d/ before
+# the way sshd reads them: Debian includes sshd_config.d/ before
 # the rest, and sshd keeps the first value it reads for each setting. Either
 # way one "key value" line per setting, keys lowercased.
 load_sshd_config() {
