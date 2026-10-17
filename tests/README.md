@@ -18,7 +18,8 @@ It also ensures `shellcheck` and `stow` are installed, then lints the repo's she
 This repo can use the versioned hooks in [`.githooks`](../.githooks):
 
 - `pre-commit` runs `~/.config/agents/scripts/check-drift` (retired terms, and `AGENT_LINKS` against the
-  agents repo); it skips with a note when the agents checkout is missing
+  agents repo); it skips with a note when the agents checkout is missing, and
+  says when `check-drift` crashed (killed by a signal) rather than found drift
 - `pre-push` runs ShellCheck (`run_tests.sh --lint-only`), then a container
   install via [`sandbox-install.sh`](sandbox-install.sh); CI runs the full suite
   on every push
@@ -52,6 +53,9 @@ Run it directly with:
 Notes:
 
 - It tests `HEAD`, not the working tree, so commit before running it.
+- A failed run prints the last 40 lines of the install and keeps the full log at
+  `~/.local/state/dotfiles/sandbox-install.log` (`SANDBOX_LOG` moves it); read it
+  there before running the install again.
 - Homebrew and `chsh` are skipped: Linux aarch64 has no brew bottles, and `chsh`
   needs a password the container user does not have.
 - `pre-push` only runs it when the pushed commits touch `install.sh`, `scripts/`,
@@ -133,6 +137,10 @@ This is process-level isolation, not a real container or VM.
 - The list of changes: Enter applies the Fix suggestions and skips the rest (`keep` still reads as skip); one line archives, adds (`link.sh add`), and ignores together; delete removes only after a yes and never follows a symlink; missing links get a `relink` row that runs `df-link` (skipped without GNU Stow); an unreadable line, `none`, closed stdin (no question printed), and nothing to fix change nothing; on macOS a test drives the terminal list through `script` with one key per change
 - Never touches managed parents, credentials, private agents, local overrides, or the repo; archives folders and links without following them, once; respects `--destination`; leaves files in a symlinked folder alone; refuses a symlinked archive, a move through a symlinked parent, and a move while a program has the files open
 - The installer's boxed report with closed stdin, its incomplete-check warning, and the unboxed `--fix-only` list after the report
+
+[`githooks.bats`](githooks.bats)
+
+- Runs `.githooks/pre-commit` against stub `check-drift` scripts: a pass, a failure reported as drift, a crash (killed by a signal) reported as a crash, and a missing agents checkout skipped; and runs `sandbox-install.sh` against a stub `docker` whose install fails, checking that only the tail is printed and the full log is kept
 
 [`link.bats`](link.bats)
 

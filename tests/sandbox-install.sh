@@ -25,6 +25,9 @@ cd "${REPO_ROOT}"
 SANDBOX_IMAGE="${SANDBOX_IMAGE:-debian:13}"
 SANDBOX_NAME="dotfiles-install-$$"
 WORK_DIR="$(mktemp -d)"
+# The install log outlives the run, so a failure can be read in full rather
+# than from the tail printed below.
+SANDBOX_LOG="${SANDBOX_LOG:-${XDG_STATE_HOME:-${HOME}/.local/state}/dotfiles/sandbox-install.log}"
 
 cleanup() {
     docker rm -f "${SANDBOX_NAME}" >/dev/null 2>&1 || true
@@ -138,16 +141,19 @@ docker cp "${WORK_DIR}/guest-verify.sh" "${SANDBOX_NAME}:/tmp/guest-verify.sh"
 
 # No -i: stdin stays closed, which is the condition under test.
 printf 'sandbox: running install.sh on a bare machine\n'
-if ! docker exec "${SANDBOX_NAME}" bash /tmp/guest-install.sh > "${WORK_DIR}/install.log" 2>&1; then
+mkdir -p "$(dirname "${SANDBOX_LOG}")"
+if ! docker exec "${SANDBOX_NAME}" bash /tmp/guest-install.sh > "${SANDBOX_LOG}" 2>&1; then
     echo "sandbox: install failed" >&2
-    tail -40 "${WORK_DIR}/install.log" >&2
+    tail -40 "${SANDBOX_LOG}" >&2
+    echo "sandbox: full log: ${SANDBOX_LOG}" >&2
     exit 1
 fi
 
 printf 'sandbox: verifying result\n'
 if ! docker exec "${SANDBOX_NAME}" bash /tmp/guest-verify.sh; then
     echo "sandbox: verification failed" >&2
-    tail -40 "${WORK_DIR}/install.log" >&2
+    tail -40 "${SANDBOX_LOG}" >&2
+    echo "sandbox: full log: ${SANDBOX_LOG}" >&2
     exit 1
 fi
 

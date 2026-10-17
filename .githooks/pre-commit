@@ -14,7 +14,16 @@ if [[ ! -x "${CHECK_DRIFT}" ]]; then
 fi
 
 printf 'pre-commit: running check-drift\n'
-if ! "${CHECK_DRIFT}"; then
+status=0
+"${CHECK_DRIFT}" || status=$?
+
+# Above 128 is a signal, not a FAIL line: the check itself died, so the
+# drift report above is incomplete rather than wrong.
+if [[ "${status}" -gt 128 ]]; then
+    printf 'pre-commit: check-drift crashed (signal %s), not a drift failure; run %s by hand to see whether it passes\n' \
+        "$((status - 128))" "${CHECK_DRIFT}" >&2
+    exit 1
+elif [[ "${status}" -ne 0 ]]; then
     printf 'pre-commit: check-drift failed; see ~/.config/agents/MAINTENANCE.md\n' >&2
     exit 1
 fi
