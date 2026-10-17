@@ -38,8 +38,6 @@ Options:
                      its options). Without it, a server or vps persona on Linux
                      that harden-test.sh finds unhardened asks on a terminal;
                      --no-harden skips the question
-      --reconfigure  Ask the install questions again (the persona is asked
-                     on every terminal run)
       --skip-system  Skip the OS bootstrap (scripts/bootstrap/<os>/setup.sh)
       --skip-brew    Skip the Homebrew install/update/bundle step
       --skip-shell   Skip adding zsh to /etc/shells and chsh
@@ -56,7 +54,6 @@ run_brew=1
 run_shell_setup=1
 persona_arg=""
 harden_arg=""
-reconfigure=0
 declare -a link_args=() install_args=() no_install_args=()
 while [[ $# -gt 0 ]]; do
     case "${1}" in
@@ -77,9 +74,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-harden)
             harden_arg=no
-            ;;
-        --reconfigure)
-            reconfigure=1
             ;;
         -n|--dry-run)
             dry_run=1
@@ -518,9 +512,9 @@ read_installs() {
 
 # Settle the installs (the optional installs every persona gets, on by
 # default, and the persona's roles): --install/--no-install and
-# DOTFILES_INSTALLS decide outright; otherwise a terminal is asked until a
-# choice is saved (or --reconfigure), with the saved or default installs and
-# the ones already applied preselected; closed stdin keeps those. The answer
+# DOTFILES_INSTALLS decide outright; otherwise a terminal is asked on every
+# run, like the persona, with the saved or default installs and the ones
+# already applied preselected, so Enter keeps them; closed stdin keeps those. The answer
 # goes to link.sh as DOTFILES_INSTALLS, which saves it, orders it, and adds
 # the roles' layers. PENDING_INSTALLS is what is chosen but not yet applied.
 resolve_installs() {
@@ -548,7 +542,7 @@ resolve_installs() {
             chosen="${chosen// ${name} / }"
         done
         source=flag
-    elif [[ "${#items[@]}" -gt 0 && ( "${INSTALLS_SOURCE}" == default || "${reconfigure}" -eq 1 ) && -t 0 && -t 1 ]]; then
+    elif [[ "${#items[@]}" -gt 0 ]] && on_terminal; then
         # Esc or an invalid answer keeps the marked installs.
         if reply="$(choose_many --selected "${chosen} ${applied}" "Installs for this machine" "${items[@]}")"; then
             chosen="$(tr '\n' ' ' <<< "${reply}")"

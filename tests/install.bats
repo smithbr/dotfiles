@@ -178,7 +178,7 @@ run_resolve_persona() {
     printf '#!/usr/bin/env bash\ncase "$1" in\n    persona) printf "%%s\\n" "${DOTFILES_PERSONA:-server} %s" ;;\n    personas) printf "home\\nserver\\nvps\\n" ;;\nesac\n' "${source}" > "${TEST_TMPDIR}/link.sh"
     run env "$@" bash -c "
         source '${PROJECT_ROOT}/scripts/common.sh'
-        LINK_SCRIPT='${TEST_TMPDIR}/link.sh' persona_arg='' reconfigure=0
+        LINK_SCRIPT='${TEST_TMPDIR}/link.sh' persona_arg=''
         $(sed -n '/^prompt_persona() {$/,/^}$/p;/^on_terminal() {$/,/^}$/p;/^resolve_persona() {$/,/^}$/p' "${PROJECT_ROOT}/install.sh")
         on_terminal() { [[ '${terminal}' == yes ]]; }
         DOTFILES_PROMPT=read resolve_persona
@@ -213,6 +213,53 @@ run_resolve_persona() {
     run_resolve_persona env yes "vps" DOTFILES_PERSONA=home
     assert_success
     assert_output "persona=home source=env env=home"
+}
+
+# Runs install.sh's resolve_installs against a stub link.sh that offers
+# docker and pihole (neither applied) with "docker" saved, on_terminal
+# answering TERMINAL (yes or no) and stdin as the picker's answer.
+run_resolve_installs() {
+    local terminal="$1" answer="$2"
+    cat > "${TEST_TMPDIR}/link.sh" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+    offered) printf 'docker\tdefault\tfalse\npihole\toptional\tfalse\n' ;;
+    installs)
+        if [[ -n "${DOTFILES_INSTALLS+set}" ]]; then
+            printf 'installs=%s\ninstalls_source=env\n' "$(xargs <<< "${DOTFILES_INSTALLS}")"
+        else
+            printf 'installs=docker\ninstalls_source=saved\n'
+        fi
+        ;;
+esac
+SH
+    run bash -c "
+        source '${PROJECT_ROOT}/scripts/common.sh'
+        LINK_SCRIPT='${TEST_TMPDIR}/link.sh' BASEDIR='${PROJECT_ROOT}'
+        declare -a install_args=() no_install_args=()
+        $(sed -n '/^install_applied() {$/,/^}$/p;/^read_installs() {$/,/^}$/p;/^resolve_installs() {$/,/^}$/p' "${PROJECT_ROOT}/install.sh")
+        on_terminal() { [[ '${terminal}' == yes ]]; }
+        DOTFILES_PROMPT=read resolve_installs
+        printf 'installs=%s source=%s pending=%s\n' \"\${INSTALLS}\" \"\${INSTALLS_SOURCE}\" \"\${PENDING_INSTALLS}\"
+    " <<< "${answer}"
+}
+
+@test "install.sh asks for the installs on every terminal run, with the saved ones kept on Enter" {
+    # A saved choice is asked again, so a role left out before is a tick away.
+    run_resolve_installs yes "1 2"
+    assert_success
+    assert_output --partial "Installs for this machine"
+    assert_output --partial "1) [x] docker"
+    assert_output --partial "2) [ ] pihole"
+    assert_output --partial "installs=docker pihole source=chosen pending=docker pihole "
+
+    run_resolve_installs yes ""
+    assert_success
+    assert_output --partial "installs=docker source=chosen"
+
+    run_resolve_installs no "1 2"
+    assert_success
+    assert_output "installs=docker source=saved pending=docker "
 }
 
 @test "install.sh applies the chosen installs last, skips applied ones, and reports a failing one" {
@@ -257,15 +304,15 @@ install=four	four	false"
     refute_output --partial "ran two"
 }
 
-@test "install.sh parses --install, --no-install and --reconfigure" {
+@test "install.sh parses --install and --no-install" {
     run bash -c "
         usage() { :; }
         log_error() { printf 'ERROR %s\n' \"\$*\"; }
         $(parser_snippet)
-        printf 'installs=%s no=%s reconfigure=%s args=%s\n' \"\${install_args[*]:-}\" \"\${no_install_args[*]:-}\" \"\${reconfigure}\" \"\${link_args[*]:-}\"
-    " bash --install docker --install pihole --no-install claude-code --reconfigure --adopt
+        printf 'installs=%s no=%s args=%s\n' \"\${install_args[*]:-}\" \"\${no_install_args[*]:-}\" \"\${link_args[*]:-}\"
+    " bash --install docker --install pihole --no-install claude-code --adopt
     assert_success
-    assert_output "installs=docker pihole no=claude-code reconfigure=1 args=--adopt"
+    assert_output "installs=docker pihole no=claude-code args=--adopt"
 
     run bash -c "
         log_error() { printf 'ERROR %s\n' \"\$*\"; }
