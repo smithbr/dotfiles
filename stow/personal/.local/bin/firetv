@@ -407,6 +407,28 @@ pihole_deny() {
     fi
 }
 
+# A needs-root package with no hostnames in its code: pass on a clean watch
+# of this same version, else say to watch it.
+doctor_watched() {
+    local pkg="$1" version record watched_version seconds date result
+
+    version="$(package_version "${pkg}")"
+    record="$(awk -F'\t' -v p="${pkg}" '$1 == p' "${WATCHED_FILE}" 2>/dev/null || true)"
+    IFS=$'\t' read -r _ watched_version seconds date result <<< "${record}"
+    if [[ -n "${record}" && "${watched_version}" == "${version}" && "${result}" == clean ]]; then
+        doctor_result PASS "${pkg} needs root; no hostnames in its code, no connections in a ${seconds}s watch on ${date}"
+        return 0
+    fi
+    if [[ -z "${record}" ]]; then
+        doctor_result WARN "${pkg} needs root and has no hostnames in its code; watch what it connects to"
+    elif [[ "${watched_version}" != "${version}" ]]; then
+        doctor_result WARN "${pkg} needs root and changed version since the watch on ${date}; watch it again"
+    else
+        doctor_result WARN "${pkg} needs root and made connections in the watch on ${date}; see what they are"
+    fi
+    add_next_step "firetv --watch 120 domains ${pkg}"
+}
+
 # For each package that needs root: the hostnames in its code that the TV
 # looked up, which the Pi-hole blocks, and an offer to block the rest.
 doctor_pihole() {
@@ -433,8 +455,7 @@ doctor_pihole() {
     for pkg in "$@"; do
         hosts="$(code_hostnames "${pkg}")"
         if [[ -z "${hosts}" ]]; then
-            doctor_result WARN "${pkg} needs root and has no hostnames in its code; watch what it connects to"
-            add_next_step "firetv --watch 120 domains ${pkg}"
+            doctor_watched "${pkg}"
             continue
         fi
         seen="$(awk -F'\t' 'NR == FNR { want[$1]; next } $1 in want' <(printf '%s\n' "${hosts}") <(printf '%s\n' "${summary}"))"
@@ -769,13 +790,36 @@ have_ph() {
     command -v jq >/dev/null 2>&1 && { [[ -x "${PH_BIN}" ]] || command -v "${PH_BIN}" >/dev/null 2>&1; }
 }
 
+# Watches of packages that need root, so doctor can trust a clean one:
+# "PACKAGE<TAB>VERSIONCODE<TAB>SECONDS<TAB>DATE<TAB>clean|connections".
+WATCHED_FILE="${FIRETV_STATE_DIR}/watched"
+
+# A package's versionCode from dumpsys; empty when it isn't on the TV.
+package_version() {
+    adb_tv shell dumpsys package "$1" | tr -d '\r' | sed -n 's/^ *versionCode=\([0-9][0-9]*\).*/\1/p' | head -n 1
+}
+
+record_watch() {
+    local pkg="$1" version="$2" result="$3"
+
+    [[ -n "${version}" ]] || return 0
+    mkdir -p "${FIRETV_STATE_DIR}"
+    {
+        awk -F'\t' -v p="${pkg}" '$1 != p' "${WATCHED_FILE}" 2>/dev/null || true
+        printf '%s\t%s\t%s\t%s\t%s\n' "${pkg}" "${version}" "${WATCH_SECONDS}" "$(date +%Y-%m-%d)" "${result}"
+    } > "${WATCHED_FILE}.tmp"
+    mv "${WATCHED_FILE}.tmp" "${WATCHED_FILE}"
+}
+
 cmd_domains() {
-    local pkg="$1" uid hosts summary seen unseen line ip port names lookups count
+    local pkg="$1" dump uid version hosts summary seen unseen line ip port names lookups count
     local -a addresses=()
 
     [[ "${pkg}" =~ ^[A-Za-z0-9._]+$ ]] || die "Not a package name: ${pkg}"
     ensure_connected
-    uid="$(adb_tv shell dumpsys package "${pkg}" | tr -d '\r' | sed -n 's/^ *userId=\([0-9][0-9]*\).*/\1/p' | head -n 1)"
+    dump="$(adb_tv shell dumpsys package "${pkg}" | tr -d '\r')"
+    uid="$(sed -n 's/^ *userId=\([0-9][0-9]*\).*/\1/p' <<< "${dump}" | head -n 1)"
+    version="$(sed -n 's/^ *versionCode=\([0-9][0-9]*\).*/\1/p' <<< "${dump}" | head -n 1)"
     [[ -n "${uid}" ]] || die "${pkg} is not on this TV"
 
     _header "${pkg} (app ID ${uid})"
@@ -823,8 +867,10 @@ cmd_domains() {
     done < <(watched_addresses "${uid}" | while IFS= read -r line; do decode_address "${line}"; done | sort -u)
     if ((${#addresses[@]} == 0)); then
         _item "none (an app blocked by the Pi-hole never connects; try using the app while watching)"
+        record_watch "${pkg}" "${version}" clean
         return 0
     fi
+    record_watch "${pkg}" "${version}" connections
     lookups=""
     [[ -z "${TV_LOG}" ]] || lookups="$(recent_lookups)"
     for line in "${addresses[@]}"; do

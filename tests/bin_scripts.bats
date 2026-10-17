@@ -3685,6 +3685,8 @@ case "$*" in
             "$(cat "${FIRETV_STATE}/free" 2>/dev/null || printf 6892824)" ;;
     "shell pm trim-caches 999G") printf '%s\n' "$(( $(cat "${FIRETV_STATE}/free" 2>/dev/null || printf 6892824) + 204800 ))" > "${FIRETV_STATE}/free" ;;
     "shell dumpsys package com.amazon.venezia") printf '  Package [com.amazon.venezia]\r\n    userId=10171\r\n' ;;
+    "shell dumpsys package com.amazon.device.metrics")
+        printf '    userId=10194\r\n    versionCode=%s minSdk=30 targetSdk=28\r\n' "$(cat "${FIRETV_STATE}/metrics-version" 2>/dev/null || printf 1)" ;;
     "shell dumpsys package "*) printf 'Unable to find package\r\n' ;;
     "shell pm path com.amazon.venezia")
         printf 'package:/system_ext/priv-app/com.amazon.venezia/com.amazon.venezia.apk\r\n' ;;
@@ -3698,6 +3700,8 @@ case "$*" in
     *"for a in /system_ext/app/FtvAds/FtvAds.apk;"*"strings -n 6"*)
         printf '%s\r\n' mads.amazon.com aax-us-east.amazon-adsystem.com api.amazon.com never-looked-up.amazon.com ;;
     *"strings -n 6"*) exit 1 ;;
+    *"/proc/net/tcp"*"-v u=10194 "*)
+        [[ ! -e "${FIRETV_STATE}/metrics-connects" ]] || printf '%s\r\n' 0000000000000000FFFF0000D3B1A736:01BB ;;
     *"/proc/net/tcp"*)
         [[ "$*" == *"-v u=10171 "* ]] || exit 1
         # 54.167.177.211:443 mapped into IPv6, then loopback, which drops.
@@ -4307,5 +4311,34 @@ MOCK
     assert_failure
     assert_output --partial "Not a package name"
     run grep -c -E ' uninstall [^ ]+$' "${FIRETV_STATE}/calls.log"
+    assert_output "1"
+}
+
+@test "firetv doctor trusts a clean watch of a needs-root package until its version changes" {
+    setup_firetv_pihole
+    printf '%s\n' com.amazon.device.metrics > "${FIRETV_STATE_DIR}/needs-root"
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" doctor < /dev/null
+    assert_success
+    assert_output --partial "warning: com.amazon.device.metrics needs root and has no hostnames in its code; watch what it connects to"
+
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" --watch 1 domains com.amazon.device.metrics < /dev/null
+    assert_success
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" doctor < /dev/null
+    assert_success
+    assert_output --regexp "ok: com\.amazon\.device\.metrics needs root; no hostnames in its code, no connections in a 1s watch on [0-9]{4}-[0-9]{2}-[0-9]{2}"
+    refute_output --partial "domains com.amazon.device.metrics"
+
+    printf '%s\n' 2 > "${FIRETV_STATE}/metrics-version"
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" doctor < /dev/null
+    assert_output --partial "warning: com.amazon.device.metrics needs root and changed version since the watch on"
+    assert_output --partial "- firetv --watch 120 domains com.amazon.device.metrics"
+
+    touch "${FIRETV_STATE}/metrics-connects"
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" --watch 1 domains com.amazon.device.metrics < /dev/null
+    assert_success
+    assert_output --partial "54.167.177.211:443"
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" doctor < /dev/null
+    assert_output --partial "warning: com.amazon.device.metrics needs root and made connections in the watch on"
+    run grep -c com.amazon.device.metrics "${FIRETV_STATE_DIR}/watched"
     assert_output "1"
 }
