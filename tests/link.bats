@@ -876,7 +876,7 @@ sys.exit(status >> 8 if os.WIFEXITED(status) else 1)
 PY
 }
 
-@test "add describes each layer on a terminal and takes the answer by number or name" {
+@test "add describes each layer on a terminal, by its rule or else its files, and takes the answer by number or name" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     make_fixture_repo
     mkdir -p "${FIXTURE}/stow/desk.darwin/.config/app" "${FIXTURE}/stow/common/.local/bin"
@@ -890,7 +890,7 @@ PY
     run_fixture_link_on_tty 2 --persona home add "${DEST}/.rc"
     assert_success
     assert_output --partial "Layer for the new files"
-    assert_output --partial "1) common  .keep, .local/bin: tool (every persona)"
+    assert_output --partial "1) common  config for a tool that every machine has (every persona)"
     assert_output --partial "2) extra   .config/extra (home)"
     assert_output --partial "3) desk    .config/app (home; macOS only)"
     assert_output --partial "Copied ~/.rc to stow/extra/.rc"

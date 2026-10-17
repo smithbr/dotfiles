@@ -1508,15 +1508,30 @@ layer_owners() {
     printf '%s\n' "${owners}"
 }
 
-# What a layer holds, read from the tree so nothing is kept by hand: its
-# top-level paths (dot-directories one level down, a few script names for
-# .local/bin), the personas whose layers= name it (else the role that brings
-# it), and the platform when it exists only as a platform part.
+# What belongs in a layer, for the layers whose rule is not obvious from
+# their files (stow/README.md). Empty for any other layer.
+layer_rule() {
+    case "$1" in
+        common) printf 'config for a tool that every machine has\n' ;;
+        tools) printf 'scripts you wrote yourself\n' ;;
+        personal) printf 'things the work Mac must not get, such as your identity and personal hosts\n' ;;
+        desktop) printf 'settings for GUI apps\n' ;;
+        server) printf 'config only servers get\n' ;;
+        pihole) printf 'the Pi-hole tools\n' ;;
+    esac
+}
+
+# How a layer is offered: what belongs in it (layer_rule), else what it holds,
+# read from the tree (top-level paths, dot-directories one level down, a few
+# script names for .local/bin); then the personas whose layers= name it (else
+# the role that brings it), and the platform when it exists only as a
+# platform part.
 #   layer_description LAYER WIDTH
 layer_description() {
     local layer="$1" width="$2" dir entry paths="" item owners platform="" file
     local -a entries=() names=()
-    for dir in "${REPO}/stow/${layer}" "${REPO}/stow/${layer}.darwin" "${REPO}/stow/${layer}.linux"; do
+    paths="$(layer_rule "${layer}")"
+    [[ -n "${paths}" ]] || for dir in "${REPO}/stow/${layer}" "${REPO}/stow/${layer}.darwin" "${REPO}/stow/${layer}.linux"; do
         [[ -d "${dir}" ]] || continue
         while IFS= read -r entry; do
             [[ -n "${entry}" ]] || continue
