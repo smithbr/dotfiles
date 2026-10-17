@@ -29,20 +29,26 @@ jobs:
     # written against. The runner image ships bash 3.2 and neither shellcheck
     # nor stow, like a fresh Mac.
     runs-on: macos-latest
-    # Three shards of about equal time, run side by side. link.bats is over
-    # half the suite, so it is split by test name: the add, rm, mv, dry run,
-    # and status tests, then everything else in it. The third shard globs
-    # every other file, so a new .bats file runs there without a change here.
+    # Three shards of about equal time on CI's runners, run side by side:
+    # link.bats, doctor.bats with install.bats, and a third that globs every
+    # file not named in NAMED, so a new .bats file runs there without a change
+    # here.
     strategy:
       fail-fast: false
       matrix:
-        shard: [link-commands, link-rest, others]
+        include:
+          - shard: link
+            files: tests/link.bats
+          - shard: doctor-install
+            files: tests/doctor.bats tests/install.bats
+          - shard: others
+            files: ''
     # The bats suite shells out to TUI tools (tput/stty); give it a sane TERM so
     # terminal-aware scripts behave as they do in an interactive shell.
     env:
       TERM: xterm
-      LINK_SPLIT: '^(add|rm|mv|dry run|status) '
-      SHARD: ${{ matrix.shard }}
+      NAMED: tests/link.bats tests/doctor.bats tests/install.bats
+      FILES: ${{ matrix.files }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The suite's own tools (tests/deps.sh): Bats, GNU parallel, uv's Python,
@@ -62,16 +68,11 @@ jobs:
       - name: Run bats shard
         shell: bash
         run: |
-          case "${SHARD}" in
-              link-commands) bash tests/run_tests.sh --no-lint --filter "${LINK_SPLIT}" tests/link.bats ;;
-              link-rest) bash tests/run_tests.sh --no-lint --negative-filter "${LINK_SPLIT}" tests/link.bats ;;
-              others)
-                  files=()
-                  for file in tests/*.bats; do
-                      [[ "${file}" == tests/link.bats ]] || files+=("${file}")
-                  done
-                  printf 'Files: %s\n' "${files[*]}"
-                  bash tests/run_tests.sh --no-lint "${files[@]}"
-                  ;;
-              *) echo "unknown shard: ${SHARD}" >&2; exit 1 ;;
-          esac
+          read -r -a files <<< "${FILES}"
+          if [[ "${#files[@]}" -eq 0 ]]; then
+              for file in tests/*.bats; do
+                  [[ " ${NAMED} " == *" ${file} "* ]] || files+=("${file}")
+              done
+          fi
+          printf 'Files: %s\n' "${files[*]}"
+          bash tests/run_tests.sh --no-lint "${files[@]}"
