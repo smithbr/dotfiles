@@ -265,7 +265,7 @@ stat_mode() {
     bundles="$(sed -n 's/^skills=//p' "${PROJECT_ROOT}/personas/home" | sed 's/ /, /g')"
     assert_output --partial "Skill bundles ${bundles}: stowed into ${DEST}/.agents/skills"
     assert_output --regexp "Seed files: 0 of [0-9]+ were present"
-    assert_output --regexp "Layers common, tools, [a-z, .]*desktop.darwin: [0-9]+ of [0-9]+ linked"
+    assert_output --regexp "Layers common, tools, [a-z, .]*desktop: [0-9]+ of [0-9]+ linked"
     local summary
     summary="$(grep '^Done: ' <<< "${output}")"
     [[ "${summary}" =~ ^Done:\ ([0-9]+)\ of\ ([0-9]+)\ links\ in\ place,\ ([0-9]+)\ new ]]

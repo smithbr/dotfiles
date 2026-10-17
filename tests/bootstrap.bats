@@ -975,7 +975,7 @@ MOCK
     _run_iterm2_script
     assert_success
     local guid
-    guid="$(jq -r '.Profiles[0].Guid' "${PROJECT_ROOT}/stow/desktop.darwin/Library/Application Support/iTerm2/DynamicProfiles/dotfiles.json")"
+    guid="$(jq -r '.Profiles[0].Guid' "${PROJECT_ROOT}/stow/desktop/Library/Application Support/iTerm2/DynamicProfiles/dotfiles.json")"
     run cat "${TEST_TMPDIR}/iterm2/defaults.log"
     assert_line "write com.googlecode.iterm2 EnableAPIServer -bool true"
     assert_line "write com.googlecode.iterm2 shortLivedSessionDuration -float 0"
@@ -993,7 +993,7 @@ MOCK
 
 @test "iterm2.sh adds the Catppuccin color presets, fixes a stale one, and keeps the user's" {
     command -v plutil >/dev/null || skip "plutil is macOS-only"
-    local root="${TEST_TMPDIR}/iterm2" presets="${PROJECT_ROOT}/stow/desktop.darwin/.config/iterm2"
+    local root="${TEST_TMPDIR}/iterm2" presets="${PROJECT_ROOT}/stow/desktop/.config/iterm2"
     mkdir -p "${root}"
     plutil -create xml1 "${root}/domain.plist"
     plutil -insert "Custom Color Presets" -dictionary "${root}/domain.plist"

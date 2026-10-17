@@ -3444,7 +3444,7 @@ MOCK
 # st only imports iterm2 when it talks to iTerm2, so --list and
 # --dry-run run under plain python3 without its uv dependencies.
 _st() {
-    python3 "${PROJECT_ROOT}/stow/desktop.darwin/.local/bin/st" "$@"
+    python3 "${PROJECT_ROOT}/stow/desktop/.local/bin/st" "$@"
 }
 
 _write_teams() {
@@ -3509,7 +3509,7 @@ TOML
 }
 
 @test "st dry-runs every team in the tracked teams.toml.example" {
-    export CLAUDE_TEAM_CONFIG="${PROJECT_ROOT}/stow/desktop.darwin/.config/claude-team/teams.toml.example"
+    export CLAUDE_TEAM_CONFIG="${PROJECT_ROOT}/stow/desktop/.config/claude-team/teams.toml.example"
     run _st --list
     assert_success
     local team
@@ -3586,7 +3586,7 @@ TOML
 }
 
 @test "st runs each tab's command as the tab's program, not typed text" {
-    run python3 - "${PROJECT_ROOT}/stow/desktop.darwin/.local/bin/st" <<'PY'
+    run python3 - "${PROJECT_ROOT}/stow/desktop/.local/bin/st" <<'PY'
 import importlib.machinery, importlib.util, os, sys
 sys.dont_write_bytecode = True
 loader = importlib.machinery.SourceFileLoader("st", sys.argv[1])

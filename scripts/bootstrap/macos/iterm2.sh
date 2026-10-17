@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # iTerm2 settings that live outside profiles. The profile itself is the
-# Dynamic Profile in stow/desktop.darwin; this makes it the default.
+# Dynamic Profile in stow/desktop; this makes it the default.
 
 set -euo pipefail
 
@@ -40,7 +40,7 @@ set_default "Default Bookmark Guid" -string "${PROFILE_GUID}" "${PROFILE_GUID}"
 # The Catppuccin presets show in Color Presets once they are in "Custom Color
 # Presets". Read from the repo so this works before linking; other presets are
 # left alone, and a preset is written only when missing or different.
-for preset in "${BASEDIR}/stow/desktop.darwin/.config/iterm2/"*.itermcolors; do
+for preset in "${BASEDIR}/stow/desktop/.config/iterm2/"*.itermcolors; do
     name="$(basename "${preset}" .itermcolors)"
     want="$(plutil -convert xml1 -o - "${preset}")"
     have="$(defaults export "${ITERM_DOMAIN}" - 2>/dev/null |
