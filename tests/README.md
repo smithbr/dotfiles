@@ -10,9 +10,10 @@ Run the full suite with:
 ./tests/run_tests.sh
 ```
 
-The runner uses Homebrew-installed `bats-core`, `bats-support`, and `bats-assert`. If they are missing, [`run_tests.sh`](run_tests.sh) installs them first.
-It also ensures `shellcheck`, `stow`, and GNU `parallel` are installed, then lints the repo's shell scripts before running Bats with `--jobs` set to the core count (serially, with a warning, when `parallel` is not callable).
-On macOS it also installs Homebrew's `bash`, unlinked so it does not take over `PATH`, and runs Bats on it, because `/bin/bash` 3.2 lets a failing `[[ ]]` that is not a test's last line pass silently. A `bash` shim first on `PATH` sends only Bats' own programs to the new bash: `bash -c`, `run bash script`, and `#!/usr/bin/env bash` scripts under test still run on `/bin/bash`, as on a fresh Mac. Code a test sources in-process runs on the new bash.
+The suite's own tools live in a per-user cache, `~/.cache/dotfiles/tests` (`XDG_CACHE_HOME` or `DOTFILES_TEST_DEPS` move it), that [`deps.sh`](deps.sh) fills on the first run and never touches again until a pin changes: `bats-core`, `bats-support`, `bats-assert`, GNU `parallel` (the Perl script Bats' `--jobs` needs, with its own `PARALLEL_HOME`), a `python3` link to a uv-managed Python 3.11+ (`tomllib`; without `uv` the tests that need it skip), and on macOS a `bash` 5 built from source, because `/bin/bash` 3.2 lets a failing `[[ ]]` that is not a test's last line pass silently. Each download is checked against the sha256 pinned in `deps.sh` and installed by renaming a finished directory into place, so a rerun with everything present is offline and silent, and `rm -rf ~/.cache/dotfiles/tests` starts over. Nothing is installed through Homebrew for the tests.
+The machine's own tools are required, not installed: `shellcheck` and `stow` (`Brewfile.core`, apt; the runner names the install command when one is missing), and on Debian `bzip2` for parallel's tarball. [`run_tests.sh`](run_tests.sh) lints the repo's shell scripts first (`--lint-only` stops there and touches neither the network nor the cache), then runs Bats with `--jobs` set to the core count.
+Bats runs on the cache's bash through a `bash` shim first on `PATH` that sends only Bats' own programs there: `bash -c`, `run bash script`, and `#!/usr/bin/env bash` scripts under test still run on `/bin/bash`, as on a fresh Mac. Code a test sources in-process runs on the new bash. The cache's `python3` comes first on `PATH` so every test sees the same interpreter, and its `bats` and `parallel` last.
+Bumping a pin: set the version and the tarball's sha256 in `deps.sh` (cross-check with the GNU `.sig` or `brew info --json=v2 NAME`), then delete the cache directory; CI's cache key is the file's hash, so it refetches on its own.
 
 ## Git Hooks
 
@@ -76,7 +77,7 @@ This is process-level isolation, not a real container or VM.
 
 [`ai_doctor.bats`](ai_doctor.bats)
 
-- Runs `ai-doctor` (in `stow/tools/.local/bin`) against a scratch home with fixture Claude Code, Codex, and Cursor config, a fixture agents checkout with a logging `skills-add`, and a fixture persona; only `python3` is on PATH, so no real `claude` or `codex` runs
+- Runs `ai-doctor` (in `stow/tools/.local/bin`) against a scratch home with fixture Claude Code, Codex, and Cursor config, a fixture agents checkout with a logging `skills-add`, and a fixture persona; only `uv` and `python3` are on PATH (ai-doctor's shebang is `uv run --script`, held to that `python3` and kept offline), so no real `claude` or `codex` runs
 - Verifies the default output (a summary line, then only the numbered fixes and trims, or `Nothing to do.`) and `-v` (instruction sizes, skill sizes from names and descriptions only, folded lines too, experimental flags and a default agent)
 - Verifies each finding and its `--fix --yes`: bundles beyond or missing from the persona's `skills=` (through `skills-add`), a broken skill link removed, Claude servers that can't start removed from `~/.claude.json` (user and project scope, other keys kept, the original backed up once), a missing folder reported rather than every file under it, a Cursor URL moved from `command` to `url` and the file made private while its token, never printed, stays a fix, a Codex table and its sub-tables removed (turned-off servers kept; needs Python 3.11), and a plugin both installed and synced removed with its cache while the claude.ai copy stays; servers waiting for sign-in are one trim and connector placeholders none
 - Verifies `--fix` on closed stdin and answering no change nothing, `--help`, a bad `--app`, a home with no AI apps, the exit status, and that a run without `--fix` through its stow link changes nothing
@@ -179,16 +180,25 @@ This is process-level isolation, not a real container or VM.
 
 - Checks the runner itself: a failing `[[ ]]` before a test's last line fails the test, and on macOS a script under test still runs on `/bin/bash`
 
+[`deps.bats`](deps.bats)
+
+- Runs `deps.sh` in-process against a scratch cache with a stub `curl` serving fixture tarballs: a fresh cache fetches the four tools and links them, a rerun is silent and fetches nothing, a checksum mismatch or failed download fails naming the URL and hashes and leaves nothing in the cache, leftovers of a killed run go first, a bash new enough is used without a fetch while an old one has bash fetched, built (the build stubbed), and picked from the cache, a failed build leaves nothing, `uv` gives a `python3` link (installing a Python once when none is there) and its absence none, the cache directory follows `DOTFILES_TEST_DEPS` then `XDG_CACHE_HOME`, and `deps_sha256` matches the published digest
+- Runs `run_tests.sh` against stubs: a missing `shellcheck` or `stow` fails with the install hint before anything is fetched, and `--lint-only` leaves the cache alone
+
 [`test_helper.bash`](test_helper.bash)
 
 - Shared Bats setup helpers
 - Sets `PROJECT_ROOT`
 - Creates and cleans temporary directories for each test
 
+[`deps.sh`](deps.sh)
+
+- The pinned versions and sha256 of the suite's tools, and the functions that fetch, verify, and link them into the cache (see Runner); sourced by `run_tests.sh`, or run on its own to warm the cache, as CI does
+
 [`run_tests.sh`](run_tests.sh)
 
-- Bootstraps Bats dependencies from Homebrew, and on macOS a newer bash for Bats with the `bash` shim
-- Ensures GNU `parallel` (falling back to its keg's `bin` when it is unlinked) and runs Bats with `--jobs` across every core
+- Requires `shellcheck` and `stow`, fills the cache through `deps.sh`, and on macOS runs Bats on the cache's bash through the `bash` shim
+- Runs Bats with `--jobs` across every core, on the cache's GNU `parallel`
 - Exports `BATS_LIB_PATH`
 - Runs all `*.bats` files in this directory, only the test files or directories named on the command line, or only ShellCheck with `--lint-only`; other arguments go to Bats (`./tests/run_tests.sh tests/link.bats --filter add`)
 

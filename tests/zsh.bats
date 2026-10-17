@@ -115,7 +115,7 @@ load test_helper
     teardown_tmpdir
 }
 
-@test "non-interactive zsh sends colima's VM to data, Go's downloads to cache, Copilot to config, and lets parallel split" {
+@test "non-interactive zsh sends colima's VM to data, Go's downloads to cache, and Copilot to config" {
     command -v zsh >/dev/null || skip "zsh not installed"
     setup_tmpdir
     local home="${TEST_TMPDIR}/home" zdotdir="${TEST_TMPDIR}/home/.config/zsh"
@@ -123,12 +123,13 @@ load test_helper
     cp "${PROJECT_ROOT}/stow/common/.config/zsh/.zshenv" "${zdotdir}/"
 
     run env -i HOME="${home}" ZDOTDIR="${zdotdir}" PATH="/usr/bin:/bin" \
-        zsh -c 'printf "%s\n" "${LIMA_HOME}" "${GOMODCACHE}" "${COPILOT_HOME}" "${PARALLEL_HOME-unset}"'
+        zsh -c 'printf "%s\n" "${LIMA_HOME}" "${GOMODCACHE}" "${COPILOT_HOME}"'
     assert_success
-    assert_output "${home}/.local/share/lima"$'\n'"${home}/.cache/go/mod"$'\n'"${home}/.config/copilot"$'\n'"unset"
-    # parallel uses these only when they exist, else it falls back to ~/.parallel.
-    assert test -d "${home}/.config/parallel"
-    assert test -d "${home}/.cache/parallel"
+    assert_output "${home}/.local/share/lima"$'\n'"${home}/.cache/go/mod"$'\n'"${home}/.config/copilot"
+    # GNU parallel is only the test suite's (tests/deps.sh gives it its own
+    # PARALLEL_HOME), so a new shell makes no folders for it.
+    refute test -e "${home}/.config/parallel"
+    refute test -e "${home}/.cache/parallel"
     teardown_tmpdir
 }
 

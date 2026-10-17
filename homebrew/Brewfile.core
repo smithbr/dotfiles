@@ -3,7 +3,6 @@
 
 # Core Tools
 brew "agent-browser"
-brew "bats-core"
 brew "bottom"
 brew "difftastic"
 brew "domain-check"

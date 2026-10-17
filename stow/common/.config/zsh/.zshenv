@@ -36,12 +36,6 @@ export XN_IGNOREFILE="${XDG_CONFIG_HOME}/xdg-ninja/ignore"
 # LIMA_HOME, data rather than config. colima started without this, such as by
 # `brew services`, would make a new, empty VM in ~/.config/colima/_lima.
 
-# GNU parallel splits its settings (~/.config/parallel) from its cache
-# (~/.cache/parallel) on its own, unless PARALLEL_HOME joins them, but only into
-# folders that exist; otherwise it falls back to ~/.parallel.
-[[ -d "${XDG_CONFIG_HOME}/parallel" && -d "${XDG_CACHE_HOME}/parallel" ]] \
-    || mkdir -p "${XDG_CONFIG_HOME}/parallel" "${XDG_CACHE_HOME}/parallel"
-
 # Docker keeps its current context here, so scripts and colima must agree with
 # the interactive shell or they fall back to ~/.docker and lose the context.
 export DOCKER_CONFIG="${XDG_CONFIG_HOME}/docker"

@@ -49,7 +49,7 @@ Unrecognized arguments and everything after `--` are passed to `stow` through `s
 
 ## Verification
 
-- For shell behavior, bootstrap, package-list, or runtime configuration changes, run `./tests/run_tests.sh` from the repository root. It runs ShellCheck and Bats and may install missing test dependencies through Homebrew.
+- For shell behavior, bootstrap, package-list, or runtime configuration changes, run `./tests/run_tests.sh` from the repository root. It runs ShellCheck and Bats; the suite's own tools (Bats, GNU parallel, uv's Python, and on a Mac a newer bash) come from a cache `tests/deps.sh` fills on the first run, while `shellcheck`, `stow`, and `uv` must already be on PATH (`Brewfile.core`).
 - Add behavioral regression coverage for bug fixes and meaningful new behavior in the relevant existing Bats suite. Assert exit status, resulting files, or external command calls; checking source text alone does not establish runtime correctness.
 - For changes that affect a fresh install, run `./tests/sandbox-install.sh` once the changes are committed and a Docker daemon is available. It archives `HEAD`, so it cannot verify uncommitted edits. Do not create a commit solely to run it without a commit request; report that validation as pending.
 - The container check covers a bare Debian install with closed stdin, but skips Homebrew and login-shell changes. CI runs on macOS. Report these limits when relevant rather than treating either check as full cross-platform coverage.

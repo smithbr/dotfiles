@@ -9,7 +9,6 @@ setup() {
     setup_tmpdir
     export BIN_SANDBOX="${TEST_TMPDIR}/bin"
     mkdir -p "${BIN_SANDBOX}"
-    ln -sf "$(brew --prefix)/bin/bash" "${BIN_SANDBOX}/bash"
     cat > "${BIN_SANDBOX}/brew" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
