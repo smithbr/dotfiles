@@ -294,3 +294,24 @@ MOCK
     assert_output 'alias h="history"'
     teardown_tmpdir
 }
+
+@test "interactive zsh: repo aliases win over plugins, and .zshrc.local wins over both" {
+    command -v zsh >/dev/null || skip "zsh not installed"
+    setup_tmpdir
+    local home="${TEST_TMPDIR}/home" zdotdir="${TEST_TMPDIR}/home/.config/zsh"
+    mkdir -p "${zdotdir}" "${home}/.config/shell" "${home}/.cache/zsh"
+    cp "${PROJECT_ROOT}/stow/common/.config/zsh/.zshenv" "${PROJECT_ROOT}/stow/common/.config/zsh/.zshrc" "${zdotdir}/"
+    cp "${PROJECT_ROOT}/stow/common/.config/shell/aliases" "${home}/.config/shell/"
+    : > "${zdotdir}/.zprofile"
+    : > "${zdotdir}/.zsh_plugins.txt"
+    printf "alias ls='ls -G'\nalias lsa='ls -lah'\n" > "${home}/.cache/zsh/.zsh_plugins.zsh"
+    touch -t 203001010000 "${home}/.cache/zsh/.zsh_plugins.zsh"
+    printf "alias lsa='local-lsa'\n" > "${zdotdir}/.zshrc.local"
+
+    run env -i HOME="${home}" ZDOTDIR="${zdotdir}" PATH="/usr/bin:/bin" TERM=dumb \
+        zsh -ic 'alias ls lsa'
+    assert_success
+    assert_line --index 0 "ls='eza --group-directories-first'"
+    assert_line --index 1 "lsa=local-lsa"
+    teardown_tmpdir
+}

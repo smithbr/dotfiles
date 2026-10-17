@@ -87,6 +87,15 @@ run_brew_sh() {
     assert_success
 }
 
+@test "Brewfile.core installs eza, fd, and zoxide, which the shell config uses unchecked" {
+    local tool
+    for tool in eza fd zoxide; do
+        grep -qF "${tool}" "${PROJECT_ROOT}/stow/common/.config/shell/aliases" \
+            "${PROJECT_ROOT}/stow/common/.config/zsh/.zshrc"
+        grep -qx "brew \"${tool}\"" "${PROJECT_ROOT}/homebrew/Brewfile.core"
+    done
+}
+
 # Every brew/cask package declared across all Brewfiles, one short name per line.
 _all_brewfile_packages() {
     local brewfile raw_line line

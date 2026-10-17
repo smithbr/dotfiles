@@ -7,7 +7,7 @@ brew "bats-core"
 brew "bottom"
 brew "difftastic"
 brew "domain-check"
-brew "fresh-editor"
+brew "fd"
 brew "fzf"
 brew "gh"
 brew "ghq"
@@ -25,6 +25,7 @@ brew "ripgrep"
 brew "shellcheck"
 brew "skills"
 brew "stow"
+brew "tmux"
 brew "uv"
 brew "xdg-ninja", args: ["HEAD"]
 
@@ -32,12 +33,15 @@ brew "xdg-ninja", args: ["HEAD"]
 brew "antidote"
 brew "asciiquarium"
 brew "bat"
+brew "eza"
 brew "fastfetch"
 brew "glow"
 brew "gum"
 brew "nerdfetch"
 brew "onefetch"
 brew "starship"
+brew "yazi"
+brew "zoxide"
 
 # macOS only: Homebrew on Linux has no casks.
 if OS.mac?

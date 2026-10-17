@@ -1,0 +1,3 @@
+# bottom (btm, aliased as top) reads this from ~/.config/bottom on macOS and
+# Linux. While it exists, btm does not write its commented default here.
+# Options: https://bottom.pages.dev/stable/configuration/config-file/

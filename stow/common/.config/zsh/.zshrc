@@ -17,17 +17,11 @@ setopt APPEND_HISTORY HIST_EXPIRE_DUPS_FIRST HIST_FIND_NO_DUPS HIST_IGNORE_ALL_D
 setopt HIST_IGNORE_DUPS HIST_IGNORE_SPACE HIST_REDUCE_BLANKS HIST_SAVE_NO_DUPS
 setopt HIST_VERIFY SHARE_HISTORY
 
-[[ -f "${XDG_CONFIG_HOME}/shell/aliases" ]] && source "${XDG_CONFIG_HOME}/shell/aliases"
-[[ -f "${XDG_CONFIG_HOME}/shell/functions" ]] && source "${XDG_CONFIG_HOME}/shell/functions"
-
 # 1Password
 op_sock="${HOME}/.1password/agent.sock"
 op_target="${HOME}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
 [[ "${OSTYPE}" == darwin* ]] && [[ ! -S "${op_sock}" ]] && [[ -S "${op_target}" ]] && mkdir -p "${HOME}/.1password" && ln -sf "${op_target}" "${op_sock}"
 [[ -S "${op_sock}" ]] && export SSHKEY_IDENTITY_AGENT="${op_sock}" SSH_AUTH_SOCK="${op_sock}"
-
-# Local overrides
-[[ -f "${ZDOTDIR}/.zshrc.local" ]] && source "${ZDOTDIR}/.zshrc.local"
 
 # Antidote
 zsh_plugins_file="${ZDOTDIR}/.zsh_plugins.txt"
@@ -51,8 +45,23 @@ elif [[ -f "${zsh_plugins_file}" ]] && [[ -f "${antidote_zsh}" ]]; then
   fi
 fi
 
+[[ -f "${XDG_CONFIG_HOME}/shell/aliases" ]] && source "${XDG_CONFIG_HOME}/shell/aliases"
+[[ -f "${XDG_CONFIG_HOME}/shell/functions" ]] && source "${XDG_CONFIG_HOME}/shell/functions"
+
+# Local overrides
+[[ -f "${ZDOTDIR}/.zshrc.local" ]] && source "${ZDOTDIR}/.zshrc.local"
+
 # Starship
 command -v starship >/dev/null 2>&1 && eval "$(starship init zsh)"
+
+# fzf: Ctrl-R history, Ctrl-T files, Alt-C directories, and ** completion.
+# After the plugins, so its Ctrl-R wins over oh-my-zsh's key bindings.
+export FZF_DEFAULT_COMMAND="fd --type f --hidden --exclude .git"
+export FZF_CTRL_T_COMMAND="${FZF_DEFAULT_COMMAND}"
+export FZF_ALT_C_COMMAND="fd --type d --hidden --exclude .git"
+command -v fzf >/dev/null 2>&1 && source <(fzf --zsh)
+
+command -v zoxide >/dev/null 2>&1 && eval "$(zoxide init zsh)"
 
 # Completion
 zstyle ':completion:*' menu select
