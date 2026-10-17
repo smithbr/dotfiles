@@ -61,6 +61,15 @@ ai_doctor() {
     (cd "${PROJECT}" && python3 "${AI_DOCTOR}" --no-color "$@")
 }
 
+# on_terminal KEYS: ai-doctor without --fix on a pseudo-terminal, typing KEYS.
+on_terminal() {
+    if [[ "$(uname -s)" == Darwin ]]; then
+        run bash -c 'cd "$1" && shift && printf "$0" | script -q /dev/null "$@"' "$1" "${PROJECT}" python3 "${AI_DOCTOR}" --no-color
+    else
+        run bash -c 'cd "$1" && shift && printf "$0" | script -qec "$*" /dev/null' "$1" "${PROJECT}" python3 "${AI_DOCTOR}" --no-color
+    fi
+}
+
 # broken_servers: Claude servers that cannot start, and two that can.
 broken_servers() {
     printf '#!/bin/sh\n' > "${TEST_TMPDIR}/bin/good-mcp"
@@ -111,7 +120,7 @@ JSON
     assert_output --regexp "trim  2 skill bundles beyond the home persona cost ~[0-9]+ tokens a session"
     assert_output --partial "skill-drop cloud data  [auto]"
     assert_output --regexp "every session drops 2 skills \(~[0-9]+ tokens\); skills-add brings a bundle back"
-    assert_output --partial "Run ai-doctor --fix to do 1, 2 (asks before each)"
+    assert_output --partial "Run ai-doctor --fix to do 1, 2 (lists them to choose from)"
     refute test -e "${TEST_TMPDIR}/skills-add.log"
 
     run ai_doctor --fix --yes
@@ -163,24 +172,46 @@ JSON
     assert_success
 }
 
-@test "ai-doctor: --fix asks before each fix, and no or closed stdin changes nothing" {
+@test "ai-doctor: --fix lists every [auto] item to change, and closed stdin changes nothing" {
     broken_servers
     cp "${HOME}/.claude.json" "${TEST_TMPDIR}/before.json"
 
     run ai_doctor --fix < /dev/null
     assert_failure 1
-    assert_output --partial "--fix asks before each fix and needs a terminal"
+    assert_output --partial "Nothing changed: ai-doctor asks before changing anything, and stdin is closed."
     assert_equal "$(cat "${HOME}/.claude.json")" "$(cat "${TEST_TMPDIR}/before.json")"
     refute test -e "${XDG_STATE_HOME}/ai-doctor"
 
-    command -v script >/dev/null || skip "script is required for a terminal"
-    if [[ "$(uname -s)" == Darwin ]]; then
-        run bash -c 'cd "$1" && shift && printf "n\nn\nn\n" | script -q /dev/null "$@"' _ "${PROJECT}" python3 "${AI_DOCTOR}" --no-color --fix
-    else
-        run bash -c 'cd "$1" && shift && printf "n\nn\nn\n" | script -qec "$*" /dev/null' _ "${PROJECT}" python3 "${AI_DOCTOR}" --no-color --fix
-    fi
-    assert_output --partial "claude mcp remove nocmd -s user? [y/N]"
+    # Without a terminal --fix reads one line; a word it cannot use changes nothing.
+    run ai_doctor --fix <<< "fix 1 bogus"
+    assert_failure 1
+    assert_output --partial "fix  "
+    assert_output --partial 'like "fix 2 5-7 skip 3"'
+    assert_output --partial "Not understood: bogus; nothing changed"
     assert_equal "$(cat "${HOME}/.claude.json")" "$(cat "${TEST_TMPDIR}/before.json")"
+
+    run ai_doctor --fix <<< "none fix 1"
+    assert_failure 1
+    assert_output --partial "Done: 1 fixed."
+    run python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); print(len(d["mcpServers"]) + len(d["projects"][sys.argv[2]]["mcpServers"]))' "${HOME}/.claude.json" "${PROJECT}"
+    assert_output 4
+}
+
+@test "ai-doctor: on a terminal the list follows the report; q changes nothing and Enter applies it" {
+    command -v script >/dev/null || skip "script is required for a terminal"
+    broken_servers
+    cp "${HOME}/.claude.json" "${TEST_TMPDIR}/before.json"
+
+    on_terminal q
+    assert_output --partial "Choose a change for each item"
+    assert_output --partial "Nothing changed."
+    assert_equal "$(cat "${HOME}/.claude.json")" "$(cat "${TEST_TMPDIR}/before.json")"
+
+    # A fix starts set to fix, so Enter alone applies every one.
+    on_terminal '\n'
+    assert_output --partial "Done: 3 fixed."
+    run python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); print(sorted(d["mcpServers"]), d["projects"][sys.argv[2]]["mcpServers"])' "${HOME}/.claude.json" "${PROJECT}"
+    assert_output "['good', 'web'] {}"
 }
 
 @test "ai-doctor: a token in a config is a fix that never prints it, and --fix repairs the URL and permissions" {

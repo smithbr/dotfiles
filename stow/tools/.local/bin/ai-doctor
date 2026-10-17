@@ -4,8 +4,10 @@
 # ///
 """List what to fix or trim in Claude Code, Codex, and Cursor, and fix it.
 
-  ai-doctor             what needs doing, as a short numbered list
-  ai-doctor --fix       do it: asks before each fix (--yes asks nothing)
+  ai-doctor             what needs doing, as a short numbered list; on a
+                        terminal, then the list of [auto] items to change
+  ai-doctor --fix       that list without a terminal too, read as one line
+                        (--yes applies every [auto] item, asking nothing)
   ai-doctor -v          also everything checked: instructions, skills per
                         bundle and per plugin, agents, plugins with their
                         use, and MCP servers, with token sizes
@@ -35,11 +37,14 @@ import argparse
 import json
 import os
 import re
+import select
 import shutil
 import stat
 import subprocess
 import sys
+import termios
 import time
+import tty
 from pathlib import Path
 
 try:
@@ -808,37 +813,181 @@ def print_findings(report):
     return findings
 
 
-def ask(question):
+def stdin_closed():
     try:
-        answer = input(question)
+        return os.path.samestat(os.fstat(0), os.stat(os.devnull))
+    except OSError:
+        return True
+
+
+def tally(actions):
+    count = actions.count("fix")
+    return f"fix {count}" if count else "nothing changes"
+
+
+def pick_on_terminal(report, rows, actions):
+    """The list on the alternate screen, df-doctor's way: the arrows choose a
+    row, f or s (or space) sets it, Enter applies every row, q or Esc cancels.
+    Returns the actions, or None when cancelled."""
+    fd = sys.stdin.fileno()
+    saved = termios.tcgetattr(fd)
+    out = sys.stderr
+    picked = list(actions)
+    cursor = top = 0
+    note = ""
+    head = "f fix (do the [auto] step)  s skip (leave it)"
+    keys = "↑↓ PgUp PgDn Home End choose a row  space next change  enter apply all  q cancel"
+
+    def key():
+        return os.read(fd, 1)
+
+    def waiting():
+        return bool(select.select([fd], [], [], 0.1)[0])
+
+    try:
+        tty.setcbreak(fd, termios.TCSANOW)
+        out.write("\033[?1049h\033[?25l")
+        while True:
+            cols, lines = shutil.get_terminal_size()
+            cols = cols if cols >= 20 else 80
+            # Three lines above the rows and three below.
+            height = max(lines - 7, 3)
+            top = min(top, cursor)
+            top = max(top, cursor - height + 1)
+            last = min(top + height, len(rows))
+            screen = ["\033[H\033[2J" + report.paint("1", "Choose a change for each item") + f" ({len(rows)})",
+                      head[:cols], report.paint("2", keys[:cols])]
+            for r in range(top, last):
+                number, finding = rows[r]
+                text = f"{picked[r]:<4} {number:>2}  {finding.todo}"[:cols - 2]
+                screen.append(report.paint("1", f"> {text}") if r == cursor else f"  {text}")
+            screen += [""] * (height - (last - top))
+            foot = report.paint("2", f"{top + 1}-{last} of {len(rows)}") + "  " if len(rows) > height else ""
+            foot += report.paint("33", note) if note else f"Enter: {tally(picked)}"
+            finding = rows[cursor][1]
+            screen += [foot, report.paint("1", f"{finding.kind}: {finding.title}"[:cols]),
+                       report.paint("2", (finding.effect or "")[:cols])]
+            out.write("\n".join(screen))
+            out.flush()
+            note = ""
+            pressed = key()
+            if pressed == b"\033":
+                rest = os.read(fd, 2) if waiting() else b""
+                if rest == b"[A":
+                    cursor = max(cursor - 1, 0)
+                elif rest == b"[B":
+                    cursor = min(cursor + 1, len(rows) - 1)
+                elif rest in (b"[H", b"OH"):
+                    cursor = 0
+                elif rest in (b"[F", b"OF"):
+                    cursor = len(rows) - 1
+                elif rest in (b"[5", b"[6"):
+                    if waiting():
+                        key()
+                    step = -height if rest == b"[5" else height
+                    cursor = min(max(cursor + step, 0), len(rows) - 1)
+                else:
+                    return None
+            elif pressed == b" ":
+                picked[cursor] = "skip" if picked[cursor] == "fix" else "fix"
+            elif pressed in (b"f", b"s"):
+                picked[cursor] = "fix" if pressed == b"f" else "skip"
+            elif pressed in (b"\n", b"\r"):
+                return picked
+            elif pressed in (b"q", b""):
+                return None
+            else:
+                note = "f fixes the row, s skips it"
+    except KeyboardInterrupt:
+        raise SystemExit(130)
+    finally:
+        out.write("\033[?25h\033[?1049l")
+        out.flush()
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+
+
+def pick_by_line(rows, actions):
+    """The list without a terminal (or with DOTFILES_PROMPT=read): the rows,
+    then one line of actions and item numbers. Returns None on a line it
+    cannot use, changing no row."""
+    numbers = [number for number, _ in rows]
+    print("Choose a change for each item:", file=sys.stderr)
+    for (number, finding), action in zip(rows, actions):
+        print(f"  {number:>2}) {action:<4} {finding.todo}", file=sys.stderr)
+    print('Actions then item numbers, like "fix 2 5-7 skip 3"; none skips everything; '
+          "Enter applies the list as shown: ", end="", file=sys.stderr, flush=True)
+    try:
+        reply = input()
     except EOFError:
-        print()
-        return False
-    return answer.strip().lower() in ("y", "yes")
+        print(file=sys.stderr)
+        return None
+    picked = list(actions)
+    action = None
+    for token in reply.split():
+        if token == "none":
+            picked = ["skip"] * len(picked)
+            continue
+        if token in ("fix", "skip"):
+            action = token
+            continue
+        match = re.fullmatch(r"(\d{1,6})(?:-(\d{1,6}))?", token)
+        if not action or not match:
+            print(f"Not understood: {token}; nothing changed", file=sys.stderr)
+            return None
+        low, high = int(match[1]), int(match[2] or match[1])
+        hits = [r for r, number in enumerate(numbers) if low <= number <= high]
+        if not hits:
+            print(f"No [auto] item {token}; nothing changed", file=sys.stderr)
+            return None
+        for r in hits:
+            picked[r] = action
+    return picked
 
 
 def apply_findings(report, findings, yes):
-    fixable = [(n, f) for n, f in enumerate(findings, 1) if f.apply]
-    if not fixable:
+    """One list of every [auto] item, a fix set to fix and a trim to skip; the
+    person changes any row and every row is applied at once. Nothing changes
+    when the list is cancelled or stdin is closed."""
+    rows = [(n, f) for n, f in enumerate(findings, 1) if f.apply]
+    if not rows:
         print("\n  Nothing here can be fixed automatically; each item above says what to do.")
         return
-    if not yes and not sys.stdin.isatty():
-        print("\n  --fix asks before each fix and needs a terminal; --yes applies them all without asking.")
-        return
+    if yes:
+        actions = ["fix"] * len(rows)
+    else:
+        if stdin_closed():
+            print("\n  Nothing changed: ai-doctor asks before changing anything, and stdin is closed.")
+            return
+        actions = ["fix" if f.kind == "fix" else "skip" for _, f in rows]
+        print(file=sys.stderr)
+        if os.environ.get("DOTFILES_PROMPT") != "read" and sys.stdin.isatty() and sys.stderr.isatty():
+            actions = pick_on_terminal(report, rows, actions)
+        else:
+            actions = pick_by_line(rows, actions)
+        if actions is None or "fix" not in actions:
+            print("  Nothing changed.")
+            return
     backup_dir = STATE_HOME / "ai-doctor" / time.strftime("%Y%m%d-%H%M%S")
+    done = failed = 0
     print()
-    for number, finding in fixable:
-        if not yes and not ask(f"  {number:>2}  {finding.todo}? [y/N] "):
+    for (number, finding), action in zip(rows, actions):
+        if action != "fix":
             continue
         try:
             finding.apply(backup_dir)
         except (OSError, RuntimeError, KeyError, subprocess.CalledProcessError) as error:
-            print(f"      {report.paint('31', 'failed')}: {error}")
+            print(f"  {number:>2}  {finding.todo}: {report.paint('31', 'failed')}: {error}")
+            failed += 1
             continue
         finding.done = True
-        print(f"      {report.paint('32', 'done')}")
+        done += 1
+        print(f"  {number:>2}  {finding.todo}: {report.paint('32', 'done')}")
     if backup_dir.exists():
         print(f"\n  Backups: {tilde(backup_dir)}")
+    if failed:
+        print(f"\n  Done with problems: {done} fixed, {failed} failed.")
+    else:
+        print(f"\n  Done: {done} fixed.")
 
 
 def main(argv=None):
@@ -848,7 +997,7 @@ def main(argv=None):
         epilog=__doc__.split("\n", 1)[1],
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--fix", action="store_true", help="apply the [auto] fixes, asking before each")
+    parser.add_argument("--fix", action="store_true", help="choose which [auto] items to do, even without a terminal")
     parser.add_argument("--yes", action="store_true", help="with --fix, apply them all without asking")
     parser.add_argument("-v", "--verbose", action="store_true", help="also list everything checked")
     parser.add_argument("--app", action="append", choices=APPS, help="check only this app (repeatable)")
@@ -877,12 +1026,14 @@ def main(argv=None):
         print()
     print(report.paint("1", f"ai-doctor: {summary(report, apps)}"))
     findings = print_findings(report)
-    if args.fix and findings:
-        apply_findings(report, findings, args.yes)
+    # On a terminal the list follows the report, as in df-doctor.
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    if findings and (args.fix or interactive):
+        apply_findings(report, findings, args.fix and args.yes)
         return 1 if any(f.kind == "fix" and not getattr(f, "done", False) for f in findings) else 0
     auto = [str(n) for n, f in enumerate(findings, 1) if f.apply]
     if auto:
-        print(f"\n  Run {report.paint('1', 'ai-doctor --fix')} to do {', '.join(auto)} (asks before each). "
+        print(f"\n  Run {report.paint('1', 'ai-doctor --fix')} to do {', '.join(auto)} (lists them to choose from). "
               "-v shows everything checked.")
     return 1 if any(f.kind == "fix" for f in findings) else 0
 
