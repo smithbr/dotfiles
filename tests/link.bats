@@ -1706,7 +1706,9 @@ plant_single_layer_links() {
     for name in sshkey ph-update ph-backup; do
         ln -s "${PROJECT_ROOT}/stow/common/.local/bin/${name}" "${DEST}/.local/bin/${name}"
     done
-    ln -s "${PROJECT_ROOT}/stow/common/.config/ghostty/config" "${DEST}/.config/ghostty/config"
+    # A path the repo holds today: a file only in history is stale only when
+    # git log can see it, and CI's checkout is shallow.
+    ln -s "${PROJECT_ROOT}/stow/common/.config/ghostty/config.ghostty" "${DEST}/.config/ghostty/config.ghostty"
 }
 
 @test "moving to layers relinks what the persona keeps and removes the rest" {
@@ -1717,8 +1719,7 @@ plant_single_layer_links() {
     refute_output --partial "Backed up"
     [ "$(readlink "${DEST}/.local/bin/sshkey")" = "../../.dotfiles/stow/tools/.local/bin/sshkey" ] \
         || [ "$(cd "${DEST}/.local/bin" && cd -P "$(dirname "$(readlink sshkey)")" && pwd)" = "${PROJECT_ROOT}/stow/tools/.local/bin" ]
-    assert test -L "${DEST}/.config/ghostty/config.ghostty"
-    refute test -L "${DEST}/.config/ghostty/config"
+    [ "$(cd "${DEST}/.config/ghostty" && cd -P "$(dirname "$(readlink config.ghostty)")" && pwd)" = "${PROJECT_ROOT}/stow/desktop/.config/ghostty" ]
     [ ! -L "${DEST}/.local/bin/ph-update" ]
     [ ! -L "${DEST}/.local/bin/ph-backup" ]
     [ ! -e "${DEST}/.local/state/dotfiles/clobbered" ]
@@ -1730,7 +1731,7 @@ plant_single_layer_links() {
     refute_output --partial "Backed up"
     [ -e "${DEST}/.local/bin/ph-update" ]
     [ -e "${DEST}/.local/bin/ph-backup" ]
-    [ ! -L "${DEST}/.config/ghostty/config" ]
+    [ ! -L "${DEST}/.config/ghostty/config.ghostty" ]
     [ ! -e "${DEST}/.local/state/dotfiles/clobbered" ]
     DOTFILES_OS=linux run_link status
     assert_success
