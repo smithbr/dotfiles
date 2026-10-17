@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# Holeberry, the Pi-hole menu bar app, an optional install on macOS, from
-# the latest GitHub release DMG: there is no Homebrew cask. The app is
+# Holeberry, the Pi-hole menu bar app, an optional install on macOS that is
+# off by default: install.sh offers it unticked, so a closed stdin or a work
+# Mac never gets it unasked. It comes from the latest GitHub release DMG:
+# there is no Homebrew cask. The app is
 # checked for Holeberry's Developer ID team and Apple's notarization before
 # it is copied into /Applications, and it updates itself through Sparkle
 # from then on, so an installed copy is left alone. HOLEBERRY_APPS_DIR
 # overrides the destination.
 # https://github.com/pedrovieira/Holeberry
 # detect: [[ -d "${HOLEBERRY_APPS_DIR:-/Applications}/Holeberry.app" ]]
+# default: off
 
 set -euo pipefail
 

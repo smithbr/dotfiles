@@ -733,8 +733,8 @@ MOCK
         chmod +x "${TEST_BIN}/hostname" "${TEST_BIN}/find" "${TEST_BIN}/zsh" "${TEST_BIN}/grep" "${TEST_BIN}/ssh-keygen" "${TEST_BIN}/brew" "${TEST_STOW_STUB}"
 
         cd "'"${PROJECT_ROOT}"'"
-        # No installs: claude-code and holeberry, on by default, would run
-        # their real installers.
+        # No installs: claude-code, on by default, would run its real
+        # installer; holeberry is off by default, and dropping it is harmless.
         ./install.sh --skip-system --skip-brew --no-install claude-code --no-install holeberry --adopt
 
         [[ -L "${HOME}/.dotfiles" ]] || { echo "missing dotfiles symlink"; exit 1; }
@@ -1034,7 +1034,8 @@ MOCK
         [[ -z "$(/usr/bin/find "${HOME}" -mindepth 1 -print)" ]] || { echo "FAIL: wrote into HOME"; /usr/bin/find "${HOME}"; exit 1; }
     '
     assert_success
-    assert_output --partial "Installs: holeberry claude-code (default)"
+    assert_output --partial "Installs: claude-code (default)"
+    refute_output --partial "Installs: holeberry"
     assert_output --partial "Would link "
     assert_output --partial "Would install the Xcode Command Line Tools"
     assert_output --partial "Would create an SSH key at "

@@ -16,9 +16,11 @@
 #   scripts/bootstrap/<os>/<name>.sh, scripts/bootstrap/<name>.sh
 #                           a setup script with a "# detect: COMMAND" line is an
 #                           optional install (Docker, Tailscale, Claude Code),
-#                           offered to every persona and on by default. The
-#                           chosen installs come from DOTFILES_INSTALLS, else the
-#                           saved choice, else what is on by default.
+#                           offered to every persona and on by default, unless
+#                           it also has "# default: off" (Holeberry): then it is
+#                           offered unticked. The chosen installs come from
+#                           DOTFILES_INSTALLS, else the saved choice, else what
+#                           is on by default.
 #   stow/<layer>, stow/<layer>.<os>
 #                           mirror $HOME; every file becomes a symlink into the
 #                           repo, so editing the live file edits the repo.
@@ -481,8 +483,9 @@ setup_script() {
 }
 
 # The optional installs: the setup scripts for this platform that carry a
-# "# detect:" line, offered to every persona and on by default. The platform's
-# own directory first, then the shared one, each in name order.
+# "# detect:" line, offered to every persona and on by default unless the
+# script also says "# default: off". The platform's own directory first, then
+# the shared one, each in name order.
 optional_installs() {
     local dir script name seen=""
     for dir in "$(bootstrap_dir)" "${REPO}/scripts/bootstrap"; do
@@ -511,13 +514,13 @@ install_exists() {
 
 # One setting of an install: from roles/NAME, where setup is the role's own
 # name when unset, or for an optional install from its script, which declares
-# only detect.
+# only detect and default.
 install_setting() {
     local name="$1" key="$2" value="" script
     if [[ -f "${REPO}/roles/${name}" ]]; then
         value="$(persona_settings "${REPO}/roles/${name}" | sed -n "s/^${key}=//p" | tail -n 1)"
-    elif [[ "${key}" == detect ]] && script="$(setup_script "${name}")"; then
-        value="$(sed -n 's/^# detect: //p' "${script}" | head -n 1)"
+    elif [[ "${key}" == detect || "${key}" == default ]] && script="$(setup_script "${name}")"; then
+        value="$(sed -n "s/^# ${key}: //p" "${script}" | head -n 1)"
     fi
     [[ -n "${value}" || "${key}" != setup ]] || value="${name}"
     printf '%s\n' "${value}"
@@ -526,9 +529,11 @@ install_setting() {
 # What is offered on this platform, as NAME<TAB>default|optional<TAB>DETECT:
 # the optional installs, then the persona's roles in its order.
 offered_installs() {
-    local name
+    local name kind
     for name in $(optional_installs); do
-        printf '%s\tdefault\t%s\n' "${name}" "$(install_setting "${name}" detect)"
+        kind=default
+        [[ "$(install_setting "${name}" default)" != off ]] || kind=optional
+        printf '%s\t%s\t%s\n' "${name}" "${kind}" "$(install_setting "${name}" detect)"
     done
     for name in ${PERSONA_ROLES}; do
         persona_allows_platform "${REPO}/roles/${name}" || continue

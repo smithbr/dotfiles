@@ -27,8 +27,9 @@ Options:
                      keeps it), otherwise the saved choice or the OS default
                      applies
       --install NAME Add an install: one offered to every persona (docker,
-                     tailscale, claude-code; on by default) or a role the persona
-                     offers (see roles/: pihole); --no-install NAME drops one.
+                     tailscale, claude-code, on by default; holeberry, off) or a
+                     role the persona offers (see roles/: pihole);
+                     --no-install NAME drops one.
                      Saved for later runs; without either, a terminal asks until
                      a choice is saved. DOTFILES_INSTALLS="a b" sets the whole
                      list
