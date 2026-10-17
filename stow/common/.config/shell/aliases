@@ -1,12 +1,13 @@
 # navigation
 alias cdd="cd ~/.dotfiles"
 alias h="history"
-alias hg="history 1 | grep "
+alias hg="history 1 | rg "
 alias ls="eza --group-directories-first"
 alias lsa="eza -laF --git --group-directories-first"
 alias xb="cd ~/.local/bin"
 alias xc="cd ~/.config"
 alias xn="xdg-ninja --skip-ok --skip-unsupported"
+alias pi="ssh pihole"
 
 # shell
 alias c="claude"
