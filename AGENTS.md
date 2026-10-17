@@ -10,6 +10,8 @@ These rules apply throughout this repository. Before changing a directory, read 
 - [`seed/`](seed/README.md) and [`editors/`](editors/README.md): copied-once app config and shared editor settings.
 - [`tests/`](tests/README.md): what each suite covers and how tests are written.
 
+Any new script, or a change to how one talks to the person running it (help, flags, output, prompts, the end of a run), follows [`scripts/DESIGN.md`](scripts/DESIGN.md), under `scripts/` and `stow/*/.local/bin/` alike. It overrides a skill's own wrapper template.
+
 ## Installer reference
 
 `install.sh --help` lists the supported options:
