@@ -13,8 +13,8 @@
 #           an unmanaged file next to managed ones
 #   unmanaged  config directly in ~/.config and commands in ~/.local/bin that
 #           the repo does not manage (made outside it)
-#   ignore  left alone: in use, local state, a tool without XDG support, or
-#           marked to ignore on this machine (--ignore, or ignore when asked)
+#   ignore  left alone: in use, local state, made by the OS (normal or
+#           critical), a tool without XDG support, or marked to ignore on this machine (--ignore, or ignore when asked)
 #
 # On a terminal the report is followed by one list of everything df-doctor
 # can change, where each item gets skip, archive, delete, ignore, add, or move
@@ -51,10 +51,13 @@ BIN_HOME=""
 IGNORE_FILE=""
 IGNORED_PATHS=""
 declare -a extra_roots=() ignore_add=() ignore_remove=()
+# Where the system paths that show an OS file's owner is installed are looked
+# up; tests point it at a fake root.
+OS_ROOT="${DF_DOCTOR_ROOT:-}"
 
 # The findings, one index per path. action is what df-doctor suggests (archive,
 # move, keep); target is where a move goes; how is advice to follow by hand;
-# kind sorts the ignored ones (use, command, state, noxdg); fixable is 0 when
+# kind sorts the ignored ones (use, command, state, system, noxdg); fixable is 0 when
 # df-doctor must not touch the path (inside a symlinked folder, say).
 declare -a f_path=() f_group=() f_action=() f_target=() f_reason=() f_how=() f_kind=() f_fixable=() f_size=()
 
@@ -73,8 +76,9 @@ Check this machine against the dotfiles repo and sort what it finds:
   Not in the repo
           config in ~/.config and commands in ~/.local/bin made outside the
           repo
-  Ignore  left alone: in use, local state, tools without XDG support, or
-          marked to ignore on this machine
+  Ignore  left alone: in use, local state, made by the OS (each says whether
+          it is normal or critical), tools without XDG support, or marked to
+          ignore on this machine
 
 On a terminal the report is followed by one list of everything df-doctor can
 change, one row per item, each set to its suggestion (skip, unless it is under
@@ -522,6 +526,70 @@ age_text() {
     esac
 }
 
+# Files Debian and its desktops make in a home, by path from the home:
+# "level<TAB>evidence<TAB>what it is". level is critical when removing it
+# breaks something, else normal; evidence is space-separated system paths
+# (globs) of which one exists while its owner is installed.
+os_entry() {
+    local desktops="/usr/bin/gnome-shell /usr/bin/xfce4-session /usr/bin/startplasma-* /usr/bin/lxsession /usr/bin/labwc /usr/bin/wayfire"
+    local greeters="/usr/sbin/gdm3 /usr/sbin/lightdm /usr/bin/sddm"
+    local x11="/usr/bin/Xorg /usr/bin/Xwayland"
+    case "$1" in
+        .profile) printf 'critical\t/bin/sh\tread by every login shell (Debian copies it from /etc/skel); without it ~/.local/bin leaves the PATH\n' ;;
+        .bash_logout) printf 'normal\t/bin/bash\tbash runs it at logout to clear the console (from /etc/skel)\n' ;;
+        .sudo_as_admin_successful) printf 'normal\t/usr/bin/sudo\tsudo'"'"'s marker that hides its first-use hint\n' ;;
+        .hushlogin) printf 'normal\t/usr/bin/login /bin/login\thides the message shown at login; made on purpose\n' ;;
+        .face | .face.icon) printf 'normal\t%s\tyour picture on the login screen\n' "${greeters}" ;;
+        .dmrc) printf 'normal\t%s\tthe session and language last chosen at the login screen\n' "${greeters}" ;;
+        .Xauthority) printf 'critical\t%s\tX11 login cookie; graphical apps cannot open windows without it\n' "${x11}" ;;
+        .xsession-errors | .xsession-errors.old) printf 'normal\t%s\tlog of a desktop session; rewritten at each login\n' "${x11}" ;;
+        .dbus) printf 'normal\t/usr/bin/dbus-daemon\tD-Bus session data\n' ;;
+        .gtkrc-2.0) printf 'normal\t/usr/lib/*/libgtk-x11-2.0.so.0\tGTK 2 theme settings\n' ;;
+        .config/user-dirs.dirs) printf 'critical\t/usr/bin/xdg-user-dirs-update\twhere Desktop, Downloads, and the other user folders are; file managers and save dialogs read it\n' ;;
+        .config/user-dirs.locale) printf 'normal\t/usr/bin/xdg-user-dirs-update\tthe language the user folders were named in\n' ;;
+        .config/mimeapps.list) printf 'normal\t/usr/bin/xdg-open /usr/bin/gio\tyour default app for each file type\n' ;;
+        .config/dconf) printf 'critical\t/usr/bin/dconf /usr/libexec/dconf-service\tthe settings database of GNOME and GTK apps; removing it resets them all\n' ;;
+        .config/gnome-initial-setup-done) printf 'critical\t/usr/libexec/gnome-initial-setup\tGNOME'"'"'s first-login marker; without it GNOME runs its setup again\n' ;;
+        .config/goa-1.0) printf 'normal\t/usr/libexec/goa-daemon\tGNOME Online Accounts sign-ins\n' ;;
+        .config/.gsd-keyboard.settings-ported) printf 'normal\t/usr/libexec/gsd-keyboard\tGNOME'"'"'s marker that keyboard settings were migrated\n' ;;
+        .config/monitors.xml) printf 'normal\t/usr/bin/gnome-shell /usr/bin/mutter\tGNOME'"'"'s saved display layout\n' ;;
+        .config/GNOME-xdg-terminals.list | .config/xdg-terminals.list) printf 'normal\t/usr/bin/gnome-shell /usr/bin/xdg-terminal-exec\twhich terminal the desktop opens\n' ;;
+        .config/gtk-2.0) printf 'normal\t/usr/lib/*/libgtk-x11-2.0.so.0\tGTK 2 bookmarks and theme settings\n' ;;
+        .config/gtk-3.0) printf 'normal\t/usr/lib/*/libgtk-3.so.0\tGTK 3 file-chooser bookmarks and theme settings\n' ;;
+        .config/gtk-4.0) printf 'normal\t/usr/lib/*/libgtk-4.so.1\tGTK 4 file-chooser bookmarks and theme settings\n' ;;
+        .config/pulse) printf 'normal\t/usr/bin/pulseaudio /usr/bin/pipewire-pulse\tPulseAudio'"'"'s cookie and saved volumes; made again when removed\n' ;;
+        .config/ibus) printf 'normal\t/usr/bin/ibus\tinput method settings\n' ;;
+        .config/autostart) printf 'normal\t%s\tapps your desktop starts at login\n' "${desktops}" ;;
+        .config/menus) printf 'normal\t%s\tyour edits to the desktop'"'"'s app menu\n' "${desktops}" ;;
+        .config/procps) printf 'normal\t/usr/bin/top\ttop'"'"'s saved layout\n' ;;
+        .config/lxsession | .config/lxpanel | .config/pcmanfm | .config/libfm | .config/openbox | .config/lxterminal) printf 'normal\t/usr/bin/lxsession /usr/bin/lxpanel /usr/bin/pcmanfm /usr/bin/openbox\tRaspberry Pi or LXDE desktop settings\n' ;;
+        .config/wayfire.ini | .config/wf-panel-pi.ini | .config/labwc | .config/kanshi) printf 'normal\t/usr/bin/wayfire /usr/bin/labwc /usr/bin/kanshi\tRaspberry Pi desktop settings (Wayland)\n' ;;
+    esac
+}
+
+# A file the OS made: Ignore while its owner is installed, saying whether it is
+# critical; a leftover to decide on once nothing on the system uses it.
+classify_os_entry() {
+    local path="$1" entry level evidence what glob candidate found=""
+    local -a globs=()
+
+    entry="$(os_entry "${path#"${DEST_DIR}/"}")"
+    [[ -n "${entry}" ]] || return 1
+    IFS=$'\t' read -r level evidence what <<< "${entry}"
+    # read splits without globbing, so each glob expands under OS_ROOT only.
+    read -r -a globs <<< "${evidence}"
+    for glob in "${globs[@]}"; do
+        for candidate in "${OS_ROOT}"${glob}; do
+            [[ -e "${candidate}" ]] && found=1
+        done
+    done
+    if [[ -n "${found}" ]]; then
+        add_finding ignore "${path}" keep "" "${level}: ${what}" "" system
+    else
+        add_finding decide "${path}" archive "" "${what}; nothing installed uses it any more, so it is a leftover"
+    fi
+}
+
 # Folders named after a product rather than its command.
 owner_alias() {
     case "$1" in
@@ -645,6 +713,7 @@ classify_home() {
             return
             ;;
     esac
+    classify_os_entry "${path}" && return
 
     entry="$(awk -F'\t' -v n="${name}" '$1 == n { print; exit }' <<< "${XDG_DB}")"
     # Tab is IFS whitespace, so read would merge an empty field into the next; split on \x1f.
@@ -822,6 +891,8 @@ classify_config_entry() {
         add_finding fix "${path}" archive "" "broken link to $(readlink "${path}")"
     elif [[ -L "${path}" ]]; then
         add_finding unmanaged "${path}" keep "" "links to $(display_path "$(readlink "${path}")")"
+    elif classify_os_entry "${path}"; then
+        return
     else
         owner="$(find_owner "${path##*/}" "")"
         age="$(age_days "${path}")"
@@ -960,11 +1031,12 @@ print_items() {
 print_ignored() {
     local kind title i note
 
-    for kind in use state noxdg marked; do
+    for kind in use state system noxdg marked; do
         [[ "$(count_kind "${kind}")" -gt 0 ]] || continue
         case "${kind}" in
             use) title="In use" ;;
             state) title="Local state" ;;
+            system) title="Made by the OS (critical: removing it breaks something)" ;;
             noxdg) title="No XDG support" ;;
             marked) title="Marked to ignore (df-doctor --unignore PATH reports one again)" ;;
         esac
@@ -1006,13 +1078,18 @@ print_heading() {
 
 print_report() {
     local links fix decide unmanaged ignored parts="" counts=""
-    local use state noxdg marked
+    local use state system critical noxdg marked i
 
     set_width
     links="$(count_group links)" fix="$(count_group fix)" decide="$(count_group decide)" unmanaged="$(count_group unmanaged)" ignored="$(count_group ignore)"
-    use="$(count_kind use)" state="$(count_kind state)" noxdg="$(count_kind noxdg)" marked="$(count_kind marked)"
+    use="$(count_kind use)" state="$(count_kind state)" system="$(count_kind system)" noxdg="$(count_kind noxdg)" marked="$(count_kind marked)"
+    critical=0
+    for i in ${f_kind[@]+"${!f_kind[@]}"}; do
+        [[ "${f_kind[i]}" != system || "${f_reason[i]}" != critical:* ]] || critical=$((critical + 1))
+    done
     [[ "${use}" -eq 0 ]] || parts="${parts:+${parts} · }${use} in use"
     [[ "${state}" -eq 0 ]] || parts="${parts:+${parts} · }$(count_of "${state}" "local state file" "local state files")"
+    [[ "${system}" -eq 0 ]] || parts="${parts:+${parts} · }${system} made by the OS (${critical} critical)"
     [[ "${noxdg}" -eq 0 ]] || parts="${parts:+${parts} · }${noxdg} without XDG support"
     [[ "${marked}" -eq 0 ]] || parts="${parts:+${parts} · }${marked} marked to ignore"
 

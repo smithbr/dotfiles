@@ -352,6 +352,37 @@ write_zshenv() {
     assert_line --regexp "^decide"$'\t'"${HOME}/\.zzorphan"$'\t'"keep"$'\t\t'"no owner found; changed [0-9]+ days ago$"
 }
 
+@test "files the OS made are normal or critical while their owner is installed, else leftovers" {
+    export DF_DOCTOR_ROOT="${TEST_TMPDIR}/root"
+    mkdir -p "${DF_DOCTOR_ROOT}/bin" "${DF_DOCTOR_ROOT}/usr/bin" "${DF_DOCTOR_ROOT}/usr/lib/aarch64-linux-gnu"
+    touch "${DF_DOCTOR_ROOT}/bin/sh" "${DF_DOCTOR_ROOT}/usr/bin/xdg-user-dirs-update" "${DF_DOCTOR_ROOT}/usr/lib/aarch64-linux-gnu/libgtk-3.so.0"
+    mkdir -p "${HOME}/.config/dconf" "${HOME}/.config/gtk-3.0"
+    touch "${HOME}/.profile" "${HOME}/.config/user-dirs.dirs" "${HOME}/.config/user-dirs.locale" "${HOME}/.config/gnome-initial-setup-done"
+    make_stale "${HOME}/.profile" "${HOME}/.config"
+
+    doctor --tsv
+    assert_success
+    assert_line --regexp "^ignore"$'\t'"${HOME}/\.profile"$'\t'"keep"$'\t\t'"critical: read by every login shell"
+    assert_line --regexp "^ignore"$'\t'"${HOME}/\.config/user-dirs\.dirs"$'\t'"keep"$'\t\t'"critical: where Desktop, Downloads"
+    assert_line --regexp "^ignore"$'\t'"${HOME}/\.config/user-dirs\.locale"$'\t'"keep"$'\t\t'"normal: the language"
+    # A glob in the evidence matches any architecture's library folder.
+    assert_line --regexp "^ignore"$'\t'"${HOME}/\.config/gtk-3\.0"$'\t'"keep"$'\t\t'"normal: GTK 3"
+    assert_line --regexp "^decide"$'\t'"${HOME}/\.config/dconf"$'\t'"archive"$'\t\t'"the settings database .*; nothing installed uses it any more, so it is a leftover$"
+    assert_line --regexp "^decide"$'\t'"${HOME}/\.config/gnome-initial-setup-done"$'\t'"archive"$'\t\t'"GNOME's first-login marker.*leftover$"
+
+    # The report counts them, and --all lists them with their level.
+    doctor --all
+    assert_output --partial "4 made by the OS (2 critical)"
+    assert_output --partial "Made by the OS (critical: removing it breaks something)"
+    assert_output --regexp '~/\.config/user-dirs\.locale +normal: the language the user folders were named in'
+
+    # Installing the owner turns the leftover into a critical file to keep.
+    mkdir -p "${DF_DOCTOR_ROOT}/usr/libexec"
+    touch "${DF_DOCTOR_ROOT}/usr/libexec/dconf-service"
+    doctor --tsv
+    assert_line --regexp "^ignore"$'\t'"${HOME}/\.config/dconf"$'\t'"keep"$'\t\t'"critical: the settings database"
+}
+
 @test "an entry a new shell redirects is the old copy, named by the variable that matches it" {
     write_xdg_fixture
     cat > "${DF_DOCTOR_PROGRAMS}/twovar.json" <<'JSON'
