@@ -23,8 +23,9 @@ Options:
   -h, --help         Show this help message and exit
       --persona NAME Set this machine up as NAME (home, work, server, vps;
                      see personas/). Saved for later runs; without it, a terminal
-                     asks until one is saved, otherwise the saved choice or the
-                     OS default applies
+                     asks every run with the saved choice preselected (Enter
+                     keeps it), otherwise the saved choice or the OS default
+                     applies
       --install NAME Add an install: one offered to every persona (docker,
                      tailscale, claude-code; on by default) or a role the persona
                      offers (see roles/: pihole); --no-install NAME drops one.
@@ -36,7 +37,8 @@ Options:
                      its options). Without it, a server or vps persona on Linux
                      that harden-test.sh finds unhardened asks on a terminal;
                      --no-harden skips the question
-      --reconfigure  Ask the persona and install questions again
+      --reconfigure  Ask the install questions again (the persona is asked
+                     on every terminal run)
       --skip-system  Skip the OS bootstrap (scripts/bootstrap/<os>/setup.sh)
       --skip-brew    Skip the Homebrew install/update/bundle step
       --skip-shell   Skip adding zsh to /etc/shells and chsh
@@ -457,21 +459,28 @@ run_installs() {
 # Ask which persona this machine is, when a terminal is available and neither
 # --persona nor DOTFILES_PERSONA chose one. Unboxed, before the steps, so the
 # picker can draw. A closed stdin, EOF or an empty answer keeps the default
-# (the saved choice, else the OS default).
+# (the saved choice, else the OS default); SOURCE saved names it in the header.
+#   prompt_persona DEFAULT [SOURCE]
 prompt_persona() {
-    local default="$1" name
+    local default="$1" source="${2:-}" name header="Which persona is this machine?"
     local -a names=()
 
     while IFS= read -r name; do
         names+=("${name}")
     done < <(bash "${LINK_SCRIPT}" personas)
     [[ "${#names[@]}" -gt 0 ]] || { printf '%s\n' "${default}"; return 0; }
-    choose_one "Which persona is this machine?" "${default}" "${names[@]}"
+    [[ "${source}" != saved ]] || header="This machine is saved as ${default}. Keep it or pick another:"
+    choose_one "${header}" "${default}" "${names[@]}"
+}
+
+# True when both stdin and stdout are a terminal, so a question can be asked.
+on_terminal() {
+    [[ -t 0 && -t 1 ]]
 }
 
 # Settle the persona before anything changes, and pass it on to link.sh and
-# doctor.sh through the environment. A terminal is asked until a choice
-# is saved, and again with --reconfigure.
+# doctor.sh through the environment. A terminal is asked every run, the saved
+# choice preselected, so a run never starts on a persona nobody confirmed.
 resolve_persona() {
     local resolved name source
     if [[ -n "${persona_arg}" ]]; then
@@ -479,8 +488,8 @@ resolve_persona() {
     fi
     resolved="$(bash "${LINK_SCRIPT}" persona)" || exit 2
     read -r name source <<< "${resolved}"
-    if [[ ( "${source}" == default || "${reconfigure}" -eq 1 ) && "${source}" != flag && "${source}" != env && -t 0 && -t 1 ]]; then
-        name="$(prompt_persona "${name}")"
+    if [[ "${source}" != flag && "${source}" != env ]] && on_terminal; then
+        name="$(prompt_persona "${name}" "${source}")"
         export DOTFILES_PERSONA="${name}"
         source=chosen
     fi

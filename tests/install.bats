@@ -169,6 +169,52 @@ run_persona_prompt() {
     assert_output "home"
 }
 
+# Runs install.sh's resolve_persona against a stub link.sh reporting
+# "server SOURCE", with on_terminal answering TERMINAL (yes or no) and stdin
+# as the picker's answer.
+run_resolve_persona() {
+    local source="$1" terminal="$2" answer="$3"
+    shift 3
+    printf '#!/usr/bin/env bash\ncase "$1" in\n    persona) printf "%%s\\n" "${DOTFILES_PERSONA:-server} %s" ;;\n    personas) printf "home\\nserver\\nvps\\n" ;;\nesac\n' "${source}" > "${TEST_TMPDIR}/link.sh"
+    run env "$@" bash -c "
+        source '${PROJECT_ROOT}/scripts/common.sh'
+        LINK_SCRIPT='${TEST_TMPDIR}/link.sh' persona_arg='' reconfigure=0
+        $(sed -n '/^prompt_persona() {$/,/^}$/p;/^on_terminal() {$/,/^}$/p;/^resolve_persona() {$/,/^}$/p' "${PROJECT_ROOT}/install.sh")
+        on_terminal() { [[ '${terminal}' == yes ]]; }
+        DOTFILES_PROMPT=read resolve_persona
+        printf 'persona=%s source=%s env=%s\n' \"\${PERSONA_NAME}\" \"\${PERSONA_SOURCE}\" \"\${DOTFILES_PERSONA:-}\"
+    " <<< "${answer}"
+}
+
+@test "install.sh confirms a saved persona on a terminal, and Enter keeps it" {
+    # The picker writes to stderr, without a newline once nothing is typed.
+    run_resolve_persona saved yes ""
+    assert_success
+    assert_output --partial "This machine is saved as server. Keep it or pick another:"
+    assert_output --partial "persona=server source=chosen env=server"
+
+    run_resolve_persona saved yes "vps"
+    assert_success
+    assert_output --partial "persona=vps source=chosen env=vps"
+
+    # The OS default is asked too, with the plain question.
+    run_resolve_persona default yes ""
+    assert_success
+    assert_output --partial "Which persona is this machine?"
+    refute_output --partial "saved as"
+    assert_output --partial "persona=server source=chosen env=server"
+}
+
+@test "install.sh never asks for the persona without a terminal or when a flag or env chose it" {
+    run_resolve_persona saved no "vps"
+    assert_success
+    assert_output "persona=server source=saved env="
+
+    run_resolve_persona env yes "vps" DOTFILES_PERSONA=home
+    assert_success
+    assert_output "persona=home source=env env=home"
+}
+
 @test "install.sh applies the chosen installs last, skips applied ones, and reports a failing one" {
     local repo="${TEST_TMPDIR}/repo" installs
     mkdir -p "${repo}/scripts/bootstrap/linux"

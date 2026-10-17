@@ -153,7 +153,7 @@ This is process-level isolation, not a real container or VM.
 
 [`install.bats`](install.bats)
 
-- Tests `install.sh` argument parsing, including `--persona`, `--install`, and `--no-install`, the persona picker (number, name, empty answer, EOF), rejecting an unknown persona or install before any change, and the closing installs step (the default install applied on a fresh machine, a chosen role, the saved choice, an applied one skipped, a failing script reported)
+- Tests `install.sh` argument parsing, including `--persona`, `--install`, and `--no-install`, the persona picker (number, name, empty answer, EOF), a saved persona confirmed on every terminal run (Enter keeps it) and never asked without a terminal or after `--persona` or `DOTFILES_PERSONA`, rejecting an unknown persona or install before any change, and the closing installs step (the default install applied on a fresh machine, a chosen role, the saved choice, an applied one skipped, a failing script reported)
 - Verifies SSH key helper behavior
 - Tests error handling when `HOME` is unset
 - Runs an isolated integration test for [`install.sh`](../install.sh) with sandboxed home and mocked external commands
