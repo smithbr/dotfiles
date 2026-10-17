@@ -557,6 +557,22 @@ JSON
     assert_line "fix"$'\t'"${HOME}/.notes.bak"$'\t'"archive"$'\t\t'"backup copy or leftover cache"
 }
 
+@test "a file of a layer this persona does not link goes under Decide, kept by default, and archives from the list" {
+    mkdir -p "${TEST_SOURCE_DIR}/stow/extra/.config/mac-app" "${HOME}/.config/mac-app"
+    printf 'managed\n' > "${TEST_SOURCE_DIR}/stow/extra/.config/mac-app/config"
+    printf 'mine\n' > "${HOME}/.config/mac-app/config"
+
+    doctor --tsv
+    assert_success
+    assert_line "decide"$'\t'"${HOME}/.config/mac-app"$'\t'"keep"$'\t\t'"belongs to a layer this persona does not link; keep it if this machine still uses it, else archive or delete it"
+    refute_line --partial "links"$'\t'"${HOME}/.config/mac-app"
+
+    doctor_picking "archive ~/.config/mac-app"
+    assert_success
+    assert_output --partial "archived ~/.config/mac-app"
+    refute test -e "${HOME}/.config/mac-app"
+}
+
 @test "delete removes an item for good after a yes, and keeps it on anything else" {
     printf 'a\n' > "${HOME}/.old-a"
     mkdir -p "${HOME}/.old-dir" "${TEST_TMPDIR}/outside"

@@ -9,8 +9,9 @@
 #   links   repo links to repair by hand (link.sh status), then df-link
 #   fix     a change df-doctor suggests: archive junk and old copies a tool
 #           no longer reads, or move a file where xdg-ninja's advice says
-#   decide  needs a person: no owner found, XDG advice to follow by hand, or
-#           an unmanaged file next to managed ones
+#   decide  needs a person: no owner found, XDG advice to follow by hand, an
+#           unmanaged file next to managed ones, or a file of a layer this
+#           persona does not link
 #   unmanaged  config directly in ~/.config and commands in ~/.local/bin that
 #           the repo does not manage (made outside it)
 #   ignore  left alone: in use, local state, made by the OS (normal or
@@ -71,8 +72,9 @@ Check this machine against the dotfiles repo and sort what it finds:
   Links   repo links that are off; repair them, then run df-link
   Fix     changes df-doctor suggests (archive junk and old copies a tool no
           longer reads, move a file where xdg-ninja's advice says)
-  Decide  needs you: no owner found, XDG advice to follow by hand, or a file
-          next to managed files that nothing explains
+  Decide  needs you: no owner found, XDG advice to follow by hand, a file
+          next to managed files that nothing explains, or a file of a layer
+          this persona does not link
   Not in the repo
           config in ~/.config and commands in ~/.local/bin made outside the
           repo
@@ -650,7 +652,8 @@ size_of() {
 
 # --- Collecting ----------------------------------------------------------------
 
-# Repo links that are off, from link.sh status, and broken managed links.
+# Repo links that are off, from link.sh status, and broken managed links;
+# unlinked files go under Decide.
 collect_links() {
     local line state path
 
@@ -663,6 +666,12 @@ collect_links() {
         [[ -n "${line}" ]] || continue
         state="${line%% *}"
         path="${line#* }"
+        # A real file of a layer this persona does not link is the user's
+        # call (archive or delete it, or keep it), not a link to repair.
+        if [[ "${state}" == unlinked ]]; then
+            add_finding decide "${path}" keep "" "$(link_hint "${state}")"
+            continue
+        fi
         add_finding links "${path}" "${state}" "" "$(link_hint "${state}")"
     done <<< "${LINK_STATUS}"
     while IFS= read -r path; do
@@ -680,7 +689,7 @@ link_hint() {
         foreign) printf 'points somewhere other than the repo; check it, then run df-link to relink' ;;
         stale) printf 'a link into the repo for a file that moved or no longer applies; run df-link to remove it' ;;
         broken) printf 'its repo file is missing; restore it or fix the link, then run df-link' ;;
-        unlinked) printf 'belongs to a layer this persona does not link; keep it if this machine still uses it, else archive it' ;;
+        unlinked) printf 'belongs to a layer this persona does not link; keep it if this machine still uses it, else archive or delete it' ;;
         shadowed) printf 'sets [user], which overrides ~/.config/git/config.local; move what you need there, then archive this file' ;;
         unset) printf 'no git user.email, so git will refuse to commit; set [user] here' ;;
         unused) printf 'private agents checkout on a persona without agents; delete it if this machine should not keep it' ;;
