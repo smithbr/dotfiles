@@ -149,7 +149,7 @@ stat_mode() {
     run_link --dry-run
     assert_success
     assert_output --partial "Would back up ${dir}/keybindings.json"
-    assert_output --partial "Would link ${dir}/settings.json -> ${PROJECT_ROOT}/editors/code/settings.json"
+    assert_output --partial "Would link ${dir}/settings.json -> editors/code/settings.json"
     [ ! -L "${dir}/keybindings.json" ] && [ ! -e "${dir}/settings.json" ]
     [ ! -e "${DEST}/Library/Application Support/Cursor" ]
 }
@@ -161,6 +161,7 @@ stat_mode() {
 
     run_link
     assert_success
+    assert_output --partial "Removed identical copy ${DEST}/.config/git/ignore"
     [ -L "${DEST}/.config/git/ignore" ]
     [ -z "$(backup_of .config/git/ignore)" ]
 }
@@ -230,6 +231,65 @@ stat_mode() {
     refute_output --partial "Backed up"
     refute_output --partial "Created"
     [ "$(cd "${DEST}" && find . -print | LC_ALL=C sort)" = "${before}" ]
+}
+
+@test "a run names each link it makes and sums up every step" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    run_link
+    assert_success
+    assert_output --partial "Linking persona home (default for darwin) into ${DEST}, layers: common, tools"
+    assert_output --partial "Linked ${DEST}/.zshenv -> stow/common/.zshenv"
+    assert_output --partial "Linked ${DEST}/.claude/CLAUDE.md -> ${DEST}/.config/agents/AGENTS.md"
+    assert_output --partial "Agents checkout ${DEST}/.config/agents: cloned from ${AGENTS_REPO_URL}"
+    assert_output --partial "Skill bundles core, vault: stowed into ${DEST}/.agents/skills"
+    assert_output --regexp "Seed files: 0 of [0-9]+ were present"
+    assert_output --regexp "Layers common, tools, [a-z, .]*desktop.darwin: [0-9]+ of [0-9]+ linked"
+    local summary
+    summary="$(grep '^Done: ' <<< "${output}")"
+    [[ "${summary}" =~ ^Done:\ ([0-9]+)\ of\ ([0-9]+)\ links\ in\ place,\ ([0-9]+)\ new ]]
+    [ "${BASH_REMATCH[1]}" = "${BASH_REMATCH[2]}" ]
+    [ "${BASH_REMATCH[3]}" = "${BASH_REMATCH[2]}" ]
+
+    run_link
+    assert_success
+    refute_output --partial "Linked "
+    assert_output --partial "Agents checkout ${DEST}/.config/agents: pulled in the last 7 days"
+    assert_output --regexp "Editor settings: ([0-9]+) of [0-9]+ linked, 0 new"
+    assert_output --regexp "Done: [0-9]+ of [0-9]+ links in place, 0 new"
+}
+
+@test "shows paths under the home directory with a tilde" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    HOME="${DEST}" run_link
+    assert_success
+    assert_output --partial "into ~, layers:"
+    assert_output --partial "Linked ~/.zshenv -> stow/common/.zshenv"
+    refute_output --partial "${DEST}/.zshenv"
+}
+
+@test "tightens a private directory and says so once" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    mkdir -p "${DEST}/.ssh"
+    chmod 755 "${DEST}/.ssh"
+
+    run_link
+    assert_success
+    assert_output --partial "Set ${DEST}/.ssh to mode 700"
+    [ "$(stat_mode "${DEST}/.ssh")" = 700 ]
+    run_link
+    assert_success
+    refute_output --partial "to mode 700"
+}
+
+@test "dry run lists the links it would make instead of stow's preview" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    run_link --dry-run
+    assert_success
+    assert_output --partial "Dry run, nothing changes. Would link persona home"
+    assert_output --partial "Would link ${DEST}/.zshenv -> stow/common/.zshenv"
+    assert_output --regexp "Dry run done: 0 of [0-9]+ links in place"
+    refute_output --partial "LINK:"
+    refute_output --partial "simulation mode"
 }
 
 @test "dry run reports changes without touching the destination" {
@@ -422,6 +482,10 @@ stat_mode() {
     run_link --refresh
     assert_success
     [ "$(cat "${DEST}/.config/agents/AGENTS.md")" = 'new rules' ]
+    assert_output --regexp "Agents checkout ${DEST}/.config/agents: pulled [0-9a-f]+\.\.[0-9a-f]+"
+    run_link --refresh
+    assert_success
+    assert_output --regexp "Agents checkout ${DEST}/.config/agents: already up to date at [0-9a-f]+"
 }
 
 @test "an unreachable agents repo does not stop the rest of the install" {
@@ -669,6 +733,8 @@ plant_old_links() {
     run_fixture_link
     assert_success
     refute_output --partial "Backed up"
+    assert_output --partial "Removed old link ${DEST}/.keep -> stow/linux/.keep"
+    assert_output --partial "Linked ${DEST}/.keep -> stow/common/.keep"
     [ "$(readlink "${DEST}/.keep")" = "../fixture/stow/common/.keep" ]
     [ ! -e "${DEST}/.local/state/dotfiles/clobbered" ]
 }

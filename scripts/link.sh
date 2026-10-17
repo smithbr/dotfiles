@@ -873,14 +873,82 @@ stale_skill_links() {
     done < <(find "${skills}" -mindepth 1 -maxdepth 1 -type l | LC_ALL=C sort)
 }
 
+# A path as the reader knows it: ~/... when linking into $HOME, and relative
+# to the repo for the repo's own files.
+show_path() {
+    local path="$1" home="~"
+    if [[ "${path}" == "${REPO}/"* ]]; then
+        printf '%s\n' "${path#"${REPO}"/}"
+    elif [[ "${DEST}" == "${HOME}" && "${path}" == "${DEST}" ]]; then
+        printf '%s\n' "${home}"
+    elif [[ "${DEST}" == "${HOME}" && "${path}" == "${DEST}/"* ]]; then
+        printf '%s/%s\n' "${home}" "${path#"${DEST}"/}"
+    else
+        printf '%s\n' "${path}"
+    fi
+}
+
+# Links counted across the run for the closing summary.
+TOTAL_LINKS=0
+TOTAL_IN_PLACE=0
+TOTAL_NEW=0
+
+# One line per step: LABEL, how many links it manages, how many are in place
+# now, and how many this run made (or a dry run would make).
+report_links() {
+    local label="$1" total="$2" in_place="$3" new="$4"
+    [[ "${total}" -gt 0 ]] || return 0
+    TOTAL_LINKS=$((TOTAL_LINKS + total))
+    TOTAL_IN_PLACE=$((TOTAL_IN_PLACE + in_place))
+    TOTAL_NEW=$((TOTAL_NEW + new))
+    if [[ "${DRY_RUN}" -eq 1 ]]; then
+        printf '%s: %d of %d linked, %d to link\n' "${label}" "${in_place}" "${total}" "${new}"
+    else
+        printf '%s: %d of %d linked, %d new\n' "${label}" "${in_place}" "${total}" "${new}"
+    fi
+}
+
+# Words separated by spaces, as a comma-separated list.
+comma_list() {
+    local -a words=()
+    read -r -a words <<< "$1"
+    (IFS=,; printf '%s\n' "${words[*]-}") | sed 's/,/, /g'
+}
+
+persona_source_text() {
+    case "${PERSONA_SOURCE}" in
+        flag) printf 'from --persona\n' ;;
+        env) printf 'from DOTFILES_PERSONA\n' ;;
+        saved) printf 'saved\n' ;;
+        *) printf 'default for %s\n' "$(platform)" ;;
+    esac
+}
+
+announce_apply() {
+    local verb=Linking
+    [[ "${DRY_RUN}" -eq 0 ]] || verb="Dry run, nothing changes. Would link"
+    printf '%s persona %s (%s) into %s, layers: %s\n' "${verb}" "${PERSONA_NAME}" \
+        "$(persona_source_text)" "$(show_path "${DEST}")" "$(comma_list "${PERSONA_LAYERS}")"
+}
+
+finish_apply() {
+    if [[ "${DRY_RUN}" -eq 1 ]]; then
+        printf 'Dry run done: %d of %d links in place, %d to link. Nothing changed.\n' \
+            "${TOTAL_IN_PLACE}" "${TOTAL_LINKS}" "${TOTAL_NEW}"
+    else
+        printf 'Done: %d of %d links in place, %d new. df-link status lists anything still off.\n' \
+            "${TOTAL_IN_PLACE}" "${TOTAL_LINKS}" "${TOTAL_NEW}"
+    fi
+}
+
 prune_stale_links() {
     local target
     while IFS= read -r target; do
         if [[ "${DRY_RUN}" -eq 1 ]]; then
-            printf 'Would remove stale link %s\n' "${target}"
+            printf 'Would remove stale link %s\n' "$(show_path "${target}")"
         else
             rm -f "${target}"
-            printf 'Removed stale link %s\n' "${target}"
+            printf 'Removed stale link %s\n' "$(show_path "${target}")"
         fi
     done < <(stale_links)
 }
@@ -899,7 +967,7 @@ backup_path() {
     (umask 077 && mkdir -p "$(dirname "${BACKUP_DIR}/${relative}")")
     chmod 700 "${BACKUP_DIR}"
     mv "${target}" "${BACKUP_DIR}/${relative}"
-    printf 'Backed up %s -> %s\n' "${target}" "${BACKUP_DIR}/${relative}"
+    printf 'Backed up %s to %s\n' "$(show_path "${target}")" "$(show_path "${BACKUP_DIR}/${relative}")"
 }
 
 # Clear real files and foreign links out of stow's way. BLOCKED counts the
@@ -910,47 +978,109 @@ BLOCKED=0
 # packages) and an identical copy go quietly; anything else is backed up. A
 # dry run reports instead and returns 1.
 clear_target() {
-    local target="$1" source="$2" would=""
+    local target="$1" source="$2" shown would=""
     [[ -e "${target}" || -L "${target}" ]] || return 0
     is_linked "${target}" "${source}" && return 0
 
+    shown="$(show_path "${target}")"
     if is_repo_link "${target}"; then
-        would="Would relink ${target}"
+        would="Would relink ${shown}"
     elif [[ -f "${target}" && ! -L "${target}" ]] && cmp -s "${target}" "${source}"; then
-        would="Would replace identical copy ${target} with a link"
+        would="Would replace identical copy ${shown} with a link"
     else
-        would="Would back up ${target} before linking"
+        would="Would back up ${shown} before linking"
     fi
     if [[ "${DRY_RUN}" -eq 1 ]]; then
         printf '%s\n' "${would}"
         BLOCKED=$((BLOCKED + 1))
         return 1
     fi
-    if [[ "${would}" == "Would back up"* ]]; then
-        backup_path "${target}"
-    else
-        rm -f "${target}"
-    fi
+    case "${would}" in
+        "Would back up"*) backup_path "${target}" ;;
+        "Would relink"*)
+            printf 'Removed old link %s -> %s\n' "${shown}" "$(show_path "$(link_destination "${target}")")"
+            rm -f "${target}"
+            ;;
+        *)
+            printf 'Removed identical copy %s\n' "${shown}"
+            rm -f "${target}"
+            ;;
+    esac
 }
 
-# Link TARGET to SOURCE after clearing whatever is there.
+# Link TARGET to SOURCE after clearing whatever is there. PLACED says what
+# happened: in_place (already linked), new (linked now, or would be in a dry
+# run), or blocked (a dry run that would first clear the path).
+PLACED=""
 place_link() {
     local target="$1" source="$2"
+    PLACED=in_place
     is_linked "${target}" "${source}" && return 0
+    PLACED=blocked
     clear_target "${target}" "${source}" || return 0
+    PLACED=new
     if [[ "${DRY_RUN}" -eq 1 ]]; then
-        printf 'Would link %s -> %s\n' "${target}" "${source}"
+        printf 'Would link %s -> %s\n' "$(show_path "${target}")" "$(show_path "${source}")"
         return 0
     fi
     mkdir -p "$(dirname "${target}")"
     ln -sfn "${source}" "${target}"
+    printf 'Linked %s -> %s\n' "$(show_path "${target}")" "$(show_path "${source}")"
 }
 
-clear_conflicts() {
-    local entry
+# Place each TARGET|SOURCE line on stdin and report them under LABEL.
+place_links() {
+    local label="$1" entry total=0 in_place=0 new=0
     while IFS= read -r entry; do
-        clear_target "${DEST}/${entry#*|}" "${REPO}/stow/${entry%%|*}/${entry#*|}" || true
+        total=$((total + 1))
+        place_link "${entry%%|*}" "${entry#*|}"
+        case "${PLACED}" in
+            in_place) in_place=$((in_place + 1)) ;;
+            new)
+                new=$((new + 1))
+                [[ "${DRY_RUN}" -eq 1 ]] || in_place=$((in_place + 1))
+                ;;
+        esac
+    done
+    report_links "${label}" "${total}" "${in_place}" "${new}"
+}
+
+# Clear the way for every stow file. STOW_TOTAL counts them, STOW_IN_PLACE
+# those already linked, and STOW_PENDING holds the rest that stow will link
+# (in a dry run, leaving out the ones blocked until a path is cleared).
+STOW_TOTAL=0
+STOW_IN_PLACE=0
+STOW_PENDING=()
+clear_conflicts() {
+    local entry target source
+    while IFS= read -r entry; do
+        STOW_TOTAL=$((STOW_TOTAL + 1))
+        target="${DEST}/${entry#*|}" source="${REPO}/stow/${entry%%|*}/${entry#*|}"
+        if is_linked "${target}" "${source}"; then
+            STOW_IN_PLACE=$((STOW_IN_PLACE + 1))
+            continue
+        fi
+        clear_target "${target}" "${source}" || continue
+        STOW_PENDING+=("${entry}")
     done < <(package_entries stow)
+}
+
+# Name each link stow made (or would make), then the layers' summary line.
+report_stow() {
+    local label="$1" entry target source new=0 in_place="${STOW_IN_PLACE}"
+    for entry in ${STOW_PENDING[@]+"${STOW_PENDING[@]}"}; do
+        target="${DEST}/${entry#*|}" source="${REPO}/stow/${entry%%|*}/${entry#*|}"
+        if [[ "${DRY_RUN}" -eq 1 ]]; then
+            printf 'Would link %s -> %s\n' "$(show_path "${target}")" "$(show_path "${source}")"
+        elif is_linked "${target}" "${source}"; then
+            printf 'Linked %s -> %s\n' "$(show_path "${target}")" "$(show_path "${source}")"
+            in_place=$((in_place + 1))
+        else
+            continue
+        fi
+        new=$((new + 1))
+    done
+    report_links "${label}" "${STOW_TOTAL}" "${in_place}" "${new}"
 }
 
 run_stow() {
@@ -971,19 +1101,31 @@ run_stow() {
     fi
 
     clear_conflicts
+    local label
+    label="Layers $(comma_list "${packages[*]}")"
     local -a cmd=(stow --dir "${REPO}/stow" --target "${DEST}" --no-folding --restow --ignore '\.DS_Store')
+    # A dry run lists the links itself and asks stow only to check for
+    # conflicts, since stow's own preview names every file, linked or not.
     if [[ "${DRY_RUN}" -eq 1 ]]; then
+        report_stow "${label}"
         if [[ "${BLOCKED}" -gt 0 ]]; then
-            printf 'Stow preview skipped until the paths above are cleared\n'
+            printf 'Stow check skipped until the paths above are cleared\n'
             return 0
         fi
         if [[ "${have_stow}" -eq 0 ]]; then
-            printf 'Stow preview skipped: GNU Stow is not installed\n'
+            printf 'Stow check skipped: GNU Stow is not installed\n'
             return 0
         fi
-        cmd+=(--simulate --verbose=1)
+        cmd+=(--simulate)
+        # Keep stow's conflicts, minus its banner that this is a simulation.
+        local output status=0
+        output="$("${cmd[@]}" ${stow_args[@]+"${stow_args[@]}"} "${packages[@]}" 2>&1)" || status=$?
+        output="$(grep -v '^WARNING: in simulation mode' <<< "${output}" || true)"
+        [[ -z "${output}" ]] || printf '%s\n' "${output}" >&2
+        return "${status}"
     fi
     "${cmd[@]}" ${stow_args[@]+"${stow_args[@]}"} "${packages[@]}"
+    report_stow "${label}"
 }
 
 agents_checkout_is_fresh() {
@@ -996,16 +1138,26 @@ agents_checkout_is_fresh() {
 # SSH key is usually not registered with GitHub yet, and the rest of the
 # dotfiles should still land.
 sync_agents_repo() {
-    local checkout="${DEST}/.config/agents"
+    local checkout="${DEST}/.config/agents" shown before after
 
+    shown="$(show_path "${checkout}")"
     if [[ -d "${checkout}/.git" ]]; then
         if [[ "${REFRESH}" -eq 0 ]] && agents_checkout_is_fresh; then
+            printf 'Agents checkout %s: pulled in the last %d days; --refresh pulls it now\n' "${shown}" "${AGENTS_REFRESH_DAYS}"
             return 0
         fi
+        before="$(git -C "${checkout}" rev-parse --short HEAD 2>/dev/null || true)"
         if [[ "${DRY_RUN}" -eq 1 ]]; then
-            printf 'Would pull %s\n' "${checkout}"
+            printf 'Would pull %s\n' "${shown}"
         elif ! git -C "${checkout}" pull --ff-only --quiet; then
             log_warn "Could not update ${checkout}; continuing with the current checkout"
+        else
+            after="$(git -C "${checkout}" rev-parse --short HEAD 2>/dev/null || true)"
+            if [[ "${before}" == "${after}" ]]; then
+                printf 'Agents checkout %s: already up to date at %s\n' "${shown}" "${after}"
+            else
+                printf 'Agents checkout %s: pulled %s..%s\n' "${shown}" "${before}" "${after}"
+            fi
         fi
     elif [[ -e "${checkout}" || -L "${checkout}" ]]; then
         log_warn "${checkout} exists but is not a git checkout; leaving it alone"
@@ -1017,6 +1169,8 @@ sync_agents_repo() {
         mkdir -p "$(dirname "${checkout}")"
         if ! git clone --quiet --depth 1 "${AGENTS_REPO_URL}" "${checkout}"; then
             log_warn "Could not clone ${AGENTS_REPO_URL}. Register this host's SSH key with GitHub, then run: ${REPO}/scripts/link.sh --refresh"
+        else
+            printf 'Agents checkout %s: cloned from %s\n' "${shown}" "${AGENTS_REPO_URL}"
         fi
     fi
 }
@@ -1025,9 +1179,11 @@ sync_agents_repo() {
 # agent CLI wrote on its first run; place_link keeps it recoverable.
 link_agents() {
     local entry
-    for entry in ${WANTED_AGENT_LINKS[@]+"${WANTED_AGENT_LINKS[@]}"}; do
-        place_link "${DEST}/${entry%%|*}" "${DEST}/.config/agents/${entry#*|}"
-    done
+    place_links "Agent links for $(comma_list "${PERSONA_AGENT_APPS}")" < <(
+        for entry in ${WANTED_AGENT_LINKS[@]+"${WANTED_AGENT_LINKS[@]}"}; do
+            printf '%s|%s\n' "${DEST}/${entry%%|*}" "${DEST}/.config/agents/${entry#*|}"
+        done
+    )
 }
 
 # ~/.agents/skills is machine-local: Stow links the persona's skill bundles
@@ -1046,18 +1202,24 @@ link_skills() {
         fi
     done
     if [[ "${DRY_RUN}" -eq 1 ]]; then
-        printf 'Would stow skill bundles %s into %s\n' "${wanted[*]-none}" "${skills}"
+        printf 'Would stow skill bundles %s into %s\n' "$(comma_list "${wanted[*]-none}")" "$(show_path "${skills}")"
         return 0
     fi
 
     mkdir -p "${skills}"
-    if [[ "${#wanted[@]}" -gt 0 ]] && ! stow --dir "${bundles}" --target "${skills}" --restow --ignore '\.DS_Store' "${wanted[@]}"; then
-        log_warn "Could not stow the skill bundles ${wanted[*]} into ${skills}; resolve the conflict above and rerun"
+    if [[ "${#wanted[@]}" -gt 0 ]]; then
+        if stow --dir "${bundles}" --target "${skills}" --restow --ignore '\.DS_Store' "${wanted[@]}"; then
+            printf 'Skill bundles %s: stowed into %s\n' "$(comma_list "${wanted[*]}")" "$(show_path "${skills}")"
+        else
+            log_warn "Could not stow the skill bundles ${wanted[*]} into ${skills}; resolve the conflict above and rerun"
+        fi
     fi
 
-    for relative in ${WANTED_SKILL_LINKS[@]+"${WANTED_SKILL_LINKS[@]}"}; do
-        place_link "${DEST}/${relative}" "${skills}"
-    done
+    place_links "Skill folder links" < <(
+        for relative in ${WANTED_SKILL_LINKS[@]+"${WANTED_SKILL_LINKS[@]}"}; do
+            printf '%s|%s\n' "${DEST}/${relative}" "${skills}"
+        done
+    )
 }
 
 warn_unused_agents_checkout() {
@@ -1083,34 +1245,49 @@ editor_links() {
 # else is backed up first.
 link_editors() {
     local entry
-    while IFS= read -r entry; do
-        place_link "${DEST}/${entry%%|*}" "${entry#*|}"
-    done < <(editor_links)
+    place_links "Editor settings" < <(
+        while IFS= read -r entry; do
+            printf '%s|%s\n' "${DEST}/${entry%%|*}" "${entry#*|}"
+        done < <(editor_links)
+    )
 }
 
 copy_seeds() {
-    local entry target
+    local entry target total=0 present=0 created=0
     while IFS= read -r entry; do
+        total=$((total + 1))
         target="${DEST}/${entry#*|}"
-        [[ -e "${target}" || -L "${target}" ]] && continue
+        if [[ -e "${target}" || -L "${target}" ]]; then
+            present=$((present + 1))
+            continue
+        fi
+        created=$((created + 1))
         if [[ "${DRY_RUN}" -eq 1 ]]; then
-            printf 'Would create %s\n' "${target}"
+            printf 'Would create %s\n' "$(show_path "${target}")"
             continue
         fi
         mkdir -p "$(dirname "${target}")"
         cp "${REPO}/seed/${entry%%|*}/${entry#*|}" "${target}"
         chmod 600 "${target}"
-        printf 'Created %s\n' "${target}"
+        printf 'Created %s from %s\n' "$(show_path "${target}")" "seed/${entry%%|*}/${entry#*|}"
     done < <(package_entries seed)
+    [[ "${total}" -gt 0 ]] || return 0
+    if [[ "${DRY_RUN}" -eq 1 ]]; then
+        printf 'Seed files: %d of %d present, %d to copy\n' "${present}" "${total}" "${created}"
+    else
+        printf 'Seed files: %d of %d were present, %d copied\n' "${present}" "${total}" "${created}"
+    fi
 }
 
 secure_private_dirs() {
-    local relative
+    local relative dir
     [[ "${DRY_RUN}" -eq 0 ]] || return 0
     for relative in "${PRIVATE_DIRS[@]}"; do
-        if [[ -d "${DEST}/${relative}" && ! -L "${DEST}/${relative}" ]]; then
-            chmod 700 "${DEST}/${relative}"
-        fi
+        dir="${DEST}/${relative}"
+        [[ -d "${dir}" && ! -L "${dir}" ]] || continue
+        [[ -z "$(find "${dir}" -maxdepth 0 -perm 700)" ]] || continue
+        chmod 700 "${dir}"
+        printf 'Set %s to mode 700\n' "$(show_path "${dir}")"
     done
 }
 
@@ -1824,6 +2001,7 @@ main() {
             if [[ "${PERSONA_SOURCE}" == default ]]; then
                 log_warn "No persona chosen; linking as '${PERSONA_NAME}', the default for $(platform). Pick one with: install.sh --persona NAME"
             fi
+            announce_apply
             save_persona
             save_installs
             warn_missing_layers
@@ -1840,6 +2018,7 @@ main() {
             copy_seeds
             secure_private_dirs
             [[ "${DRY_RUN}" -eq 1 ]] || warn_git_identity
+            finish_apply
             ;;
     esac
 }
