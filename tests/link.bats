@@ -367,9 +367,9 @@ stat_mode() {
 # Agent links
 # ---------------------------------------------------------------------------
 
-@test "home links Claude Code to the agents repo and work adds Cursor" {
+@test "server links Claude Code and Codex to the agents repo and home adds Cursor" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
-    run_link --persona home
+    run_link --persona server
     assert_success
     [ -d "${DEST}/.config/agents/.git" ]
     [ ! -e "${DEST}/.claude/settings.json" ]
@@ -378,8 +378,8 @@ stat_mode() {
     [ "$(stat_mode "${DEST}/.claude")" = 700 ]
     [ ! -e "${DEST}/.cursor" ]
 
-    DEST="${TEST_TMPDIR}/work-home"
-    run_link --persona work
+    DEST="${TEST_TMPDIR}/home-home"
+    run_link --persona home
     assert_success
     [ ! -e "${DEST}/.cursor/cli-config.json" ] && [ ! -e "${DEST}/.cursor/hooks.json" ]
     [ "$(cat "${DEST}/.cursor/AGENTS.md")" = rules ]
@@ -472,16 +472,16 @@ stat_mode() {
     [ ! -L "${DEST}/.cursor/agents" ] && [ "$(cat "${DEST}/.cursor/agents/own.md")" = cursor ]
 }
 
-@test "switching from work to home removes Cursor's links and leaves its settings alone" {
+@test "switching from home to server removes Cursor's links and leaves its settings alone" {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
-    run_link --persona work
+    run_link --persona home
     assert_success
     printf '{"p":true}\n' > "${DEST}/.cursor/cli-config.json"
 
-    run_link --persona home status
+    run_link --persona server status
     assert_line "stale ${DEST}/.cursor/AGENTS.md"
 
-    run_link --persona home
+    run_link --persona server
     assert_success
     for link in .cursor/AGENTS.md .cursor/agents .cursor/skills; do
         [ ! -e "${DEST}/${link}" ] && [ ! -L "${DEST}/${link}" ]
@@ -642,16 +642,19 @@ stat_mode() {
     refute_line "${DEST}/.claude/settings.json"
     assert_line "${DEST}/.claude/skills"
     assert_line "${DEST}/.codex/AGENTS.md"
-    refute_line --partial "${DEST}/.cursor/"
+    assert_line "${DEST}/.cursor/AGENTS.md"
+    refute_line "${DEST}/.cursor/cli-config.json"
+    assert_line "${DEST}/.cursor/skills"
     assert_line "${DEST}/.agents/skills"
     assert_line "${DEST}/.config/agents"
     refute_line "${DEST}/.config/Code/User/settings.json"
 
-    run_link --persona work managed
-    assert_line "${DEST}/.cursor/AGENTS.md"
-    refute_line "${DEST}/.cursor/cli-config.json"
-    assert_line "${DEST}/.cursor/skills"
+    # Server lists no Cursor and takes no editor settings.
+    run_link --persona server managed
     assert_line "${DEST}/.claude/CLAUDE.md"
+    assert_line "${DEST}/.codex/AGENTS.md"
+    refute_line --partial "${DEST}/.cursor/"
+    refute_line "${DEST}/Library/Application Support/Code/User/settings.json"
 }
 
 @test "status names each kind of drift" {
