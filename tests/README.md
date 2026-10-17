@@ -11,7 +11,8 @@ Run the full suite with:
 ```
 
 The suite's own tools live in a per-user cache, `~/.cache/dotfiles/tests` (`XDG_CACHE_HOME` or `DOTFILES_TEST_DEPS` move it), that [`deps.sh`](deps.sh) fills on the first run and never touches again until a pin changes: `bats-core`, `bats-support`, `bats-assert`, GNU `parallel` (the Perl script Bats' `--jobs` needs, with its own `PARALLEL_HOME`), a `python3` link to a uv-managed Python 3.11+ (`tomllib`; without `uv` the tests that need it skip), and on macOS a `bash` 5 built from source, because `/bin/bash` 3.2 lets a failing `[[ ]]` that is not a test's last line pass silently. Each download is checked against the sha256 pinned in `deps.sh` and installed by renaming a finished directory into place, so a rerun with everything present is offline and silent, and `rm -rf ~/.cache/dotfiles/tests` starts over. Nothing is installed through Homebrew for the tests.
-The machine's own tools are required, not installed: `shellcheck` and `stow` (`Brewfile.core`, apt; the runner names the install command when one is missing), and on Debian `bzip2` for parallel's tarball. [`run_tests.sh`](run_tests.sh) lints the repo's shell scripts first (`--lint-only` stops there and touches neither the network nor the cache), then runs Bats with `--jobs` set to the core count.
+The machine's own tools are required, not installed: `shellcheck` and `stow` (`Brewfile.core`, apt; the runner names the install command when one is missing), and on Debian `bzip2` for parallel's tarball. [`run_tests.sh`](run_tests.sh) lints the repo's shell scripts first (`--lint-only` stops there and touches neither the network nor the cache), then runs Bats with `--jobs` set to the core count (`--no-lint` skips the lint and does not need `shellcheck`).
+CI ([`ci.yml`](../.github/workflows/ci.yml)) runs on every push as four parallel macOS jobs: one `--lint-only`, and three `--no-lint` Bats shards of about equal time. `link.bats` is over half the suite, so two shards split it by test name (`--filter` and `--negative-filter` on the same regex, the add, rm, mv, dry run, and status tests); the third globs every other `*.bats` file, so a new file runs there without a workflow change. Rebalance the regex when a shard grows well past the others.
 Bats runs on the cache's bash through a `bash` shim first on `PATH` that sends only Bats' own programs there: `bash -c`, `run bash script`, and `#!/usr/bin/env bash` scripts under test still run on `/bin/bash`, as on a fresh Mac. Code a test sources in-process runs on the new bash. The cache's `python3` comes first on `PATH` so every test sees the same interpreter, and its `bats` and `parallel` last.
 Bumping a pin: set the version and the tarball's sha256 in `deps.sh` (cross-check with the GNU `.sig` or `brew info --json=v2 NAME`), then delete the cache directory; CI's cache key is the file's hash, so it refetches on its own.
 
@@ -24,8 +25,8 @@ This repo can use the versioned hooks in [`.githooks`](../.githooks):
   (retired terms, and `AGENT_LINKS` against the agents repo); it skips check-drift with a note when the
   agents checkout is missing, and says when `check-drift` crashed (killed by a signal) rather than found drift
 - `pre-push` runs ShellCheck (`run_tests.sh --lint-only`), then a container
-  install via [`sandbox-install.sh`](sandbox-install.sh); CI runs the full suite
-  on every push
+  install via [`sandbox-install.sh`](sandbox-install.sh); CI runs the full suite,
+  sharded, on every push
 
 To enable them locally:
 
@@ -198,10 +199,10 @@ This is process-level isolation, not a real container or VM.
 
 [`run_tests.sh`](run_tests.sh)
 
-- Requires `shellcheck` and `stow`, fills the cache through `deps.sh`, and on macOS runs Bats on the cache's bash through the `bash` shim
+- Requires `shellcheck` (unless `--no-lint`) and `stow`, fills the cache through `deps.sh`, and on macOS runs Bats on the cache's bash through the `bash` shim
 - Runs Bats with `--jobs` across every core, on the cache's GNU `parallel`
 - Exports `BATS_LIB_PATH`
-- Runs all `*.bats` files in this directory, only the test files or directories named on the command line, or only ShellCheck with `--lint-only` (limited to the files named after it, of those it would lint anyway); other arguments go to Bats (`./tests/run_tests.sh tests/link.bats --filter add`)
+- Runs all `*.bats` files in this directory, only the test files or directories named on the command line, or only ShellCheck with `--lint-only` (limited to the files named after it, of those it would lint anyway), or only Bats with `--no-lint`; other arguments go to Bats (`./tests/run_tests.sh tests/link.bats --filter add`)
 
 ## Writing tests
 

@@ -58,5 +58,5 @@ Unrecognized arguments and everything after `--` are passed to `stow` through `s
 ## Keeping the workflow accurate
 
 - Keep `README.md` focused on installation and discovery. Document a directory in its own `README.md`, and keep only repo-wide rules here. Never add a file under `personas/` or `roles/` except `roles/README.md`: every other file there is read as a persona or a role. Update the corresponding guidance when behavior changes.
-- Keep CI and local validation aligned through `tests/run_tests.sh`: CI runs it in full on every push, and the pre-push hook runs its `--lint-only` half plus the container install. If test discovery or lint coverage changes, verify that the intended files and tests actually run.
+- Keep CI and local validation aligned through `tests/run_tests.sh`: CI runs it in full on every push (a `--lint-only` job and three `--no-lint` Bats shards in parallel; see [`tests/README.md`](tests/README.md)), and the pre-push hook runs its `--lint-only` half plus the container install. If test discovery or lint coverage changes, verify that the intended files and tests actually run.
 - Commit policy (straight to `main`, short subjects), how this repo stays consistent with the private agents checkout, and the notes outside the repo that must change with it are in `~/.config/agents/MAINTENANCE.md`, when that checkout is present.

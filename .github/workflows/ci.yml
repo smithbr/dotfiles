@@ -13,16 +13,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    name: shellcheck
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install shellcheck
+        run: brew install shellcheck
+      - name: Run shellcheck
+        run: bash tests/run_tests.sh --lint-only
+
   test:
-    name: shellcheck + bats
+    name: bats (${{ matrix.shard }})
     # macOS runner: a few tests are macOS-only, and this is the OS the suite is
     # written against. The runner image ships bash 3.2 and neither shellcheck
     # nor stow, like a fresh Mac.
     runs-on: macos-latest
+    # Three shards of about equal time, run side by side. link.bats is over
+    # half the suite, so it is split by test name: the add, rm, mv, dry run,
+    # and status tests, then everything else in it. The third shard globs
+    # every other file, so a new .bats file runs there without a change here.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [link-commands, link-rest, others]
     # The bats suite shells out to TUI tools (tput/stty); give it a sane TERM so
     # terminal-aware scripts behave as they do in an interactive shell.
     env:
       TERM: xterm
+      LINK_SPLIT: '^(add|rm|mv|dry run|status) '
+      SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The suite's own tools (tests/deps.sh): Bats, GNU parallel, uv's Python,
@@ -33,10 +53,25 @@ jobs:
         with:
           path: ~/.cache/dotfiles/tests
           key: test-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/deps.sh') }}
-      # The machine's own tools, which run_tests.sh requires but never installs.
-      - name: Install shellcheck, stow, and uv
-        run: brew install shellcheck stow uv
+      # The machine's own tools, which run_tests.sh requires but never installs
+      # (shellcheck only for the lint job).
+      - name: Install stow and uv
+        run: brew install stow uv
       - name: Fetch test dependencies
         run: bash tests/deps.sh
-      - name: Run test suite (shellcheck + bats)
-        run: bash tests/run_tests.sh
+      - name: Run bats shard
+        shell: bash
+        run: |
+          case "${SHARD}" in
+              link-commands) bash tests/run_tests.sh --no-lint --filter "${LINK_SPLIT}" tests/link.bats ;;
+              link-rest) bash tests/run_tests.sh --no-lint --negative-filter "${LINK_SPLIT}" tests/link.bats ;;
+              others)
+                  files=()
+                  for file in tests/*.bats; do
+                      [[ "${file}" == tests/link.bats ]] || files+=("${file}")
+                  done
+                  printf 'Files: %s\n' "${files[*]}"
+                  bash tests/run_tests.sh --no-lint "${files[@]}"
+                  ;;
+              *) echo "unknown shard: ${SHARD}" >&2; exit 1 ;;
+          esac

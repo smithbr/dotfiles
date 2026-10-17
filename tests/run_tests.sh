@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run the full test suite, or with --lint-only just ShellCheck (what the
-# pre-push hook runs; CI runs everything). Name test files to run only those:
+# pre-push hook runs), or with --no-lint just Bats (what CI's test shards run
+# after its one lint job). Name test files to run only those:
 # ./tests/run_tests.sh tests/link.bats --filter add
 # After --lint-only, named files limit the lint to those of them it would
 # check anyway (what the pre-commit hook does with the staged files).
@@ -14,8 +15,12 @@ set -euo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LINT_ONLY=0
+NO_LINT=0
 if [[ "${1:-}" == --lint-only ]]; then
     LINT_ONLY=1
+    shift
+elif [[ "${1:-}" == --no-lint ]]; then
+    NO_LINT=1
     shift
 fi
 
@@ -75,12 +80,14 @@ ensure_test_bash() {
     export PATH
 }
 
-require_tool shellcheck 'install it with brew install shellcheck (apt install shellcheck on Debian)'
-if [[ "${LINT_ONLY}" -eq 1 ]]; then
-    run_shellcheck "$@"
-    exit 0
+if [[ "${NO_LINT}" -eq 0 ]]; then
+    require_tool shellcheck 'install it with brew install shellcheck (apt install shellcheck on Debian)'
+    if [[ "${LINT_ONLY}" -eq 1 ]]; then
+        run_shellcheck "$@"
+        exit 0
+    fi
+    run_shellcheck
 fi
-run_shellcheck
 
 # The link suite drives the real GNU Stow against scratch directories.
 require_tool stow 'install it with brew install stow (apt install stow on Debian)'

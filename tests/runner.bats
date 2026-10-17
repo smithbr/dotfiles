@@ -39,3 +39,22 @@ EOF
     assert_success
     assert_output "$(/bin/bash -c 'printf "%s\n" "${BASH_VERSION}"')"
 }
+
+@test "--no-lint runs the named Bats files without ShellCheck" {
+    mkdir -p "${TEST_TMPDIR}/bin"
+    cat > "${TEST_TMPDIR}/bin/shellcheck" <<EOF2
+#!/bin/sh
+touch "${TEST_TMPDIR}/shellcheck-ran"
+exit 1
+EOF2
+    chmod +x "${TEST_TMPDIR}/bin/shellcheck"
+    cat > "${TEST_TMPDIR}/probe.bats" <<'EOF2'
+@test probe { true; }
+EOF2
+
+    PATH="${TEST_TMPDIR}/bin:${PATH}" run "${BATS_TEST_DIRNAME}/run_tests.sh" --no-lint "${TEST_TMPDIR}/probe.bats"
+
+    assert_success
+    assert_output --partial 'ok 1 probe'
+    refute test -e "${TEST_TMPDIR}/shellcheck-ran"
+}
