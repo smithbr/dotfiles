@@ -11,7 +11,8 @@ Run the full suite with:
 ```
 
 The runner uses Homebrew-installed `bats-core`, `bats-support`, and `bats-assert`. If they are missing, [`run_tests.sh`](run_tests.sh) installs them first.
-It also ensures `shellcheck` and `stow` are installed, then lints the repo's shell scripts before running Bats.
+It also ensures `shellcheck`, `stow`, and GNU `parallel` are installed, then lints the repo's shell scripts before running Bats with `--jobs` set to the core count (serially, with a warning, when `parallel` is not callable).
+On macOS it also installs Homebrew's `bash`, unlinked so it does not take over `PATH`, and runs Bats on it, because `/bin/bash` 3.2 lets a failing `[[ ]]` that is not a test's last line pass silently. A `bash` shim first on `PATH` sends only Bats' own programs to the new bash: `bash -c`, `run bash script`, and `#!/usr/bin/env bash` scripts under test still run on `/bin/bash`, as on a fresh Mac. Code a test sources in-process runs on the new bash.
 
 ## Git Hooks
 
@@ -174,6 +175,10 @@ This is process-level isolation, not a real container or VM.
 - Parses every tracked JSON, TOML (examples too), YAML, and `.itermcolors` file, the zsh and bash startup files, and the zsh plugin list, skipping a check whose parser is missing
 - Runs Vim with the shipped vimrc: Vim's defaults still load, and history and netrw's bookmarks go under `XDG_STATE_HOME` (or `~/.local/state`) in a private `vim` folder
 
+[`runner.bats`](runner.bats)
+
+- Checks the runner itself: a failing `[[ ]]` before a test's last line fails the test, and on macOS a script under test still runs on `/bin/bash`
+
 [`test_helper.bash`](test_helper.bash)
 
 - Shared Bats setup helpers
@@ -182,11 +187,13 @@ This is process-level isolation, not a real container or VM.
 
 [`run_tests.sh`](run_tests.sh)
 
-- Bootstraps Bats dependencies from Homebrew
+- Bootstraps Bats dependencies from Homebrew, and on macOS a newer bash for Bats with the `bash` shim
+- Ensures GNU `parallel` (falling back to its keg's `bin` when it is unlinked) and runs Bats with `--jobs` across every core
 - Exports `BATS_LIB_PATH`
-- Runs all `*.bats` files in this directory, or only ShellCheck with `--lint-only`
+- Runs all `*.bats` files in this directory, only the test files or directories named on the command line, or only ShellCheck with `--lint-only`; other arguments go to Bats (`./tests/run_tests.sh tests/link.bats --filter add`)
 
 ## Writing tests
 
 - Use the temporary-directory helpers in `tests/test_helper.bash` and isolate destination paths and external commands. Tests must not install software, change services, or modify the real home directory as part of exercising the code under test.
+- Run Bats through `run_tests.sh`. A plain `bats` on macOS runs on `/bin/bash` 3.2, where a failing `[[ ]]` or `(( ))` fails a test only as its last command, so a test can pass for the wrong reason; `runner.bats` fails there to flag it. Prefer bats-assert forms (`assert test -f ...`, `refute test -e ...`, `assert_equal`) for checks that name what failed.
 - The ShellCheck runner selects tracked shell files and managed bin scripts. Explicitly lint newly created, untracked shell files and changed shell entrypoints outside that selection, such as `.githooks/pre-push`; a passing runner does not cover them automatically.

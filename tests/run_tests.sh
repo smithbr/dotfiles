@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run the full test suite using Homebrew-installed Bats, or with --lint-only
-# just ShellCheck (what the pre-push hook runs; CI runs everything).
+# just ShellCheck (what the pre-push hook runs; CI runs everything). Name test
+# files to run only those: ./tests/run_tests.sh tests/link.bats --filter add
 
 set -euo pipefail
 
@@ -45,7 +46,8 @@ ensure_stow() {
 ensure_parallel() {
     if ! formula_installed "parallel"; then
         printf 'Installing test dependency: parallel\n'
-        brew install parallel
+        # A failed link step fails the install too, though the keg is there.
+        brew install parallel || formula_installed "parallel"
     fi
 
     if command -v parallel >/dev/null 2>&1; then
@@ -78,6 +80,44 @@ ensure_bats_dependencies() {
     fi
 }
 
+# Before 4.1, bash does not let a failing [[ ]] trip errexit, so under macOS's
+# /bin/bash 3.2 a [[ ]] check that is not a test's last line can never fail it.
+# Run Bats on a newer bash from Homebrew, but keep the scripts under test on
+# /bin/bash, the one a fresh Mac runs them with, even when Homebrew's bash comes
+# first on PATH: a `bash` shim first on PATH (Bats' shebangs are
+# `#!/usr/bin/env bash`) hands Bats' own programs to the new bash and
+# everything else, `bash -c` and script shebangs, to /bin/bash.
+ensure_test_bash() {
+    local system_bash=/bin/bash test_bash
+    [[ -x "${system_bash}" ]] || system_bash="$(command -v bash)"
+    if "${system_bash}" -c '(( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 401 ))'; then
+        return
+    fi
+
+    # Installed only for the tests, so unlinked: putting bash 5 first on PATH
+    # would change which bash `#!/usr/bin/env bash` finds outside them too.
+    if ! formula_installed "bash"; then
+        printf 'Installing test dependency: bash (unlinked)\n'
+        brew install bash
+        brew unlink bash >/dev/null
+    fi
+    test_bash="$(brew --prefix bash)/bin/bash"
+
+    BASH_SHIM_DIR="$(mktemp -d)"
+    trap 'rm -rf "${BASH_SHIM_DIR}"' EXIT
+    # shellcheck disable=SC2016 # the shim expands these, not this script
+    {
+        printf '#!%s\n' "${system_bash}"
+        printf 'case "${1##*/}" in\n'
+        printf '    bats | bats-*) exec %q "$@" ;;\n' "${test_bash}"
+        printf 'esac\n'
+        printf 'exec %q "$@"\n' "${system_bash}"
+    } > "${BASH_SHIM_DIR}/bash"
+    chmod +x "${BASH_SHIM_DIR}/bash"
+    PATH="${BASH_SHIM_DIR}:${PATH}"
+    export PATH
+}
+
 run_shellcheck() {
     local file
     local -a shellcheck_files=()
@@ -106,6 +146,7 @@ run_shellcheck
 ensure_stow
 ensure_parallel
 ensure_bats_dependencies
+ensure_test_bash
 
 BREW_PREFIX="$(brew --prefix)"
 BATS="${BREW_PREFIX}/bin/bats"
@@ -140,4 +181,17 @@ if ! command -v parallel >/dev/null 2>&1; then
     JOBS=1
 fi
 
-"${BATS}" --jobs "${JOBS}" "${TESTS_DIR}"/*.bats "$@"
+# Test files or directories named on the command line replace the default of
+# every suite; any other argument is passed on to Bats.
+targets=()
+bats_args=()
+for arg in "$@"; do
+    if [[ "${arg}" == *.bats && -f "${arg}" ]] || [[ -d "${arg}" ]]; then
+        targets+=("${arg}")
+    else
+        bats_args+=("${arg}")
+    fi
+done
+[[ "${#targets[@]}" -gt 0 ]] || targets=("${TESTS_DIR}"/*.bats)
+
+"${BATS}" --jobs "${JOBS}" ${bats_args[@]+"${bats_args[@]}"} "${targets[@]}"
