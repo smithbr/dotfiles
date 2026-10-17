@@ -78,6 +78,8 @@ fi
 
 DNS_SERVER="${1:-127.0.0.1}"
 GOOD_DOMAIN="google.com"
+# google.com is not DNSSEC-signed, so the AD bit is probed on a signed zone.
+DNSSEC_SIGNED_DOMAIN="cloudflare.com"
 DNSSEC_FAIL_DOMAIN="dnssec-failed.org"
 BLOCKED_DOMAIN="doubleclick.net"
 UNBOUND_MAIN_CONF="${PH_TEST_UNBOUND_MAIN_CONF:-$(unbound-checkconf -o config-file 2>/dev/null || echo "/etc/unbound/unbound.conf")}"
@@ -350,7 +352,7 @@ test_dnssec() {
         fix "After changes: sudo systemctl restart unbound"
     fi
 
-    # Good domain should carry the AD (Authenticated Data) flag
+    # A signed domain should carry the AD (Authenticated Data) flag
     # Pi-hole (dnsmasq/FTL) strips the AD flag, so query Unbound directly when possible.
     local ad_target="${DNS_SERVER}" ad_port="" unbound_interface="" unbound_port="" ad_probe_hint=""
     local -a ad_port_args=() dig_args=()
@@ -377,27 +379,27 @@ test_dnssec() {
     if [[ "${#ad_port_args[@]}" -gt 0 ]]; then
         dig_args+=("${ad_port_args[@]}")
     fi
-    dig_args+=("${GOOD_DOMAIN}" +dnssec +adflag)
+    dig_args+=("${DNSSEC_SIGNED_DOMAIN}" +dnssec +adflag)
 
-    ad_probe_hint="dig @${ad_target} ${GOOD_DOMAIN} +dnssec +adflag"
+    ad_probe_hint="dig @${ad_target} ${DNSSEC_SIGNED_DOMAIN} +dnssec +adflag"
     if [[ -n "${ad_port}" ]]; then
-        ad_probe_hint="dig @${ad_target} -p ${ad_port} ${GOOD_DOMAIN} +dnssec +adflag"
+        ad_probe_hint="dig @${ad_target} -p ${ad_port} ${DNSSEC_SIGNED_DOMAIN} +dnssec +adflag"
     fi
 
     local ad_flag ad_status
-    _item "Running dig ${GOOD_DOMAIN} +dnssec against ${ad_target}${ad_port:+:${ad_port}}"
+    _item "Running dig ${DNSSEC_SIGNED_DOMAIN} +dnssec against ${ad_target}${ad_port:+:${ad_port}}"
     ad_flag=$(dig "${dig_args[@]}" 2>/dev/null | awk '/flags:/ {print}')
     ad_status=$(dig "${dig_args[@]}" 2>/dev/null | awk '/status:/ {print $6}' | tr -d ',')
 
     if printf '%s' "${ad_flag}" | grep -q " ad"; then
-        pass "AD flag present on ${GOOD_DOMAIN} — DNSSEC authenticated"
+        pass "AD flag present on ${DNSSEC_SIGNED_DOMAIN} — DNSSEC authenticated"
     elif [[ "${dnssec_validated}" == "true" ]]; then
         warn "AD flag not exposed on direct query to ${ad_target}${ad_port:+:${ad_port}}"
         info "DNSSEC validation is still confirmed by ${DNSSEC_FAIL_DOMAIN} returning SERVFAIL"
         fix "Re-test the direct resolver socket: ${ad_probe_hint}"
         fix "If that query still lacks 'ad', Unbound is validating answers but not surfacing the AD bit on ${ad_target}${ad_port:+:${ad_port}}"
     else
-        fail "AD flag not set for ${GOOD_DOMAIN}"
+        fail "AD flag not set for ${DNSSEC_SIGNED_DOMAIN}"
         fix "Verify trust anchor: sudo unbound-anchor -a ${UNBOUND_DIR}/root.key"
         fix "Ensure ${UNBOUND_CONF} or ${UNBOUND_MAIN_CONF} has: val-permissive-mode: no"
         [[ -n "${ad_status}" ]] && fix "Direct Unbound query status from ${ad_target}${ad_port:+:${ad_port}}: ${ad_status}"

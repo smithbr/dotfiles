@@ -1275,7 +1275,7 @@ OUT
     exit 0
 fi
 
-if [[ "$*" == *"google.com"* ]]; then
+if [[ "$*" == *"cloudflare.com"* ]]; then
     cat <<'OUT'
 ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1
 ;; flags: qr rd ra; QUERY: 1, ANSWER: 1
@@ -1313,11 +1313,12 @@ MOCK
         "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-test"
     assert_success
     assert_output --partial "AD flag not exposed on direct query to 127.0.0.1:5335"
-    assert_output --partial "Re-test the direct resolver socket: dig @127.0.0.1 -p 5335 google.com +dnssec +adflag"
+    assert_output --partial "Re-test the direct resolver socket: dig @127.0.0.1 -p 5335 cloudflare.com +dnssec +adflag"
 
     run cat "${dig_log}"
     assert_success
-    assert_output --partial "@127.0.0.1 -p 5335 google.com +dnssec +adflag"
+    assert_output --partial "@127.0.0.1 -p 5335 cloudflare.com +dnssec +adflag"
+    refute_output --partial "google.com +dnssec"
 }
 
 @test "ph-test still prints summary when stats collection fails" {
@@ -1394,7 +1395,7 @@ if [[ "$*" == *"google.com +short"* ]]; then
     exit 0
 fi
 
-if [[ "$*" == *"google.com +dnssec"* ]]; then
+if [[ "$*" == *"cloudflare.com +dnssec"* ]]; then
     cat <<'OUT'
 ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1
 ;; flags: qr rd ra; QUERY: 1, ANSWER: 1
@@ -1576,7 +1577,7 @@ if [[ "$*" == *"google.com +short"* ]]; then
     exit 0
 fi
 
-if [[ "$*" == *"google.com +dnssec"* ]]; then
+if [[ "$*" == *"cloudflare.com +dnssec"* ]]; then
     cat <<'OUT'
 ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1
 ;; flags: qr rd ra; QUERY: 1, ANSWER: 1
@@ -1762,7 +1763,7 @@ if [[ "$*" == *"google.com +short"* ]]; then
     exit 0
 fi
 
-if [[ "$*" == *"google.com +dnssec"* ]]; then
+if [[ "$*" == *"cloudflare.com +dnssec"* ]]; then
     cat <<'OUT'
 ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1
 ;; flags: qr rd ra; QUERY: 1, ANSWER: 1
