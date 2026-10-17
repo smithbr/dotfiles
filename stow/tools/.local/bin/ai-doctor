@@ -5,9 +5,10 @@
 """List what to fix or trim in Claude Code, Codex, and Cursor, and fix it.
 
   ai-doctor             what needs doing, as a short numbered list; on a
-                        terminal, then the list of [auto] items to change
-  ai-doctor --fix       that list without a terminal too, read as one line
-                        (--yes applies every [auto] item, asking nothing)
+                        terminal, then a menu of every item, each set to
+                        skip or one of its actions (disable, remove, ...)
+  ai-doctor --fix       that menu without a terminal too, read as one line
+                        (--yes does each [auto] item's first action, asking nothing)
   ai-doctor -v          also everything checked: instructions, skills per
                         bundle and per plugin, agents, plugins with their
                         use, and MCP servers, with token sizes
@@ -22,9 +23,11 @@ persona asks for, plugins loaded twice, plugins whose servers wait for a
 sign-in, and plugins Claude Code records no use of. Each item says what to
 do and what every session loses when you do it, so the setup can stay lean
 and a plugin can be turned on only while it is needed. An item marked [auto]
-is one --fix can do: it unlinks skill bundles with skills-add, removes or
-repairs a server with the app's own command (or edits its config, after a
-backup), and deletes broken links. Backups go to ~/.local/state/ai-doctor/<time>/.
+is one --fix can do: it unlinks skill bundles with skills-add, turns a plugin
+off with claude plugin disable (claude plugin enable turns it back on),
+removes or repairs a server with the app's own command (or edits its config,
+after a backup), and deletes broken links. Plugins already turned off are
+not counted. Backups go to ~/.local/state/ai-doctor/<time>/.
 
 Exits 1 while something is broken (not just worth trimming), otherwise 0.
 Connectors kept only on claude.ai, the tools the desktop apps add themselves,
@@ -70,12 +73,21 @@ SECRET_VALUE = re.compile(r"^(bearer\s+)?(gh[opsur]_|github_pat_|sk-|xox[abp]-|g
 class Finding:
     """One thing to do: broken (fix) or worth trimming (trim)."""
 
-    def __init__(self, kind, title, todo, apply=None, effect=None):
+    def __init__(self, kind, title, todo, apply=None, effect=None, verb="fix", alts=()):
         self.kind = kind
         self.title = title
         self.todo = todo  # one line: the command or the step
-        self.apply = apply  # callable(backup_dir) -> message, when --fix can do it
+        self.apply = apply  # callable(backup_dir), when --fix can do it
         self.effect = effect  # one line: what every session loses or gains
+        # What the list offers for the item: skip, then each (verb, todo, apply) --fix can do.
+        self.choices = [("skip", "leave it", None)]
+        if apply:
+            self.choices.append((verb, todo, apply))
+        self.choices += [alt for alt in alts if alt[2]]
+
+    @property
+    def actions(self):
+        return [verb for verb, _, _ in self.choices]
 
 
 class Report:
@@ -105,11 +117,11 @@ class Report:
     def note(self, text):
         self.line(f"{self.paint('2', '--')}  {text}")
 
-    def fix(self, title, todo, apply=None, effect=None):
-        self.findings.append(Finding("fix", title, todo, apply, effect))
+    def fix(self, title, todo, apply=None, effect=None, verb="fix", alts=()):
+        self.findings.append(Finding("fix", title, todo, apply, effect, verb, alts))
 
-    def trim(self, title, todo, apply=None, effect=None):
-        self.findings.append(Finding("trim", title, todo, apply, effect))
+    def trim(self, title, todo, apply=None, effect=None, verb="fix", alts=()):
+        self.findings.append(Finding("trim", title, todo, apply, effect, verb, alts))
 
 
 def tilde(path):
@@ -326,7 +338,7 @@ def check_skills(report, apps):
             if entry.is_symlink() and not entry.exists():
                 link = real / entry.name
                 report.fix(f"Skill link {tilde(link)} is broken",
-                           f"rm {tilde(link)}", lambda _b, link=link: link.unlink())
+                           f"rm {tilde(link)}", lambda _b, link=link: link.unlink(), verb="delete")
                 continue
             skill_md = entry / "SKILL.md"
             if not skill_md.is_file():
@@ -363,11 +375,12 @@ def compare_persona(report, bundles):
             f"{plural(len(extra), 'skill bundle')} beyond the {persona} persona cost {tokens(chars)} a session",
             f"skill-drop {' '.join(extra)}",
             run([str(skills_add), "-D", *extra]) if skills_add.is_file() else None,
-            f"every session drops {plural(count, 'skill')} ({tokens(chars)}); skills-add brings a bundle back")
+            f"every session drops {plural(count, 'skill')} ({tokens(chars)}); skills-add brings a bundle back",
+            verb="unlink")
     if missing:
         report.fix(f"{plural(len(missing), 'skill bundle')} the {persona} persona asks for are not linked",
                    f"skills-add {' '.join(missing)}",
-                   run([str(skills_add), *missing]) if skills_add.is_file() else None)
+                   run([str(skills_add), *missing]) if skills_add.is_file() else None, verb="link")
     if not extra and not missing:
         report.ok(f"linked bundles match the {persona} persona")
 
@@ -450,20 +463,35 @@ def describe_usage(usage):
     return f"used {plural(uses, 'time')}, last {when}"
 
 
-def plugin_effect(contents):
-    """What every session loses when a plugin is turned off."""
-    parts = [f"{plural(contents['skills'], 'skill')} ({tokens(contents['skill_chars'])})"]
-    if contents["servers"]:
-        parts.append(plural(len(contents["servers"]), "MCP server"))
-    if contents["agents"]:
-        parts.append(plural(contents["agents"], "agent"))
-    return "off, every session drops " + ", ".join(parts) + "; turn it back on when a task needs it"
+def plugin_effect(info, keep=None):
+    """What every session saves once the plugin is off, how to turn it back on, and how to keep it."""
+    parts = [f"{plural(info['skills'], 'skill')} ({tokens(info['skill_chars'])})"]
+    if info["servers"]:
+        parts.append(plural(len(info["servers"]), "MCP server"))
+    if info["agents"]:
+        parts.append(plural(info["agents"], "agent"))
+    effect = f"saves {' + '.join(parts)} per session; claude plugin enable {info['key']} turns it back on"
+    return f"{effect}; to keep it, {keep}" if keep else effect
 
 
-def plugin_todo(source, key):
-    if source == "installed":
-        return f"claude plugin uninstall {key}"
-    return "turn it off in Claude's settings (claude.ai plugins)"
+def uninstall_alt(info):
+    """The list's second choice for a plugin installed here: uninstall it, not just turn it off."""
+    if info["source"] != "installed":
+        return ()
+    return [("uninstall", f"claude plugin uninstall {info['key']}", uninstall_plugin(info["key"], info["root"]))]
+
+
+def disable_plugin(key):
+    """Turn a plugin off the way `claude plugin disable` does: false in enabledPlugins."""
+    def apply(backup_dir):
+        if shutil.which("claude"):
+            subprocess.run(["claude", "plugin", "disable", key], check=True)
+            return
+        settings = HOME / ".claude" / "settings.json"
+        if not settings.exists():
+            settings.write_text("{}\n", encoding="utf-8")
+        edit_json(settings, lambda data: data.setdefault("enabledPlugins", {}).__setitem__(key, False))(backup_dir)
+    return apply
 
 
 def plugin_name(root):
@@ -472,7 +500,8 @@ def plugin_name(root):
 
 
 def claude_plugins():
-    """(name, source, root, install key) for every installed and synced Claude Code plugin."""
+    """(name, source, root, plugin id) for every installed and synced Claude Code plugin,
+    as two lists: those on, and those turned off in enabledPlugins (claude plugin disable)."""
     found = []
     installed = read_json(HOME / ".claude" / "plugins" / "installed_plugins.json") or {}
     for key, entries in (installed.get("plugins") or {}).items():
@@ -481,8 +510,11 @@ def claude_plugins():
         if entries:
             found.append((key.split("@")[0], "installed", Path(entries[-1]["installPath"]), key))
     for root in sorted((HOME / ".claude" / "plugins" / "synced").glob("*/*/.claude-plugin")):
-        found.append((plugin_name(root.parent), "claude.ai", root.parent, None))
-    return found
+        name = plugin_name(root.parent)
+        found.append((name, "claude.ai", root.parent, f"{name}@synced"))
+    enabled = (read_json(HOME / ".claude" / "settings.json") or {}).get("enabledPlugins") or {}
+    off = [p for p in found if enabled.get(p[3]) is False]
+    return [p for p in found if p not in off], off
 
 
 def uninstall_plugin(key, root):
@@ -503,11 +535,14 @@ def uninstall_plugin(key, root):
     return apply
 
 
-def check_plugins(report, plugins):
+def check_plugins(report, plugins, off):
     report.section("Claude Code plugins")
     report.stats["plugins"] = len(plugins)
+    report.stats["plugins_off"] = len(off)
+    for name, source, _root, key in off:
+        report.note(f"{name} ({source}): turned off; claude plugin enable {key} turns it back on")
     if not plugins:
-        report.note("none installed")
+        report.note("none on" if off else "none installed")
         return
     usage = plugin_usage()
     sources = {}
@@ -530,7 +565,7 @@ def check_plugins(report, plugins):
             report.trim(f"Plugin {name} loads twice: installed here and synced from claude.ai",
                         f"claude plugin uninstall {key}", uninstall_plugin(key, root),
                         f"every session drops the duplicate's {plural(contents['skills'], 'skill')} "
-                        f"({tokens(contents['skill_chars'])}); the claude.ai copy stays")
+                        f"({tokens(contents['skill_chars'])}); the claude.ai copy stays", verb="uninstall")
 
 
 def unused_plugins(report, flagged):
@@ -538,9 +573,8 @@ def unused_plugins(report, flagged):
     for name, info in sorted(report.plugins.items()):
         if name in flagged or info["usage"] is None or info["usage"][0]:
             continue
-        apply = uninstall_plugin(info["key"], info["root"]) if info["source"] == "installed" else None
-        report.trim(f"Plugin {name} has no recorded use", plugin_todo(info["source"], info["key"]),
-                    apply, plugin_effect(info))
+        report.trim(f"Plugin {name} has no recorded use", f"claude plugin disable {info['key']}",
+                    disable_plugin(info["key"]), plugin_effect(info), "disable", uninstall_alt(info))
 
 
 # MCP servers --------------------------------------------------------------
@@ -712,15 +746,15 @@ def check_servers(report, apps, cwd, plugins):
                        command_to_url(file, name) if app == "cursor" or file.suffix == ".json" else None)
         elif problem:
             todo, apply = remove_server(app, file, scope, name, cwd)
-            report.fix(f"{app.capitalize()}'s {name} MCP server can't start: {problem}", todo, apply)
+            report.fix(f"{app.capitalize()}'s {name} MCP server can't start: {problem}", todo, apply, verb="remove")
         elif app == "claude" and name in needs_auth and plugin:
             waiting.setdefault(plugin, []).append(name)
         elif app == "claude" and name in needs_auth:
             todo, apply = remove_server(app, file, scope, name, cwd)
             report.note(f"{label} ({scope}): waiting for a sign-in")
-            report.trim(f"Claude's {name} MCP server ({scope}) waits for a sign-in",
-                        f"sign in with /mcp, or: {todo}", apply,
-                        "its tool names stay in every session until then; claude mcp add brings it back")
+            report.trim(f"Claude's {name} MCP server ({scope}) waits for a sign-in", todo, apply,
+                        "its tool names load in every session until it is signed in or removed; "
+                        "to keep it, sign in with /mcp in a Claude Code session", "remove")
         else:
             report.ok(f"{label} ({scope}): {'remote' if conf.get('url') or conf.get('serverUrl') else 'local'}")
         for field, key in literal_secrets(conf):
@@ -738,11 +772,14 @@ def check_servers(report, apps, cwd, plugins):
                         "sign in with /mcp, or turn the plugin off in Claude's settings",
                         effect="each one's tool names stay in every session until then")
             continue
-        report.trim(f"Plugin {where}: {short} ({len(names)} of {plural(len(info['servers']), 'MCP server')}) "
-                    f"{waits(len(names))} for a sign-in; {describe_usage(info['usage'])}",
-                    f"sign in with /mcp, or {plugin_todo(info['source'], info['key'])}",
-                    uninstall_plugin(info["key"], info["root"]) if info["source"] == "installed" else None,
-                    plugin_effect(info))
+        total = len(info["servers"])
+        count = f"{len(names)} of its {total} MCP servers" if total > 1 else "its MCP server"
+        report.trim(f"Plugin {where}: {count} {waits(len(names))} for a sign-in ({short}); "
+                    f"{describe_usage(info['usage'])}",
+                    f"claude plugin disable {info['key']}", disable_plugin(info["key"]),
+                    plugin_effect(info, f"sign in to {'each' if len(names) > 1 else 'it'} with /mcp "
+                                        "in a Claude Code session"),
+                    "disable", uninstall_alt(info))
     unused_plugins(report, set(waiting))
 
 
@@ -778,13 +815,14 @@ def summary(report, apps):
             local = stats["skills"] - stats["bundle_skills"]
             skills = f"{stats['bundle_skills']} skills from {plural(stats['bundles'], 'bundle')}"
             skills += f" + {local} local" if local else ""
+        off = f" ({stats['plugins_off']} off)" if stats.get("plugins_off") else ""
         if stats.get("plugin_skills"):
-            skills += f" + {stats['plugin_skills']} from {plural(stats['plugins'], 'plugin')}"
+            skills += f" + {stats['plugin_skills']} from {plural(stats['plugins'], 'plugin')}{off}"
         elif "plugins" in stats:
-            skills += f" · {plural(stats['plugins'], 'plugin')}"
+            skills += f" · {plural(stats['plugins'], 'plugin')}{off}"
         parts.append(skills)
     elif "plugins" in stats:
-        parts.append(plural(stats["plugins"], "plugin"))
+        parts.append(plural(stats["plugins"], "plugin") + (f" ({stats['plugins_off']} off)" if stats.get("plugins_off") else ""))
     if stats.get("agents"):
         parts.append(plural(stats["agents"], "agent"))
     if "servers" in stats:
@@ -820,23 +858,32 @@ def stdin_closed():
         return True
 
 
-def tally(actions):
-    count = actions.count("fix")
-    return f"fix {count}" if count else "nothing changes"
+def tally(rows, picked):
+    counts = {}
+    for (_, finding), choice in zip(rows, picked):
+        if choice:
+            verb = finding.choices[choice][0]
+            counts[verb] = counts.get(verb, 0) + 1
+    return ", ".join(f"{verb} {n}" for verb, n in counts.items()) or "nothing changes"
 
 
-def pick_on_terminal(report, rows, actions):
-    """The list on the alternate screen, df-doctor's way: the arrows choose a
-    row, f or s (or space) sets it, Enter applies every row, q or Esc cancels.
-    Returns the actions, or None when cancelled."""
+def row_label(finding, choice):
+    return finding.choices[choice][0] if len(finding.choices) > 1 else "hand"
+
+
+def pick_on_terminal(report, rows, picked):
+    """Every item on the alternate screen, df-doctor's way: the arrows choose a
+    row, space or left and right step through what the row can do, a letter
+    picks it (s skip, d disable, r remove, ...), Enter applies every row, q or
+    Esc cancels. Returns each row's choice, or None when cancelled."""
     fd = sys.stdin.fileno()
     saved = termios.tcgetattr(fd)
     out = sys.stderr
-    picked = list(actions)
+    picked = list(picked)
     cursor = top = 0
     note = ""
-    head = "f fix (do the [auto] step)  s skip (leave it)"
-    keys = "↑↓ PgUp PgDn Home End choose a row  space next change  enter apply all  q cancel"
+    head = "space or ←→ next action  letter picks it: s skip, d disable, r remove, u uninstall, f fix ...  hand: by hand"
+    keys = "↑↓ PgUp PgDn Home End choose a row  enter apply all  q cancel"
 
     def key():
         return os.read(fd, 1)
@@ -844,28 +891,34 @@ def pick_on_terminal(report, rows, actions):
     def waiting():
         return bool(select.select([fd], [], [], 0.1)[0])
 
+    def step(by):
+        count = len(rows[cursor][1].choices)
+        picked[cursor] = (picked[cursor] + by) % count
+
     try:
         tty.setcbreak(fd, termios.TCSANOW)
         out.write("\033[?1049h\033[?25l")
         while True:
             cols, lines = shutil.get_terminal_size()
             cols = cols if cols >= 20 else 80
-            # Three lines above the rows and three below.
-            height = max(lines - 7, 3)
+            # Three lines above the rows and four below.
+            height = max(lines - 8, 3)
             top = min(top, cursor)
             top = max(top, cursor - height + 1)
             last = min(top + height, len(rows))
-            screen = ["\033[H\033[2J" + report.paint("1", "Choose a change for each item") + f" ({len(rows)})",
+            screen = ["\033[H\033[2J" + report.paint("1", "Choose what to do with each item") + f" ({len(rows)})",
                       head[:cols], report.paint("2", keys[:cols])]
             for r in range(top, last):
                 number, finding = rows[r]
-                text = f"{picked[r]:<4} {number:>2}  {finding.todo}"[:cols - 2]
+                text = f"{row_label(finding, picked[r]):<9} {number:>2}  {finding.title}"[:cols - 2]
                 screen.append(report.paint("1", f"> {text}") if r == cursor else f"  {text}")
             screen += [""] * (height - (last - top))
             foot = report.paint("2", f"{top + 1}-{last} of {len(rows)}") + "  " if len(rows) > height else ""
-            foot += report.paint("33", note) if note else f"Enter: {tally(picked)}"
+            foot += report.paint("33", note) if note else f"Enter: {tally(rows, picked)}"
             finding = rows[cursor][1]
+            offers = "   ".join(f"{verb[0]} {verb}: {todo}" for verb, todo, _ in finding.choices[1:])
             screen += [foot, report.paint("1", f"{finding.kind}: {finding.title}"[:cols]),
+                       report.paint("36", (offers or f"by hand: {finding.todo}")[:cols]),
                        report.paint("2", (finding.effect or "")[:cols])]
             out.write("\n".join(screen))
             out.flush()
@@ -877,6 +930,8 @@ def pick_on_terminal(report, rows, actions):
                     cursor = max(cursor - 1, 0)
                 elif rest == b"[B":
                     cursor = min(cursor + 1, len(rows) - 1)
+                elif rest in (b"[C", b"[D"):
+                    step(1 if rest == b"[C" else -1)
                 elif rest in (b"[H", b"OH"):
                     cursor = 0
                 elif rest in (b"[F", b"OF"):
@@ -884,20 +939,23 @@ def pick_on_terminal(report, rows, actions):
                 elif rest in (b"[5", b"[6"):
                     if waiting():
                         key()
-                    step = -height if rest == b"[5" else height
-                    cursor = min(max(cursor + step, 0), len(rows) - 1)
+                    jump = -height if rest == b"[5" else height
+                    cursor = min(max(cursor + jump, 0), len(rows) - 1)
                 else:
                     return None
             elif pressed == b" ":
-                picked[cursor] = "skip" if picked[cursor] == "fix" else "fix"
-            elif pressed in (b"f", b"s"):
-                picked[cursor] = "fix" if pressed == b"f" else "skip"
+                step(1)
             elif pressed in (b"\n", b"\r"):
                 return picked
             elif pressed in (b"q", b""):
                 return None
             else:
-                note = "f fixes the row, s skips it"
+                letters = [verb[0] for verb in finding.actions]
+                letter = pressed.decode(errors="replace")
+                if letter in letters:
+                    picked[cursor] = letters.index(letter)
+                else:
+                    note = f"this item offers {' / '.join(finding.actions)}"
     except KeyboardInterrupt:
         raise SystemExit(130)
     finally:
@@ -906,28 +964,30 @@ def pick_on_terminal(report, rows, actions):
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
 
 
-def pick_by_line(rows, actions):
-    """The list without a terminal (or with DOTFILES_PROMPT=read): the rows,
-    then one line of actions and item numbers. Returns None on a line it
-    cannot use, changing no row."""
+def pick_by_line(rows, picked):
+    """Every item without a terminal (or with DOTFILES_PROMPT=read): the rows,
+    then one line of actions and item numbers, where fix means a row's first
+    action. Returns None on a line it cannot use, changing no row."""
     numbers = [number for number, _ in rows]
-    print("Choose a change for each item:", file=sys.stderr)
-    for (number, finding), action in zip(rows, actions):
-        print(f"  {number:>2}) {action:<4} {finding.todo}", file=sys.stderr)
-    print('Actions then item numbers, like "fix 2 5-7 skip 3"; none skips everything; '
+    print("Choose what to do with each item:", file=sys.stderr)
+    for (number, finding), choice in zip(rows, picked):
+        offers = " / ".join(finding.actions) if len(finding.choices) > 1 else "by hand"
+        print(f"  {number:>2}) {row_label(finding, choice):<9} {finding.title}  [{offers}]", file=sys.stderr)
+    print('Actions then item numbers, like "fix 2 5-7 skip 3" or "disable 4"; none skips everything; '
           "Enter applies the list as shown: ", end="", file=sys.stderr, flush=True)
     try:
         reply = input()
     except EOFError:
         print(file=sys.stderr)
         return None
-    picked = list(actions)
+    picked = list(picked)
+    verbs = {"fix", "skip", "disable", "uninstall", "remove", "delete", "link", "unlink"}
     action = None
     for token in reply.split():
         if token == "none":
-            picked = ["skip"] * len(picked)
+            picked = [0] * len(picked)
             continue
-        if token in ("fix", "skip"):
+        if token in verbs:
             action = token
             continue
         match = re.fullmatch(r"(\d{1,6})(?:-(\d{1,6}))?", token)
@@ -937,10 +997,18 @@ def pick_by_line(rows, actions):
         low, high = int(match[1]), int(match[2] or match[1])
         hits = [r for r, number in enumerate(numbers) if low <= number <= high]
         if not hits:
-            print(f"No [auto] item {token}; nothing changed", file=sys.stderr)
+            print(f"No item {token}; nothing changed", file=sys.stderr)
             return None
         for r in hits:
-            picked[r] = action
+            actions = rows[r][1].actions
+            if action in actions:
+                picked[r] = actions.index(action)
+            elif action == "fix" and len(actions) > 1:
+                picked[r] = 1
+            elif low == high:
+                print(f"Item {numbers[r]} can't {action}; it offers {' / '.join(actions)}; nothing changed",
+                      file=sys.stderr)
+                return None
     return picked
 
 
@@ -948,40 +1016,41 @@ def apply_findings(report, findings, yes):
     """One list of every [auto] item, a fix set to fix and a trim to skip; the
     person changes any row and every row is applied at once. Nothing changes
     when the list is cancelled or stdin is closed."""
-    rows = [(n, f) for n, f in enumerate(findings, 1) if f.apply]
-    if not rows:
+    rows = list(enumerate(findings, 1))
+    if not any(f.apply for f in findings):
         print("\n  Nothing here can be fixed automatically; each item above says what to do.")
         return
     if yes:
-        actions = ["fix"] * len(rows)
+        picked = [1 if f.apply else 0 for _, f in rows]
     else:
         if stdin_closed():
             print("\n  Nothing changed: ai-doctor asks before changing anything, and stdin is closed.")
             return
-        actions = ["fix" if f.kind == "fix" else "skip" for _, f in rows]
+        picked = [1 if f.kind == "fix" and f.apply else 0 for _, f in rows]
         print(file=sys.stderr)
         if os.environ.get("DOTFILES_PROMPT") != "read" and sys.stdin.isatty() and sys.stderr.isatty():
-            actions = pick_on_terminal(report, rows, actions)
+            picked = pick_on_terminal(report, rows, picked)
         else:
-            actions = pick_by_line(rows, actions)
-        if actions is None or "fix" not in actions:
+            picked = pick_by_line(rows, picked)
+        if picked is None or not any(picked):
             print("  Nothing changed.")
             return
     backup_dir = STATE_HOME / "ai-doctor" / time.strftime("%Y%m%d-%H%M%S")
     done = failed = 0
     print()
-    for (number, finding), action in zip(rows, actions):
-        if action != "fix":
+    for (number, finding), choice in zip(rows, picked):
+        if not choice:
             continue
+        _verb, todo, apply = finding.choices[choice]
         try:
-            finding.apply(backup_dir)
+            apply(backup_dir)
         except (OSError, RuntimeError, KeyError, subprocess.CalledProcessError) as error:
-            print(f"  {number:>2}  {finding.todo}: {report.paint('31', 'failed')}: {error}")
+            print(f"  {number:>2}  {todo}: {report.paint('31', 'failed')}: {error}")
             failed += 1
             continue
         finding.done = True
         done += 1
-        print(f"  {number:>2}  {finding.todo}: {report.paint('32', 'done')}")
+        print(f"  {number:>2}  {todo}: {report.paint('32', 'done')}")
     if backup_dir.exists():
         print(f"\n  Backups: {tilde(backup_dir)}")
     if failed:
@@ -1012,12 +1081,12 @@ def main(argv=None):
     report = Report(color, args.verbose)
     cwd = Path.cwd()
 
-    plugins = claude_plugins() if "claude" in apps else []
+    plugins, plugins_off = claude_plugins() if "claude" in apps else ([], [])
     check_instructions(report, apps, cwd)
     check_skills(report, apps)
     check_agents(report, apps, plugins)
     if "claude" in apps:
-        check_plugins(report, plugins)
+        check_plugins(report, plugins, plugins_off)
     check_servers(report, apps, cwd, plugins)
     if "claude" in apps:
         check_settings(report)

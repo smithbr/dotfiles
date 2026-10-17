@@ -185,7 +185,7 @@ JSON
     # Without a terminal --fix reads one line; a word it cannot use changes nothing.
     run ai_doctor --fix <<< "fix 1 bogus"
     assert_failure 1
-    assert_output --partial "fix  "
+    assert_output --partial "remove  "
     assert_output --partial 'like "fix 2 5-7 skip 3"'
     assert_output --partial "Not understood: bogus; nothing changed"
     assert_equal "$(cat "${HOME}/.claude.json")" "$(cat "${TEST_TMPDIR}/before.json")"
@@ -203,7 +203,7 @@ JSON
     cp "${HOME}/.claude.json" "${TEST_TMPDIR}/before.json"
 
     on_terminal q
-    assert_output --partial "Choose a change for each item"
+    assert_output --partial "Choose what to do with each item"
     assert_output --partial "Nothing changed."
     assert_equal "$(cat "${HOME}/.claude.json")" "$(cat "${TEST_TMPDIR}/before.json")"
 
@@ -269,20 +269,23 @@ JSON
     assert_success
     assert_output --partial "· 2 skills from 2 bundles + 2 from 4 plugins · 4 MCP servers (3 wait for a sign-in) ·"
     assert_output --partial "trim  Claude's lastfm MCP server (user) waits for a sign-in"
-    assert_output --partial "sign in with /mcp, or: claude mcp remove lastfm -s user  [auto]"
-    assert_output --partial "its tool names stay in every session until then; claude mcp add brings it back"
+    assert_output --partial "claude mcp remove lastfm -s user  [auto]"
+    assert_output --partial "to keep it, sign in with /mcp in a Claude Code session"
     assert_output --partial "trim  Plugin cloudflare loads twice: installed here and synced from claude.ai"
     assert_output --partial "claude plugin uninstall cloudflare@cloudflare  [auto]"
     assert_output --partial "every session drops the duplicate's 1 skill"
-    assert_output --partial "trim  Plugin cloudflare: cloudflare (1 of 1 MCP server) waits for a sign-in; use not recorded"
-    assert_output --partial "trim  Plugin engineering: slack (1 of 2 MCP servers) waits for a sign-in; use not recorded"
-    assert_output --partial "sign in with /mcp, or turn it off in Claude's settings (claude.ai plugins)"
-    assert_output --partial "off, every session drops 1 skill (~0 tokens), 1 MCP server; turn it back on when a task needs it"
+    assert_output --partial "trim  Plugin cloudflare: its MCP server waits for a sign-in (cloudflare); use not recorded"
+    assert_output --partial "trim  Plugin engineering: 1 of its 2 MCP servers waits for a sign-in (slack); use not recorded"
+    assert_output --partial "claude plugin disable engineering@synced  [auto]"
+    assert_output --partial "saves 0 skills (~0 tokens) + 2 MCP servers per session; claude plugin enable engineering@synced turns it back on; to keep it, sign in to it with /mcp in a Claude Code session"
     refute_output --partial "no recorded use"
     refute_output --partial "gmail"
 
     run ai_doctor --fix --yes
     assert_success
+    # Without a claude command, disable writes what `claude plugin disable` would.
+    run python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["enabledPlugins"])' "${HOME}/.claude/settings.json"
+    assert_output "{'cloudflare@synced': False, 'engineering@synced': False}"
     run python3 -c 'import json, sys; print(sorted(json.load(open(sys.argv[1]))["plugins"]))' "${HOME}/.claude/plugins/installed_plugins.json"
     assert_output "['other@m']"
     refute test -e "${HOME}/.claude/plugins/cache/cf"
@@ -306,10 +309,9 @@ JSON
     assert_success
     assert_output --partial "· 2 skills from 2 bundles + 2 from 2 plugins · 3 agents ·"
     assert_output --partial "trim  Plugin idle has no recorded use"
-    assert_output --partial "turn it off in Claude's settings (claude.ai plugins)"
-    assert_output --partial "off, every session drops 1 skill (~6 tokens), 1 agent; turn it back on when a task needs it"
+    assert_output --partial "claude plugin disable idle@synced  [auto]"
+    assert_output --partial "saves 1 skill (~6 tokens) + 1 agent per session; claude plugin enable idle@synced turns it back on"
     refute_output --partial "Plugin used"
-    refute_output --partial "[auto]"
 
     run ai_doctor -v
     assert_success
@@ -318,6 +320,61 @@ JSON
     assert_output --partial "plugin idle: 1 agent, ~3 tokens"
     assert_output --regexp "used \(claude.ai\): 1 skill \(~2 tokens\); used 3 times, last [0-9]+ days ago"
     assert_output --partial "idle (claude.ai): 1 skill (~6 tokens), 1 agent; no recorded use"
+}
+
+@test "ai-doctor: a plugin turned off in enabledPlugins is not counted or flagged" {
+    local on="${HOME}/.claude/plugins/synced/org/on" off="${HOME}/.claude/plugins/synced/org/off"
+    mkdir -p "${on}/.claude-plugin" "${on}/skills/a" "${off}/.claude-plugin" "${off}/skills/b"
+    printf '{"name": "on"}\n' > "${on}/.claude-plugin/plugin.json"
+    printf '{"name": "off"}\n' > "${off}/.claude-plugin/plugin.json"
+    printf -- '---\nname: a\ndescription: Skill a\n---\n' > "${on}/skills/a/SKILL.md"
+    printf -- '---\nname: b\ndescription: Skill b\n---\n' > "${off}/skills/b/SKILL.md"
+    printf '{"mcpServers": {"slack": {"type": "http", "url": "https://example.com/slack"}}}\n' > "${off}/.mcp.json"
+    printf '{"plugin:off:slack": {}}\n' > "${HOME}/.claude/mcp-needs-auth-cache.json"
+    printf '{"numStartups": 2, "pluginUsage": {"on@synced": {"usageCount": 1, "lastUsedAt": 1}}}\n' > "${HOME}/.claude.json"
+    printf '{"enabledPlugins": {"off@synced": false, "on@synced": true}}\n' > "${HOME}/.claude/settings.json"
+    run ai_doctor
+    assert_success
+    assert_output --partial "· 2 skills from 2 bundles + 1 from 1 plugin (1 off) ·"
+    assert_output --partial "Nothing to do."
+    refute_output --partial "slack"
+
+    run ai_doctor -v
+    assert_output --partial "off (claude.ai): turned off; claude plugin enable off@synced turns it back on"
+}
+
+@test "ai-doctor: the list offers each item's actions, takes them by word or by letter, and lists by-hand items" {
+    local plugin="${HOME}/.claude/plugins/cache/m/idle/1.0.0"
+    mkdir -p "${plugin}/skills/a"
+    printf -- '---\nname: a\ndescription: Skill a\n---\n' > "${plugin}/skills/a/SKILL.md"
+    printf '{"version": 2, "plugins": {"idle@m": [{"installPath": "%s"}]}}\n' "${plugin}" > "${HOME}/.claude/plugins/installed_plugins.json"
+    printf '{"numStartups": 2, "pluginUsage": {"idle@m": {"usageCount": 0}}}\n' > "${HOME}/.claude.json"
+    printf '{"mcpServers": {"gh": {"url": "https://example.com", "headers": {"Authorization": "Bearer ghp_abc"}}}}\n' > "${HOME}/.cursor.json"
+    mkdir -p "${HOME}/.cursor"
+    mv "${HOME}/.cursor.json" "${HOME}/.cursor/mcp.json"
+    chmod 600 "${HOME}/.cursor/mcp.json"
+
+    run ai_doctor --app claude --app cursor --fix <<< "skip 1 uninstall 3"
+    assert_output --partial "hand      Cursor's gh MCP server has a token written into ~/.cursor/mcp.json  [by hand]"
+    assert_output --partial "skip      Plugin idle has no recorded use  [skip / disable / uninstall]"
+    assert_output --partial "No item 3; nothing changed"
+
+    run ai_doctor --app claude --app cursor --fix <<< "remove 2"
+    assert_output --partial "Item 2 can't remove; it offers skip / disable / uninstall; nothing changed"
+    refute test -e "${HOME}/.claude/settings.json"
+
+    run ai_doctor --app claude --app cursor --fix <<< "disable 2"
+    assert_output --partial "claude plugin disable idle@m: done"
+    run python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["enabledPlugins"])' "${HOME}/.claude/settings.json"
+    assert_output "{'idle@m': False}"
+
+    rm "${HOME}/.claude/settings.json"
+    command -v script >/dev/null || skip "script is required for a terminal"
+    # Down to the plugin, u picks uninstall, Enter applies it.
+    on_terminal '\033[Bu\n'
+    assert_output --partial "claude plugin uninstall idle@m: done"
+    run python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["plugins"])' "${HOME}/.claude/plugins/installed_plugins.json"
+    assert_output "{}"
 }
 
 @test "ai-doctor: -v reports experimental flags and a default agent" {
