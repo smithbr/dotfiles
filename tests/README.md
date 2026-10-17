@@ -161,7 +161,7 @@ This is process-level isolation, not a real container or VM.
 [`ph.bats`](ph.bats)
 
 - Runs `ph` (in `stow/personal/.local/bin`) against a mocked `curl` that records each request and answers from fixtures
-- Verifies the login (password on stdin, never in argv; the saved password file; a wrong or missing password) and the logout on exit, blocking on and off with and without a timer (a bad duration fails before any request), allow and deny adds with comments and regexes, URL-encoded removals, API errors, the list, `check`, and the query log by client IP or name with control characters stripped, `--json`, and `api`
+- Verifies the login (password on stdin, never in argv; the saved password file; a wrong or missing password) and the logout on exit, blocking on and off with and without a timer (a bad duration fails before any request), allow and deny adds with comments and regexes, URL-encoded removals, API errors, the list, `check`, the blocked domains grouped one line each, newest first, over `--since` (a bad duration fails before any request), and the query log by client IP or name with control characters stripped, `--json`, and `api`
 
 [`zsh.bats`](zsh.bats)
 

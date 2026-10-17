@@ -27,7 +27,8 @@ Commands:
   undeny DOMAIN...          Remove from the deny list
   list [allow|deny]         Show the allow and deny lists
   check DOMAIN              Show which lists and blocklists match DOMAIN
-  blocked [CLIENT]          Recent blocked queries, optionally from one client
+  blocked [CLIENT]          Domains blocked lately, newest first, one line each
+                            (optionally from one client; -a for every query)
   queries [CLIENT]          Recent queries, optionally from one client
   top                       Top blocked domains and top clients
   gravity                   Update the blocklists (pihole -g)
@@ -41,6 +42,8 @@ Options:
   -c, --comment TEXT        allow/deny: comment stored with the entry
   -n, --count N             blocked/queries/top: how many rows (default 25)
   -d, --domain PATTERN      blocked/queries: only domains matching (* wildcard)
+  -s, --since DURATION      blocked: how far back to look (default 24h; all)
+  -a, --all                 blocked: every blocked query, not one line per domain
   -h, --help                Show this help
 
 CLIENT is an IP address or a client name as Pi-hole shows it.
@@ -62,6 +65,8 @@ KIND=exact
 COMMENT=""
 COUNT=25
 DOMAIN_FILTER=""
+SINCE=24h
+ALL=false
 ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -71,6 +76,8 @@ while [[ $# -gt 0 ]]; do
         -c|--comment) [[ $# -ge 2 ]] || die "$1 needs a value"; COMMENT="$2"; shift ;;
         -n|--count) [[ $# -ge 2 && "$2" =~ ^[0-9]+$ ]] || die "$1 needs a number"; COUNT="$2"; shift ;;
         -d|--domain) [[ $# -ge 2 ]] || die "$1 needs a value"; DOMAIN_FILTER="$2"; shift ;;
+        -s|--since) [[ $# -ge 2 ]] || die "$1 needs a value"; SINCE="$2"; shift ;;
+        -a|--all) ALL=true ;;
         --) shift; ARGS+=("$@"); break ;;
         -?*) die "unknown option: $1 (see ph --help)" ;;
         *) ARGS+=("$1") ;;
@@ -209,6 +216,41 @@ urlencode() {
     jq -rn --arg s "$1" '$s | @uri'
 }
 
+# Lays out tab-separated rows as columns sized to fit, the first row a
+# heading (bold on a terminal). Lines without a tab pass through: those before
+# the table print first, those after it last. RIGHT lists the 1-based columns
+# to right-align, e.g. "2".
+table() {
+    local bold="" reset=""
+    if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+        bold=$'\033[1m' reset=$'\033[0m'
+    fi
+    awk -F'\t' -v right=" ${1:-} " -v bold="${bold}" -v reset="${reset}" '
+        !/\t/ { if (rows) foot[++nfoot] = $0; else print; next }
+        {
+            rows++
+            n[rows] = NF
+            for (i = 1; i <= NF; i++) {
+                cell[rows, i] = $i
+                if (length($i) > w[i]) w[i] = length($i)
+            }
+        }
+        END {
+            for (r = 1; r <= rows; r++) {
+                line = ""
+                for (i = 1; i <= n[r]; i++) {
+                    c = cell[r, i]
+                    if (i == n[r] && index(right, " " i " ") == 0) { line = line c; break }
+                    pad = sprintf("%" w[i] - length(c) "s", "")
+                    line = line (index(right, " " i " ") ? pad c : c pad) "  "
+                }
+                sub(/ +$/, "", line)
+                print (r == 1 ? bold line reset : line)
+            }
+            for (f = 1; f <= nfoot; f++) print foot[f]
+        }'
+}
+
 # --- commands ---------------------------------------------------------------
 
 show_blocking() {
@@ -268,9 +310,10 @@ cmd_list() {
     api GET "${path}" | if [[ "${JSON}" == true ]]; then cat; else
         jq -r "${JQ_CLEAN}"'
             if (.domains | length) == 0 then "(none)" else
-            .domains | sort_by(.type, .kind, .domain)[]
-            | "\(.type)\t\(.kind)\t\(if .enabled then "" else "off" end)\t\(.domain | clean)\t\(.comment // "" | clean)" end' \
-        | awk -F'\t' 'NF == 1 { print; next } { printf "%-6s %-6s %-4s %-40s %s\n", $1, $2, $3, $4, $5 }'
+            "LIST\tKIND\tON\tDOMAIN\tCOMMENT",
+            (.domains | sort_by(.type, .kind, .domain)[]
+            | "\(.type)\t\(.kind)\t\(if .enabled then "yes" else "no" end)\t\(.domain | clean)\t\(.comment // "" | clean)") end' \
+        | table
     fi
 }
 
@@ -286,10 +329,12 @@ cmd_check() {
     fi
 }
 
-# queries_path BLOCKED_ONLY CLIENT: the /queries URL with its filters.
+# queries_path BLOCKED_ONLY CLIENT LENGTH [FROM]: the /queries URL with its
+# filters, FROM being a Unix time.
 queries_path() {
-    local path="/queries?length=${COUNT}" client="${2:-}"
+    local path="/queries?length=$3" client="${2:-}"
     [[ "$1" != true ]] || path+="&upstream=blocklist"
+    [[ -z "${4:-}" ]] || path+="&from=$4"
     if [[ -n "${client}" ]]; then
         if [[ "${client}" =~ ^[0-9.]+$ || "${client}" == *:* ]]; then
             path+="&client_ip=$(urlencode "${client}")"
@@ -305,12 +350,55 @@ cmd_queries() {
     local blocked="$1"
     shift
     [[ $# -le 1 ]] || die "${COMMAND} takes at most one client"
-    api GET "$(queries_path "${blocked}" "${1:-}")" | if [[ "${JSON}" == true ]]; then cat; else
+    api GET "$(queries_path "${blocked}" "${1:-}" "${COUNT}")" | if [[ "${JSON}" == true ]]; then cat; else
         jq -r "${JQ_CLEAN}"'
             if (.queries | length) == 0 then "(no matching queries)" else
-            .queries[]
-            | "\(.time | floor | strflocaltime("%m-%d %H:%M:%S"))\t\(.client.name // .client.ip | clean)\t\(.type // "" | clean)\t\(.status // "" | clean)\t\(.domain | clean)" end' \
-        | awk -F'\t' 'NF == 1 { print; next } { printf "%-14s  %-24s %-6s %-16s %s\n", $1, $2, $3, $4, $5 }'
+            "TIME\tCLIENT\tTYPE\tSTATUS\tDOMAIN",
+            (.queries[]
+            | "\(.time | floor | strflocaltime("%m-%d %H:%M:%S"))\t\(.client.name // .client.ip | clean)\t\(.type // "" | clean)\t\(.status // "" | clean)\t\(.domain | clean)") end' \
+        | table
+    fi
+}
+
+# One line per blocked domain over the --since window, newest first: when it
+# was last blocked, how often, why, and (without a CLIENT) by whom. Scans up to
+# PH_SCAN blocked queries, the newest first.
+cmd_blocked() {
+    [[ $# -le 1 ]] || die "blocked takes at most one client"
+    local client="${1:-}" from="" scan="${PH_SCAN:-10000}" label="in the last ${SINCE}"
+    if [[ "${SINCE}" == all ]]; then
+        label="in the query log"
+    else
+        from="$(( $(date +%s) - SINCE_SECONDS ))"
+    fi
+    api GET "$(queries_path true "${client}" "${scan}" "${from}")" | if [[ "${JSON}" == true ]]; then cat; else
+        jq -r --arg label "${label}${client:+ from ${client}}" --argjson n "${COUNT}" --argjson scan "${scan}" \
+            --argjson by_client "$([[ -z "${client}" ]] && echo true || echo false)" "${JQ_CLEAN}"'
+            # Why Pi-hole blocked it, in words.
+            def why: {GRAVITY: "blocklist", GRAVITY_CNAME: "blocklist (CNAME)",
+                      DENYLIST: "deny list", DENYLIST_CNAME: "deny list (CNAME)",
+                      REGEX: "deny regex", REGEX_CNAME: "deny regex (CNAME)",
+                      SPECIAL_DOMAIN: "built-in", EXTERNAL_BLOCKED_IP: "upstream",
+                      EXTERNAL_BLOCKED_NULL: "upstream", EXTERNAL_BLOCKED_NXRA: "upstream",
+                      EXTERNAL_BLOCKED_EDE15: "upstream"}[.] // ascii_downcase;
+            def ago: (now - .) | floor
+                | if . < 60 then "\(.)s" elif . < 3600 then "\(. / 60 | floor)m"
+                  elif . < 86400 then "\(. / 3600 | floor)h" else "\(. / 86400 | floor)d" end;
+            .queries as $q
+            | ($q | group_by(.domain)
+                | map({domain: .[0].domain, hits: length, last: (map(.time) | max),
+                       why: (map(.status // "" | why) | unique | join(", ")),
+                       clients: (map(.client.name // .client.ip) | unique
+                                 | (.[:2] | join(", ")) + (if length > 2 then " +\(length - 2)" else "" end))})
+                | sort_by(-.last)) as $d
+            | if ($d | length) == 0 then "Nothing blocked \($label)." else
+              "\($d | length) domains blocked \($label)\(if ($q | length) >= $scan then " (from the newest \($scan) blocked queries; narrow with --since)" else "" end)",
+              "",
+              "LAST\tHITS\tWHY\tDOMAIN\(if $by_client then "\tCLIENTS" else "" end)",
+              ($d[:$n][]
+               | "\(.last | ago)\t\(.hits)\t\(.why | clean)\t\(.domain | clean)\(if $by_client then "\t\(.clients | clean)" else "" end)"),
+              (if ($d | length) > $n then "", "\(($d | length) - $n) more: ph blocked -n \($d | length)" else empty end) end' \
+        | table 2
     fi
 }
 
@@ -364,12 +452,14 @@ case "${COMMAND}" in
     *) die "unknown command: ${COMMAND} (see ph --help)" ;;
 esac
 
-# Checked before logging in: a bad duration must never become a permanent disable.
+# Checked before logging in: a bad duration must never become a permanent
+# disable or an unbounded search.
 TIMER=""
 if [[ "${COMMAND}" == disable ]]; then
     [[ "${#ARGS[@]}" -le 1 ]] || die "disable takes at most one duration"
     [[ "${#ARGS[@]}" -eq 0 ]] || TIMER="$(duration_seconds "${ARGS[0]}")"
 fi
+[[ "${SINCE}" == all ]] || SINCE_SECONDS="$(duration_seconds "${SINCE}")"
 
 open_session
 case "${COMMAND}" in
@@ -382,7 +472,9 @@ case "${COMMAND}" in
     undeny) cmd_domains_remove deny ${ARGS[@]+"${ARGS[@]}"} ;;
     list) [[ "${#ARGS[@]}" -le 1 ]] || die "list takes allow or deny"; cmd_list ${ARGS[@]+"${ARGS[@]}"} ;;
     check) cmd_check ${ARGS[@]+"${ARGS[@]}"} ;;
-    blocked) cmd_queries true ${ARGS[@]+"${ARGS[@]}"} ;;
+    blocked)
+        if [[ "${ALL}" == true ]]; then cmd_queries true ${ARGS[@]+"${ARGS[@]}"}; else cmd_blocked ${ARGS[@]+"${ARGS[@]}"}; fi
+        ;;
     queries) cmd_queries false ${ARGS[@]+"${ARGS[@]}"} ;;
     top) cmd_top ;;
     gravity) cmd_gravity ;;

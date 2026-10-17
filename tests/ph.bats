@@ -180,19 +180,54 @@ teardown() {
     printf '{"domains":[{"domain":"b.test","type":"deny","kind":"exact","enabled":true,"comment":null},{"domain":"a.test","type":"allow","kind":"exact","enabled":false,"comment":"tv"}]}' > "${FIX}/GET_domains"
     run bash "${PH}" list
     assert_success
-    assert_line --index 0 --regexp '^allow +exact +off +a\.test +tv$'
-    assert_line --index 1 --regexp '^deny +exact +b\.test'
+    assert_line --index 0 --regexp '^LIST +KIND +ON +DOMAIN +COMMENT$'
+    assert_line --index 1 "allow  exact  no   a.test  tv"
+    assert_line --index 2 "deny   exact  yes  b.test"
     run bash "${PH}" list everything
     assert_failure
 }
 
-@test "ph: blocked filters by client IP and strips control characters" {
+@test "ph: blocked -a lists every query by client IP and strips control characters" {
     printf '{"queries":[{"time":1700000000.5,"type":"A","domain":"ads\\u001b[31m.test","status":"GRAVITY","client":{"ip":"192.168.1.20","name":"tv.lan"}}]}' > "${FIX}/GET_queries"
-    run bash "${PH}" blocked 192.168.1.20 -n 5
+    run bash "${PH}" blocked -a 192.168.1.20 -n 5
     assert_success
-    assert_output --regexp 'tv\.lan +A +GRAVITY +ads\[31m\.test$'
+    assert_line --index 1 --regexp '^[0-9-]+ [0-9:]+  tv\.lan  A     GRAVITY  ads\[31m\.test$'
     run grep -c 'GET /queries?length=5&upstream=blocklist&client_ip=192.168.1.20 ' "${CALLS}"
     assert_output "1"
+}
+
+@test "ph: blocked shows each domain once, newest first, over the last 24h" {
+    local now
+    now="$(date +%s)"
+    NOW="${now}" perl -pe 's/NOW-(\d+)/$ENV{NOW} - $1/ge' > "${FIX}/GET_queries" <<'JSON'
+{"queries":[
+        {"time":NOW-300,"type":"A","domain":"old.test","status":"GRAVITY","client":{"ip":"10.0.0.1","name":null}},
+        {"time":NOW-90,"type":"AAAA","domain":"ads.test","status":"GRAVITY","client":{"ip":"10.0.0.2","name":"tv.lan"}},
+        {"time":NOW-200,"type":"A","domain":"ads.test","status":"DENYLIST","client":{"ip":"10.0.0.1","name":null}},
+        {"time":NOW-7200,"type":"A","domain":"old.test","status":"GRAVITY","client":{"ip":"10.0.0.1","name":null}},
+        {"time":NOW-90000,"type":"A","domain":"oldest.test","status":"REGEX","client":{"ip":"10.0.0.1","name":null}}]}
+JSON
+    run bash "${PH}" blocked -n 2
+    assert_success
+    assert_line --index 0 "3 domains blocked in the last 24h"
+    assert_line --index 1 "LAST  HITS  WHY                   DOMAIN    CLIENTS"
+    assert_line --index 2 "1m       2  blocklist, deny list  ads.test  10.0.0.1, tv.lan"
+    assert_line --index 3 "5m       2  blocklist             old.test  10.0.0.1"
+    assert_line --index 4 "1 more: ph blocked -n 3"
+    run grep -cE 'GET /queries\?length=10000&upstream=blocklist&from=[0-9]+ ' "${CALLS}"
+    assert_output "1"
+}
+
+@test "ph: blocked for one client drops the clients column; --since all has no time limit" {
+    printf '{"queries":[]}' > "${FIX}/GET_queries"
+    run bash "${PH}" blocked 10.0.0.1 --since all
+    assert_success
+    assert_output "Nothing blocked in the query log from 10.0.0.1."
+    run grep -c 'GET /queries?length=10000&upstream=blocklist&client_ip=10.0.0.1 ' "${CALLS}"
+    assert_output "1"
+    run bash "${PH}" blocked --since soon
+    assert_failure
+    assert_output --partial "bad duration: soon"
 }
 
 @test "ph: queries by client name with a domain filter" {
