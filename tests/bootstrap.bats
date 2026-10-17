@@ -213,7 +213,8 @@ _run_vendor_script() {
 # by creating usr/sbin/unbound, curl hands back a fake Pi-hole installer that
 # creates pihole-FTL and pihole, systemctl reports unbound-resolvconf enabled
 # while ROOT/resolvconf-enabled exists, unbound-checkconf fails while
-# ROOT/badconf exists, and pihole-FTL --config answers from ROOT/ftl-KEY.
+# ROOT/badconf exists, and pihole-FTL --config answers from ROOT/ftl-KEY
+# (the installer sets ROOT/ftl-pwhash, as the real one sets a web password).
 _make_pihole_root() {
     PIHOLE_SCRATCH="${TEST_TMPDIR}/root"
     local root="${PIHOLE_SCRATCH}"
@@ -261,6 +262,7 @@ mkdir -p "${PIHOLE_ROOT}/usr/bin" "${PIHOLE_ROOT}/usr/local/bin"
 printf '#!/bin/sh\n' > "${PIHOLE_ROOT}/usr/bin/pihole-FTL"
 printf '#!/bin/sh\n' > "${PIHOLE_ROOT}/usr/local/bin/pihole"
 chmod +x "${PIHOLE_ROOT}/usr/bin/pihole-FTL" "${PIHOLE_ROOT}/usr/local/bin/pihole"
+printf '$BALLOON-SHA256$v=1$fakehash\n' > "${PIHOLE_ROOT}/ftl-pwhash"
 INSTALLER
 MOCK
     cat > "${root}/bin/pihole-FTL" <<'MOCK'
@@ -270,6 +272,7 @@ if [[ "$1" == --config && $# -eq 2 ]]; then
     case "$2" in
         dns.upstreams) cat "${PIHOLE_ROOT}/ftl-upstreams" 2>/dev/null || echo '[ "127.0.0.1#5335" ]' ;;
         dns.dnssec) cat "${PIHOLE_ROOT}/ftl-dnssec" 2>/dev/null || echo false ;;
+        webserver.api.pwhash) cat "${PIHOLE_ROOT}/ftl-pwhash" 2>/dev/null || echo '""' ;;
     esac
 fi
 MOCK
@@ -309,7 +312,9 @@ _run_pihole() {
     assert_output --partial "Unbound resolves pi-hole.net on 127.0.0.1#5335"
     assert_output --partial "Seeding ${root}/etc/pihole/pihole.toml with upstreams 127.0.0.1#5335"
     assert_output --partial "Installing Pi-hole"
-    assert_output --partial "Set the web password: sudo pihole setpassword"
+    assert_output --partial "Pi-hole installed"
+    assert_output --partial "Pi-hole web password is set"
+    refute_output --partial "no web password"
 
     # Unbound: loopback only on 5335, validating, hardened, private ranges hidden.
     run cat "${root}/etc/unbound/unbound.conf.d/pi-hole.conf"
@@ -352,8 +357,13 @@ _run_pihole() {
     printf '[ "1.1.1.1" ]\n' > "${root}/ftl-upstreams"
     printf 'true\n' > "${root}/ftl-dnssec"
 
+    # The web password was cleared since the install.
+    rm "${root}/ftl-pwhash"
+
     _run_pihole PIHOLE_UPSTREAMS="127.0.0.1#5335 1.1.1.1"
     assert_success
+    assert_output --partial "Pi-hole has no web password"
+    assert_output --partial "sudo pihole setpassword"
     assert_output --partial "Unbound already installed"
     assert_output --partial "${root}/etc/unbound/unbound.conf.d/pi-hole.conf already in place"
     assert_output --partial "Pi-hole already installed, skipping (pihole -up updates it)"
@@ -510,7 +520,6 @@ git clone --quiet file://${TEST_TMPDIR}/origin ${TEST_TMPDIR}/home/.dotfiles"
     assert_output ""
     [ ! -e "${TEST_TMPDIR}/home/.dotfiles" ]
 }
-
 
 # ---------------------------------------------------------------------------
 # linux/tailscale.sh — idempotency guard

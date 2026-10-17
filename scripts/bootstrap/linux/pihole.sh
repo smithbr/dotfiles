@@ -12,7 +12,9 @@
 # (upstreams from PIHOLE_UPSTREAMS, default Unbound; DNSSEC off in Pi-hole,
 # since Unbound validates). An installed Pi-hole is left to `pihole -up`,
 # but its upstreams and DNSSEC setting are brought in line through
-# pihole-FTL --config. No web password is set; that is a next step.
+# pihole-FTL --config. Every run checks that a web password is set
+# (webserver.api.pwhash) and warns when it is not, since without one anyone
+# who reaches the web UI or API can change Pi-hole.
 #
 # Needs root, like the installer; re-runs itself through sudo. Safe to run
 # again: each part is skipped, or rewritten, only when it differs. PIHOLE_ROOT
@@ -206,7 +208,7 @@ ensure_pihole() {
     log_info "Installing Pi-hole"
     curl -fsSL https://install.pi-hole.net | bash /dev/stdin --unattended
     pihole_installed || { log_error "The Pi-hole installer finished but pihole-FTL is missing"; return 1; }
-    log_info "Pi-hole installed. Set the web password: sudo pihole setpassword"
+    log_info "Pi-hole installed"
 }
 
 # Pi-hole's live settings, as the installer or the web UI may have left
@@ -229,6 +231,21 @@ configure_pihole() {
     fi
 }
 
+# Without a password the web UI and API are open to anyone who reaches
+# them; the installer may set one, so this only checks and warns.
+check_web_password() {
+    local hash
+    pihole_installed || return 0
+
+    hash="$(pihole-FTL --config webserver.api.pwhash 2>/dev/null || true)"
+    if [[ -n "$(tr -d '"[:space:]' <<< "${hash}")" ]]; then
+        log_info "Pi-hole web password is set"
+    else
+        log_warn "Pi-hole has no web password, so anyone who reaches its web UI or API can change it; set one: sudo pihole setpassword"
+    fi
+}
+
 ensure_unbound
 ensure_pihole
 configure_pihole
+check_web_password

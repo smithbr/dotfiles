@@ -118,6 +118,39 @@ PROBE
     assert_output "original-ports"
 }
 
+# Runs ph-sec-audit's report_web_password with pihole-FTL answering $1.
+run_web_password_probe() {
+    local probe_script="${TEST_TMPDIR}/password-probe.sh"
+
+    {
+        printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
+            'pihole-FTL() { printf "%s\n" "${PROBE_HASH}"; }'
+        awk '
+            /^report_web_password\(\) \{/ { copy=1 }
+            copy { print }
+            copy && /^}$/ { exit }
+        ' "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-sec-audit"
+        printf '%s\n' 'report_web_password'
+    } > "${probe_script}"
+
+    run env PROBE_HASH="${1}" bash "${probe_script}"
+}
+
+@test "ph-sec-audit reports whether a web password is set" {
+    run_web_password_probe '$BALLOON-SHA256$v=1$fakehash'
+    assert_success
+    assert_output "A web password is set."
+
+    run_web_password_probe '""'
+    assert_success
+    assert_output --partial "No web password is set"
+    assert_output --partial "sudo pihole setpassword"
+
+    run_web_password_probe ''
+    assert_success
+    assert_output --partial "No web password is set"
+}
+
 run_padd_api_probe() {
     local source_script="${1}"
     local probe_script="${TEST_TMPDIR}/$(basename "${source_script}")"

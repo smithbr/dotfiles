@@ -20,6 +20,8 @@ Changes:
   Remove USER from the Docker group; existing sessions must end to revoke access.
   Redirect HTTP to existing HTTPS and briefly restart Pi-hole.
   Install system package upgrades only with --upgrade-packages.
+  Report whether a web password is set; without one, anyone who reaches the
+  web UI or API can change Pi-hole.
 
 DNS, firewall, and SSH configuration are not changed. This is partial hardening,
 not a complete security audit. Backups contain private configuration and must
@@ -220,6 +222,16 @@ for query in pi.hole example.com; do
         exit 1
     fi
 done
+report_web_password() {
+    local hash
+    hash="$(pihole-FTL --config webserver.api.pwhash)"
+    if [[ -n "$(tr -d '"[:space:]' <<< "${hash}")" ]]; then
+        printf 'A web password is set.\n'
+    else
+        printf 'No web password is set: anyone who reaches the web UI or API can change Pi-hole. Set one: sudo pihole setpassword\n' >&2
+    fi
+}
+report_web_password
 sshd -T > "${backup_dir}/sshd-effective-after.txt"
 nft list ruleset > "${backup_dir}/firewall-after.nft"
 # The shell is already root, so it can write this private report.
