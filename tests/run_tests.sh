@@ -2,6 +2,8 @@
 # Run the full test suite, or with --lint-only just ShellCheck (what the
 # pre-push hook runs; CI runs everything). Name test files to run only those:
 # ./tests/run_tests.sh tests/link.bats --filter add
+# After --lint-only, named files limit the lint to those of them it would
+# check anyway (what the pre-commit hook does with the staged files).
 #
 # Bats, its libraries, GNU parallel, a Python with tomllib, and on a Mac a bash
 # new enough for Bats come from a per-user cache that tests/deps.sh fills on the
@@ -23,11 +25,14 @@ require_tool() { # name hint
     exit 1
 }
 
-run_shellcheck() {
+run_shellcheck() { # [file...]
     local file
     local -a shellcheck_files=()
+    local wanted=''
+    [[ "$#" -eq 0 ]] || wanted=$'\n'"$(printf '%s\n' "$@")"$'\n'
 
     while IFS= read -r file; do
+        [[ -z "${wanted}" || "${wanted}" == *$'\n'"${file}"$'\n'* ]] || continue
         # Bin scripts may be written in another language (ai-doctor is Python).
         if [[ "${file}" == stow/*/.local/bin/* ]] && ! head -n 1 "${file}" | grep -Eq '^#!.*[/ ](ba)?sh$'; then
             continue
@@ -71,8 +76,11 @@ ensure_test_bash() {
 }
 
 require_tool shellcheck 'install it with brew install shellcheck (apt install shellcheck on Debian)'
+if [[ "${LINT_ONLY}" -eq 1 ]]; then
+    run_shellcheck "$@"
+    exit 0
+fi
 run_shellcheck
-[[ "${LINT_ONLY}" -eq 0 ]] || exit 0
 
 # The link suite drives the real GNU Stow against scratch directories.
 require_tool stow 'install it with brew install stow (apt install stow on Debian)'

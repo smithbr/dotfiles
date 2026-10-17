@@ -19,9 +19,10 @@ Bumping a pin: set the version and the tarball's sha256 in `deps.sh` (cross-chec
 
 This repo can use the versioned hooks in [`.githooks`](../.githooks):
 
-- `pre-commit` runs `~/.config/agents/scripts/check-drift` (retired terms, and `AGENT_LINKS` against the
-  agents repo); it skips with a note when the agents checkout is missing, and
-  says when `check-drift` crashed (killed by a signal) rather than found drift
+- `pre-commit` runs ShellCheck on the staged shell scripts (`run_tests.sh --lint-only FILE...`, so the
+  same files the full lint picks, from the working tree), then `~/.config/agents/scripts/check-drift`
+  (retired terms, and `AGENT_LINKS` against the agents repo); it skips check-drift with a note when the
+  agents checkout is missing, and says when `check-drift` crashed (killed by a signal) rather than found drift
 - `pre-push` runs ShellCheck (`run_tests.sh --lint-only`), then a container
   install via [`sandbox-install.sh`](sandbox-install.sh); CI runs the full suite
   on every push
@@ -142,7 +143,7 @@ This is process-level isolation, not a real container or VM.
 
 [`githooks.bats`](githooks.bats)
 
-- Runs `.githooks/pre-commit` against stub `check-drift` scripts: a pass, a failure reported as drift, a crash (killed by a signal) reported as a crash, and a missing agents checkout skipped; and runs `sandbox-install.sh` against a stub `docker` whose install fails, checking that only the tail is printed and the full log is kept
+- Runs `.githooks/pre-commit` in a scratch repo against stub `check-drift` scripts: a pass, a failure reported as drift, a crash (killed by a signal) reported as a crash, and a missing agents checkout skipped; a staged script ShellCheck flags fails before check-drift, only staged files are linted (not a tracked script left out, a Python bin script, or a text file), and a staged deletion lints nothing; and runs `sandbox-install.sh` against a stub `docker` whose install fails, checking that only the tail is printed and the full log is kept
 
 [`link.bats`](link.bats)
 
@@ -200,7 +201,7 @@ This is process-level isolation, not a real container or VM.
 - Requires `shellcheck` and `stow`, fills the cache through `deps.sh`, and on macOS runs Bats on the cache's bash through the `bash` shim
 - Runs Bats with `--jobs` across every core, on the cache's GNU `parallel`
 - Exports `BATS_LIB_PATH`
-- Runs all `*.bats` files in this directory, only the test files or directories named on the command line, or only ShellCheck with `--lint-only`; other arguments go to Bats (`./tests/run_tests.sh tests/link.bats --filter add`)
+- Runs all `*.bats` files in this directory, only the test files or directories named on the command line, or only ShellCheck with `--lint-only` (limited to the files named after it, of those it would lint anyway); other arguments go to Bats (`./tests/run_tests.sh tests/link.bats --filter add`)
 
 ## Writing tests
 

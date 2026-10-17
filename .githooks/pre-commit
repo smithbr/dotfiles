@@ -1,9 +1,26 @@
 #!/usr/bin/env bash
-# Run the agents repo's check-drift before every commit: it scans this repo for
-# retired terms and checks link.sh's AGENT_LINKS against ~/.config/agents.
+# Before every commit: ShellCheck on the staged shell scripts, then the agents
+# repo's check-drift, which scans this repo for retired terms and checks
+# link.sh's AGENT_LINKS against ~/.config/agents.
 # Bypass once: git commit --no-verify
 
 set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "${REPO_ROOT}"
+
+# Staged files that still exist; run_tests.sh keeps the ones it would lint
+# anyway (shell scripts, and bin scripts with a sh or bash shebang). It lints
+# the working tree's copy, which is the staged one unless part of a file is
+# left unstaged.
+staged=()
+while IFS= read -r -d '' file; do
+    staged+=("${file}")
+done < <(git diff --cached --name-only --diff-filter=d -z)
+if [[ "${#staged[@]}" -gt 0 ]]; then
+    printf 'pre-commit: running shellcheck on staged files\n'
+    ./tests/run_tests.sh --lint-only "${staged[@]}"
+fi
 
 CHECK_DRIFT="${HOME}/.config/agents/scripts/check-drift"
 
