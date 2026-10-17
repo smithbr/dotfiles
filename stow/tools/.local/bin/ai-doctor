@@ -708,8 +708,14 @@ def check_servers(report, apps, cwd, plugins):
         elif problem:
             todo, apply = remove_server(app, file, scope, name, cwd)
             report.fix(f"{app.capitalize()}'s {name} MCP server can't start: {problem}", todo, apply)
+        elif app == "claude" and name in needs_auth and plugin:
+            waiting.setdefault(plugin, []).append(name)
         elif app == "claude" and name in needs_auth:
-            waiting.setdefault(plugin or tilde(file), []).append(name)
+            todo, apply = remove_server(app, file, scope, name, cwd)
+            report.note(f"{label} ({scope}): waiting for a sign-in")
+            report.trim(f"Claude's {name} MCP server ({scope}) waits for a sign-in",
+                        f"sign in with /mcp, or: {todo}", apply,
+                        "its tool names stay in every session until then; claude mcp add brings it back")
         else:
             report.ok(f"{label} ({scope}): {'remote' if conf.get('url') or conf.get('serverUrl') else 'local'}")
         for field, key in literal_secrets(conf):
@@ -719,14 +725,15 @@ def check_servers(report, apps, cwd, plugins):
                            lambda _b, file=file: os.chmod(file, 0o600))
             report.fix(title, secret_todo(app, tilde(file), field, key))
     for where, names in waiting.items():
-        report.note(f"waiting for sign-in in {where}: {', '.join(n.rsplit(':', 1)[-1] for n in names)}")
+        short = ", ".join(n.rsplit(":", 1)[-1] for n in names)
+        report.note(f"waiting for sign-in in plugin {where}: {short}")
         info = report.plugins.get(where)
         if info is None:
-            report.trim(f"{plural(len(names), 'MCP server')} in {where} {waits(len(names))} for a sign-in",
-                        "sign in with /mcp, or remove the ones you don't use",
+            report.trim(f"Plugin {where}: {short} {waits(len(names))} for a sign-in",
+                        "sign in with /mcp, or turn the plugin off in Claude's settings",
                         effect="each one's tool names stay in every session until then")
             continue
-        report.trim(f"Plugin {where}: {len(names)} of {plural(len(info['servers']), 'MCP server')} "
+        report.trim(f"Plugin {where}: {short} ({len(names)} of {plural(len(info['servers']), 'MCP server')}) "
                     f"{waits(len(names))} for a sign-in; {describe_usage(info['usage'])}",
                     f"sign in with /mcp, or {plugin_todo(info['source'], info['key'])}",
                     uninstall_plugin(info["key"], info["root"]) if info["source"] == "installed" else None,

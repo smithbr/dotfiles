@@ -232,15 +232,19 @@ JSON
     printf '{"name": "engineering"}\n' > "${HOME}/.claude/plugins/synced/org/eng/.claude-plugin/plugin.json"
     printf '{"mcpServers": {"slack": {"type": "http", "url": "https://example.com/slack"}, "gmail": {"type": "http", "url": ""}}}\n' > "${HOME}/.claude/plugins/synced/org/eng/.mcp.json"
     printf '{"version": 2, "plugins": {"cloudflare@cloudflare": [{"installPath": "%s"}], "other@m": [{"installPath": "%s"}]}}\n' "${installed}" "${TEST_TMPDIR}/elsewhere" > "${HOME}/.claude/plugins/installed_plugins.json"
-    printf '{"plugin:cloudflare:cloudflare": {}, "plugin:engineering:slack": {}}\n' > "${HOME}/.claude/mcp-needs-auth-cache.json"
+    printf '{"plugin:cloudflare:cloudflare": {}, "plugin:engineering:slack": {}, "lastfm": {}}\n' > "${HOME}/.claude/mcp-needs-auth-cache.json"
+    printf '{"mcpServers": {"lastfm": {"type": "http", "url": "https://example.com/lastfm"}}}\n' > "${HOME}/.claude.json"
     run ai_doctor
     assert_success
-    assert_output --partial "· 2 skills from 2 bundles + 2 from 4 plugins · 3 MCP servers (2 wait for a sign-in) ·"
+    assert_output --partial "· 2 skills from 2 bundles + 2 from 4 plugins · 4 MCP servers (3 wait for a sign-in) ·"
+    assert_output --partial "trim  Claude's lastfm MCP server (user) waits for a sign-in"
+    assert_output --partial "sign in with /mcp, or: claude mcp remove lastfm -s user  [auto]"
+    assert_output --partial "its tool names stay in every session until then; claude mcp add brings it back"
     assert_output --partial "trim  Plugin cloudflare loads twice: installed here and synced from claude.ai"
     assert_output --partial "claude plugin uninstall cloudflare@cloudflare  [auto]"
     assert_output --partial "every session drops the duplicate's 1 skill"
-    assert_output --partial "trim  Plugin cloudflare: 1 of 1 MCP server waits for a sign-in; use not recorded"
-    assert_output --partial "trim  Plugin engineering: 1 of 2 MCP servers waits for a sign-in; use not recorded"
+    assert_output --partial "trim  Plugin cloudflare: cloudflare (1 of 1 MCP server) waits for a sign-in; use not recorded"
+    assert_output --partial "trim  Plugin engineering: slack (1 of 2 MCP servers) waits for a sign-in; use not recorded"
     assert_output --partial "sign in with /mcp, or turn it off in Claude's settings (claude.ai plugins)"
     assert_output --partial "off, every session drops 1 skill (~0 tokens), 1 MCP server; turn it back on when a task needs it"
     refute_output --partial "no recorded use"
@@ -251,6 +255,8 @@ JSON
     run python3 -c 'import json, sys; print(sorted(json.load(open(sys.argv[1]))["plugins"]))' "${HOME}/.claude/plugins/installed_plugins.json"
     assert_output "['other@m']"
     refute test -e "${HOME}/.claude/plugins/cache/cf"
+    run python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["mcpServers"])' "${HOME}/.claude.json"
+    assert_output "{}"
     assert test -d "${synced}"
 }
 
