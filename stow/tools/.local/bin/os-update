@@ -14,6 +14,9 @@ SOFTWAREUPDATE_BIN="${SOFTWAREUPDATE_BIN:-softwareupdate}"
 MAS_BIN="${MAS_BIN:-mas}"
 XCODEBUILD_BIN="${XCODEBUILD_BIN:-xcodebuild}"
 XCODE_APP_PATH="${XCODE_APP_PATH:-/Applications/Xcode.app}"
+ZSH_BIN="${ZSH_BIN:-zsh}"
+# Empty means Homebrew's antidote, found through `brew --prefix`.
+ANTIDOTE_ZSH="${ANTIDOTE_ZSH:-}"
 
 usage() {
     local help_text
@@ -30,6 +33,7 @@ Run operating system and package-manager updates for this machine.
 - `App Store`: run `mas upgrade` when updates are available
 - `Xcode`: accept the license if a newly updated install requires it
 - `Homebrew`: run `brew update`, `upgrade`, `cleanup`, and clear the brew cache
+- `zsh plugins`: run `antidote update` when antidote is installed (its own version comes from Homebrew)
 
 ## Examples
 
@@ -145,6 +149,40 @@ run_brew_updates() {
     clear_brew_cache "${brew_cache}"
 
     add_result "PASS" "Homebrew updates completed"
+}
+
+# antidote is a zsh function, so load it in a bare zsh with the ANTIDOTE_HOME
+# the .zshrc uses; the static bundle points at the plugin folders and needs no
+# rebuild.
+run_antidote_updates() {
+    local antidote_zsh="${ANTIDOTE_ZSH}"
+    local brew_prefix=""
+
+    printf '\n'
+    _header "zsh plugins"
+
+    if [[ -z "${antidote_zsh}" ]] && has_command "${BREW_BIN}"; then
+        brew_prefix="$("${BREW_BIN}" --prefix 2>/dev/null)" || brew_prefix=""
+        [[ -n "${brew_prefix}" ]] && antidote_zsh="${brew_prefix}/opt/antidote/share/antidote/antidote.zsh"
+    fi
+
+    if [[ -z "${antidote_zsh}" || ! -f "${antidote_zsh}" ]]; then
+        _box "antidote not installed; skipping zsh plugin updates"
+        add_result "PASS" "antidote not installed; skipping zsh plugin updates"
+        return 0
+    fi
+
+    if ! has_command "${ZSH_BIN}"; then
+        _box "Warning: zsh not found; skipping zsh plugin updates"
+        add_result "WARN" "zsh not found; skipping zsh plugin updates"
+        return 0
+    fi
+
+    _item "Running antidote update"
+    # shellcheck disable=SC2016 # expanded by zsh, not here
+    ANTIDOTE_HOME="${ANTIDOTE_HOME:-${XDG_CACHE_HOME:-${HOME}/.cache}/antidote}" \
+        "${ZSH_BIN}" -fc 'source "$1" && antidote update' zsh "${antidote_zsh}"
+    add_result "PASS" "zsh plugin updates completed"
 }
 
 # `brew --cache` honors HOMEBREW_CACHE, so refuse anything that is not plainly
@@ -389,6 +427,7 @@ main() {
             ;;
     esac
 
+    run_antidote_updates
     print_summary
 }
 

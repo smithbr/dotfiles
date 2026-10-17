@@ -556,6 +556,50 @@ MOCK
     [[ ! -d "${TEST_TMPDIR}/Library/Caches/Homebrew" ]]
 }
 
+@test "os-update updates zsh plugins through Homebrew's antidote" {
+    local prefix="${TEST_TMPDIR}/brew-prefix"
+    mkdir -p "${prefix}/opt/antidote/share/antidote" "${TEST_TMPDIR}/.cache/Homebrew"
+    : > "${prefix}/opt/antidote/share/antidote/antidote.zsh"
+
+    cat > "${BIN_SANDBOX}/brew" <<MOCK
+#!/usr/bin/env bash
+case "\${1:-}" in
+    --cache) printf '%s\n' "${TEST_TMPDIR}/.cache/Homebrew" ;;
+    --prefix) printf '%s\n' "${prefix}" ;;
+    *) printf 'brew %s\n' "\$*" ;;
+esac
+MOCK
+
+    cat > "${BIN_SANDBOX}/zsh" <<'MOCK'
+#!/usr/bin/env bash
+printf 'zsh ANTIDOTE_HOME=%s args=%s\n' "${ANTIDOTE_HOME}" "$*"
+MOCK
+
+    chmod +x "${BIN_SANDBOX}/brew" "${BIN_SANDBOX}/zsh"
+
+    run env -u ANTIDOTE_HOME PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        HOME="${TEST_TMPDIR}" XDG_CACHE_HOME="${TEST_TMPDIR}/.cache" APT_GET_BIN=no-apt-get \
+        "${PROJECT_ROOT}/stow/tools/.local/bin/os-update"
+    assert_success
+    assert_line "zsh ANTIDOTE_HOME=${TEST_TMPDIR}/.cache/antidote args=-fc source \"\$1\" && antidote update zsh ${prefix}/opt/antidote/share/antidote/antidote.zsh"
+    assert_output --partial "PASS  zsh plugin updates completed"
+}
+
+@test "os-update skips zsh plugins when antidote is not installed" {
+    cat > "${BIN_SANDBOX}/zsh" <<'MOCK'
+#!/usr/bin/env bash
+printf 'zsh called\n'
+MOCK
+    chmod +x "${BIN_SANDBOX}/zsh"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        APT_GET_BIN=no-apt-get BREW_BIN=no-brew ANTIDOTE_ZSH="${TEST_TMPDIR}/missing/antidote.zsh" \
+        "${PROJECT_ROOT}/stow/tools/.local/bin/os-update"
+    assert_success
+    refute_output --partial "zsh called"
+    assert_output --partial "antidote not installed; skipping zsh plugin updates"
+}
+
 @test "os-update sources the repo common.sh through its stow symlink, not a planted one" {
     local home="${TEST_TMPDIR}/home"
     mkdir -p "${home}/.local/bin" "${TEST_TMPDIR}/scripts"
