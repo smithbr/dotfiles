@@ -3,39 +3,22 @@
 # Homebrew, when this shell did not go through .zprofile.
 [[ -n "${HOMEBREW_PREFIX:-}" ]] || source "${ZDOTDIR}/.zprofile"
 
+# Tool paths every zsh needs are in .zshenv; these only matter at the prompt.
 export ANTIDOTE_HOME="${XDG_CACHE_HOME}/antidote"
-export AWS_CLI_HISTORY_FILE="${XDG_STATE_HOME}/aws/cli/history.db"
-export AWS_CONFIG_FILE="${XDG_CONFIG_HOME}/aws/config"
-export AWS_DATA_PATH="${XDG_DATA_HOME}/aws/models"
-export AWS_SDK_LOAD_CONFIG=1
-export AWS_SHARED_CREDENTIALS_FILE="${XDG_CONFIG_HOME}/aws/credentials"
-export GNUPGHOME="${XDG_DATA_HOME}/gnupg"
-export GOBIN="${XDG_BIN_HOME}"
-export HISTFILE="${XDG_STATE_HOME}/zsh/history"
-export NODE_REPL_HISTORY="${XDG_STATE_HOME}/node/repl_history"
-export NPM_CONFIG_CACHE="${XDG_CACHE_HOME}/npm"
-export NPM_CONFIG_INIT_MODULE="${XDG_CONFIG_HOME}/npm/config/npm-init.js"
-export NPM_CONFIG_USERCONFIG="${XDG_CONFIG_HOME}/npm/npmrc"
-export NVM_DIR="${XDG_CONFIG_HOME}/nvm"
-export RUSTUP_HOME="${XDG_DATA_HOME}/rustup"
 export STARSHIP_CACHE="${XDG_CACHE_HOME}/starship/cache"
 export STARSHIP_CONFIG="${XDG_CONFIG_HOME}/starship/starship.toml"
 
-# History
-export HISTSIZE=20000
-export SAVEHIST=20000
+# History: zsh's own parameters, not exported, so child shells keep their defaults.
+HISTFILE="${XDG_STATE_HOME}/zsh/history"
+HISTSIZE=20000
+SAVEHIST=20000
+[[ -d "${HISTFILE:h}" ]] || mkdir -p "${HISTFILE:h}"
 setopt APPEND_HISTORY HIST_EXPIRE_DUPS_FIRST HIST_FIND_NO_DUPS HIST_IGNORE_ALL_DUPS
 setopt HIST_IGNORE_DUPS HIST_IGNORE_SPACE HIST_REDUCE_BLANKS HIST_SAVE_NO_DUPS
 setopt HIST_VERIFY SHARE_HISTORY
 
 [[ -f "${XDG_CONFIG_HOME}/shell/aliases" ]] && source "${XDG_CONFIG_HOME}/shell/aliases"
 [[ -f "${XDG_CONFIG_HOME}/shell/functions" ]] && source "${XDG_CONFIG_HOME}/shell/functions"
-
-# nvm: Homebrew installs nvm.sh under its prefix; NVM_DIR only holds versions.
-for nvm_sh in "${NVM_DIR}/nvm.sh" ${HOMEBREW_PREFIX:+"${HOMEBREW_PREFIX}/opt/nvm/nvm.sh"}; do
-    [[ -f "${nvm_sh}" ]] && { source "${nvm_sh}" --no-use; break; }
-done
-unset nvm_sh
 
 # 1Password
 op_sock="${HOME}/.1password/agent.sock"

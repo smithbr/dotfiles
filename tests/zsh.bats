@@ -50,6 +50,89 @@ load test_helper
     teardown_tmpdir
 }
 
+@test "non-interactive zsh keeps Docker config under XDG_CONFIG_HOME" {
+    command -v zsh >/dev/null || skip "zsh not installed"
+    setup_tmpdir
+    local home="${TEST_TMPDIR}/home" zdotdir="${TEST_TMPDIR}/home/.config/zsh"
+    mkdir -p "${zdotdir}"
+    cp "${PROJECT_ROOT}/stow/common/.config/zsh/.zshenv" "${zdotdir}/"
+
+    # Scripts and colima run non-interactive; without this they read ~/.docker.
+    run env -i HOME="${home}" ZDOTDIR="${zdotdir}" PATH="/usr/bin:/bin" \
+        zsh -c 'printf "%s\n" "${DOCKER_CONFIG}"'
+    assert_success
+    assert_output "${home}/.config/docker"
+    teardown_tmpdir
+}
+
+@test "non-interactive zsh puts pnpm's global commands on PATH under XDG_DATA_HOME" {
+    command -v zsh >/dev/null || skip "zsh not installed"
+    setup_tmpdir
+    local home="${TEST_TMPDIR}/home" zdotdir="${TEST_TMPDIR}/home/.config/zsh"
+    mkdir -p "${zdotdir}"
+    cp "${PROJECT_ROOT}/stow/common/.config/zsh/.zshenv" "${zdotdir}/"
+
+    # pnpm refuses global installs unless its bin folder is on PATH.
+    run env -i HOME="${home}" ZDOTDIR="${zdotdir}" PATH="/usr/bin:/bin" \
+        zsh -c 'printf "%s\n" "${PNPM_HOME}"; print -rl -- $path'
+    assert_success
+    assert_line --index 0 "${home}/.local/share/pnpm"
+    assert_line "${home}/.local/share/pnpm/bin"
+    teardown_tmpdir
+}
+
+@test "non-interactive zsh sets the tool paths df-doctor and scripts rely on" {
+    command -v zsh >/dev/null || skip "zsh not installed"
+    setup_tmpdir
+    local home="${TEST_TMPDIR}/home" zdotdir="${TEST_TMPDIR}/home/.config/zsh"
+    mkdir -p "${zdotdir}"
+    cp "${PROJECT_ROOT}/stow/common/.config/zsh/.zshenv" "${zdotdir}/"
+
+    # git's gpg signing and df-doctor run zsh without .zshrc.
+    run env -i HOME="${home}" ZDOTDIR="${zdotdir}" PATH="/usr/bin:/bin" \
+        zsh -c 'for v in GNUPGHOME AWS_CONFIG_FILE GOBIN GOPATH; do printenv "${v}"; done'
+    assert_success
+    assert_line --index 0 "${home}/.local/share/gnupg"
+    assert_line --index 1 "${home}/.config/aws/config"
+    assert_line --index 2 "${home}/.local/bin"
+    assert_line --index 3 "${home}/.local/share/go"
+    teardown_tmpdir
+}
+
+@test "interactive zsh keeps unexported history under XDG_STATE_HOME and creates the folder" {
+    command -v zsh >/dev/null || skip "zsh not installed"
+    setup_tmpdir
+    local home="${TEST_TMPDIR}/home" zdotdir="${TEST_TMPDIR}/home/.config/zsh"
+    mkdir -p "${zdotdir}"
+    cp "${PROJECT_ROOT}/stow/common/.config/zsh/.zshenv" "${PROJECT_ROOT}/stow/common/.config/zsh/.zshrc" "${zdotdir}/"
+    : > "${zdotdir}/.zprofile"
+
+    run env -i HOME="${home}" ZDOTDIR="${zdotdir}" PATH="/usr/bin:/bin" TERM=dumb \
+        zsh -ic 'print -r -- "${HISTFILE}"; printenv HISTFILE || print -r -- unexported'
+    assert_success
+    assert_line --index 0 "${home}/.local/state/zsh/history"
+    assert_line --index 1 "unexported"
+    [[ -d "${home}/.local/state/zsh" ]]
+    teardown_tmpdir
+}
+
+@test "non-interactive zsh sends colima's VM to data, Go's downloads to cache, Copilot to config, and lets parallel split" {
+    command -v zsh >/dev/null || skip "zsh not installed"
+    setup_tmpdir
+    local home="${TEST_TMPDIR}/home" zdotdir="${TEST_TMPDIR}/home/.config/zsh"
+    mkdir -p "${zdotdir}"
+    cp "${PROJECT_ROOT}/stow/common/.config/zsh/.zshenv" "${zdotdir}/"
+
+    run env -i HOME="${home}" ZDOTDIR="${zdotdir}" PATH="/usr/bin:/bin" \
+        zsh -c 'printf "%s\n" "${LIMA_HOME}" "${GOMODCACHE}" "${COPILOT_HOME}" "${PARALLEL_HOME-unset}"'
+    assert_success
+    assert_output "${home}/.local/share/lima"$'\n'"${home}/.cache/go/mod"$'\n'"${home}/.config/copilot"$'\n'"unset"
+    # parallel uses these only when they exist, else it falls back to ~/.parallel.
+    assert test -d "${home}/.config/parallel"
+    assert test -d "${home}/.cache/parallel"
+    teardown_tmpdir
+}
+
 @test "zprofile bootstraps brew for macOS and Linux" {
     run bash -c '
         set -euo pipefail
@@ -110,40 +193,6 @@ load test_helper
     '
 
     assert_success
-}
-
-# Runs only the zshrc nvm block, so the rest of the interactive setup stays out.
-run_nvm_block() {
-    local block="${TEST_TMPDIR}/nvm_block.zsh"
-    awk '/^# nvm/ { on = 1 } on { print } on && /^unset nvm_sh$/ { exit }' \
-        "${PROJECT_ROOT}/stow/common/.config/zsh/.zshrc" > "${block}"
-    [[ -s "${block}" ]] || { echo "nvm block not found"; return 1; }
-    run env -i PATH="/usr/bin:/bin" NVM_DIR="${TEST_TMPDIR}/nvm" "$@" \
-        zsh -f -c "source '${block}'; print -r -- \"loaded=\${NVM_LOADED:-no}\""
-}
-
-@test "zshrc nvm block is quiet when nvm is not installed" {
-    command -v zsh >/dev/null 2>&1 || skip "zsh not installed"
-    setup_tmpdir
-
-    run_nvm_block HOMEBREW_PREFIX="${TEST_TMPDIR}/brew"
-    assert_success
-    assert_output "loaded=no"
-
-    teardown_tmpdir
-}
-
-@test "zshrc nvm block loads nvm.sh from the Homebrew prefix" {
-    command -v zsh >/dev/null 2>&1 || skip "zsh not installed"
-    setup_tmpdir
-    mkdir -p "${TEST_TMPDIR}/brew/opt/nvm"
-    printf 'NVM_LOADED="$1"\n' > "${TEST_TMPDIR}/brew/opt/nvm/nvm.sh"
-
-    run_nvm_block HOMEBREW_PREFIX="${TEST_TMPDIR}/brew"
-    assert_success
-    assert_output "loaded=--no-use"
-
-    teardown_tmpdir
 }
 
 @test "bash keeps its history under XDG_STATE_HOME and creates the folder" {

@@ -145,7 +145,7 @@ This is process-level isolation, not a real container or VM.
 
 [`zsh.bats`](zsh.bats)
 
-- Checks the zsh startup files for the XDG layout and the Homebrew bootstrap, runs the nvm block with and without nvm installed, and runs the `na` alias helper and `lg` (following lazygit to the directory it left in)
+- Checks the zsh startup files for the XDG layout and the Homebrew bootstrap, and runs the `na` alias helper and `lg` (following lazygit to the directory it left in)
 - Runs the bash startup files with a scratch home and checks the history path
 
 [`repo_config.bats`](repo_config.bats)
