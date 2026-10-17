@@ -465,14 +465,18 @@ test_exit_node() {
         return 0
     fi
 
-    exit_node_name="$(printf '%s\n' "${TS_STATUS_TEXT}" | grep -i "exit" | awk '{print $2}' || true)"
+    # tailscale status --json is pretty-printed; flatten it so the flat
+    # ExitNodeStatus object can be matched on one line.
+    exit_node_ip="$(printf '%s' "${TS_STATUS_JSON}" | tr -d ' \t\n' \
+        | grep -o '"ExitNodeStatus":{[^}]*}' \
+        | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+' | head -n 1 || true)"
+
+    exit_node_name=""
+    if [[ -n "${exit_node_ip}" ]]; then
+        exit_node_name="$(printf '%s\n' "${TS_STATUS_TEXT}" | awk -v ip="${exit_node_ip}" '$1 == ip {print $2; exit}' || true)"
+    fi
     section+="OK  Using exit node ${exit_node_name:-${exit_node_id}}"$'\n'
     add_result "PASS" "Using exit node ${exit_node_name:-${exit_node_id}}"
-
-    exit_node_ip="$(printf '%s' "${TS_STATUS_JSON}" \
-        | grep -A5 "\"${exit_node_id}\"" \
-        | grep -o '"TailscaleIPs"\s*:\s*\["[^"]*"' \
-        | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+' || true)"
 
     if [[ -z "${exit_node_ip}" ]]; then
         section+="Warning: Could not resolve the active exit node IP from tailscale status"

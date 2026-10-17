@@ -2355,6 +2355,48 @@ MOCK
     assert_output --partial "All checks passed."
 }
 
+@test "ts-test exit-node resolves the exit node from pretty-printed status" {
+    cat > "${BIN_SANDBOX}/tailscale" <<'MOCK'
+#!/usr/bin/env bash
+case "${1:-}" in
+    status)
+        if [[ "${2:-}" == "--json" ]]; then
+            cat <<'JSON'
+{
+  "BackendState": "Running",
+  "ExitNodeStatus": {
+    "ID": "nExit123",
+    "Online": true,
+    "TailscaleIPs": [
+      "100.64.0.9/32",
+      "fd7a:115c:a1e0::9/128"
+    ]
+  }
+}
+JSON
+        else
+            printf '100.64.0.9 exitbox linux active; exit node; direct\n'
+            printf '# To see the full list of exit nodes, run `tailscale exit-node list`\n'
+        fi
+        ;;
+    debug) printf '{"ExitNodeID": "nExit123"}\n' ;;
+    ping) printf '%s\n' "$*" >> "${TEST_TMPDIR}/pings" ;;
+    *) exit 0 ;;
+esac
+MOCK
+    chmod +x "${BIN_SANDBOX}/tailscale"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" TEST_TMPDIR="${TEST_TMPDIR}" \
+        bash "${PROJECT_ROOT}/stow/personal/.local/bin/ts-test" exit-node
+    assert_success
+    assert_output --partial "Using exit node exitbox"
+    assert_output --partial "Exit node is reachable at 100.64.0.9"
+    refute_output --partial "Could not resolve"
+    refute_output --regexp "^ *To *$"
+    run cat "${TEST_TMPDIR}/pings"
+    assert_output "ping --timeout=3s 100.64.0.9"
+}
+
 @test "sshkey displays help" {
     run env HOME="${TEST_TMPDIR}/home" PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
         "${PROJECT_ROOT}/stow/tools/.local/bin/sshkey" --help
