@@ -1,11 +1,9 @@
 # Install all dependencies with: brew bundle
 # Usage: brew bundle [--file=Brewfile.home]
 
-# Only the home Mac gets the vault and its backups: Obsidian and restic stay
-# out of every other persona.
+cask "android-platform-tools"
+cask "obsidian"
 brew "bun"
 brew "restic"
-brew "vhs"
 brew "superradcompany/tap/microsandbox"
-
-cask "obsidian"
+brew "vhs"

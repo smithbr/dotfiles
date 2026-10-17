@@ -13,7 +13,6 @@ cask "claude"
 cask "brave-browser"
 cask "comet"
 cask "firefox"
-cask "google-chrome"
 cask "helium-browser"
 
 # Development Tools
@@ -35,5 +34,6 @@ cask "utm"
 # Security and Networking
 cask "1password"
 cask "cryptomator"
+cask "pibar"
 cask "protonvpn"
 cask "tailscale-app"

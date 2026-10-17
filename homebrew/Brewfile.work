@@ -1,8 +1,5 @@
 # Install all dependencies with: brew bundle
 # Usage: brew bundle [--file=Brewfile.work]
 
-brew "allure"
 brew "awscli"
 brew "k6"
-cask "cursor-cli"
-cask "cursor"

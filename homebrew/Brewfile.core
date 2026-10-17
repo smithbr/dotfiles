@@ -45,6 +45,7 @@ brew "zoxide"
 # macOS only: Homebrew on Linux has no casks.
 if OS.mac?
   cask "1password-cli"
+  cask "google-chrome"
   cask "iterm2"
 
   # Fonts

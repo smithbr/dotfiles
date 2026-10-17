@@ -1,4 +1,5 @@
 build-essential
+chromium
 curl
 dnsutils
 git
