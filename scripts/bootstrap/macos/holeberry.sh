@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
-# Holeberry, the Pi-hole menu bar app, an optional install on macOS that is
-# off by default: install.sh offers it unticked, so a closed stdin or a work
-# Mac never gets it unasked. It comes from the latest GitHub release DMG:
-# there is no Homebrew cask. The app is
-# checked for Holeberry's Developer ID team and Apple's notarization before
-# it is copied into /Applications, and it updates itself through Sparkle
-# from then on, so an installed copy is left alone. HOLEBERRY_APPS_DIR
-# overrides the destination.
+# Installs Holeberry, a Pi-hole menu bar app with no Homebrew cask, from its
+# latest release DMG once codesign and spctl accept it. An installed copy
+# updates itself and is left alone. HOLEBERRY_APPS_DIR overrides the
+# destination.
 # https://github.com/pedrovieira/Holeberry
 # detect: [[ -d "${HOLEBERRY_APPS_DIR:-/Applications}/Holeberry.app" ]]
 # default: off
@@ -37,8 +33,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The release's DMG, read from the API without jq, which may not be
-# installed yet.
+# Read without jq, which may not be installed yet.
 url="$(curl -fsSL "${REPO_API}" \
     | grep -o '"browser_download_url": *"[^"]*\.dmg"' \
     | head -n 1 | sed 's/.*"\(https[^"]*\)"$/\1/')" || true
@@ -55,8 +50,6 @@ fi
 attached=1
 [[ -d "${MOUNT}/Holeberry.app" ]] || die "${url##*/} has no Holeberry.app"
 
-# Signed by Holeberry's own team, intact, and notarized: anything else is
-# not installed.
 team="$(codesign -dv "${MOUNT}/Holeberry.app" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
 if [[ "${team}" != "${TEAM_ID}" ]]; then
     die "Holeberry.app is signed by team '${team:-none}', not ${TEAM_ID}; not installing it"

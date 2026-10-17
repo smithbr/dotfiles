@@ -843,13 +843,11 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
-# macos/holeberry.sh — the Holeberry role, from its release DMG
+# macos/holeberry.sh
 # ---------------------------------------------------------------------------
 
-# Mocked curl, hdiutil, codesign, spctl, and ditto for holeberry.sh, each
-# logging to ${TEST_TMPDIR}/holeberry.log. HB_TEAM sets the signing team,
-# HB_SPCTL_RC Gatekeeper's answer, and HB_NO_DMG drops the DMG from the
-# release.
+# Mocks log to ${TEST_TMPDIR}/holeberry.log. HB_TEAM sets the signing team,
+# HB_SPCTL_RC Gatekeeper's answer, and HB_NO_DMG drops the DMG from the release.
 _make_holeberry_mocks() {
     local bin="${TEST_TMPDIR}/bin"
     mkdir -p "${bin}" "${TEST_TMPDIR}/home" "${TEST_TMPDIR}/tmp"
@@ -898,7 +896,6 @@ MOCK
     chmod +x "${bin}"/*
 }
 
-# Runs holeberry.sh with the mocks; arguments are environment settings.
 _run_holeberry() {
     run env "$@" HOME="${TEST_TMPDIR}/home" TMPDIR="${TEST_TMPDIR}/tmp" \
         HOLEBERRY_APPS_DIR="${TEST_TMPDIR}/Applications" \

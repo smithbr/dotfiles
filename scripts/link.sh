@@ -17,7 +17,7 @@
 #                           a setup script with a "# detect: COMMAND" line is an
 #                           optional install (Docker, Tailscale, Claude Code),
 #                           offered to every persona and on by default, unless
-#                           it also has "# default: off" (Holeberry): then it is
+#                           it also has "# default: off": then it is
 #                           offered unticked. The chosen installs come from
 #                           DOTFILES_INSTALLS, else the saved choice, else what
 #                           is on by default.
