@@ -325,6 +325,24 @@ tracked() {
     assert_line --index 0 "${TEST_TMPDIR}/home/.local/state/vim/viminfo"
 }
 
+@test "a new zsh points xdg-ninja at the ignore file the repo ships" {
+    command -v zsh >/dev/null 2>&1 || skip "zsh not installed"
+    local home="${TEST_TMPDIR}/home" ignore
+    mkdir -p "${home}/.config/zsh"
+    cp "${PROJECT_ROOT}/stow/common/.config/zsh/.zshenv" "${home}/.config/zsh/"
+
+    run env -i HOME="${home}" ZDOTDIR="${home}/.config/zsh" PATH=/usr/bin:/bin zsh -c 'printf "%s\n" "${XN_IGNOREFILE}"'
+    assert_success
+    assert_output "${home}/.config/xdg-ninja/ignore"
+
+    # The common layer links that path; xdg-ninja matches whole basenames.
+    ignore="${PROJECT_ROOT}/stow/common/${output#"${home}"/}"
+    assert test -f "${ignore}"
+    run grep -vx '#.*' "${ignore}"
+    assert_line ".zshenv"
+    assert_line ".trash"
+}
+
 @test "zsh plugin list names GitHub repos, with optional antidote annotations" {
     run grep -Ev '^[[:space:]]*(#|$)|^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+( [a-z]+:[^ ]+)*$' \
         "${PROJECT_ROOT}/stow/common/.config/zsh/.zsh_plugins.txt"

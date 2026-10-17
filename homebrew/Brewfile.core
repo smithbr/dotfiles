@@ -25,7 +25,7 @@ brew "shellcheck"
 brew "skills"
 brew "stow"
 brew "uv"
-brew "xdg-ninja"
+brew "xdg-ninja", args: ["HEAD"]
 
 # Shell Enhancements
 brew "antidote"

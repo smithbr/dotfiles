@@ -5,7 +5,7 @@ alias hg="history 1 | grep "
 alias lsa="ls -FGlAhp"
 alias xb="cd ~/.local/bin"
 alias xc="cd ~/.config"
-alias xdn="xdg-ninja --skip-ok --skip-unsupported"
+alias xn="xdg-ninja --skip-ok --skip-unsupported"
 
 # shell
 alias c="claude"

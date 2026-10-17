@@ -1,0 +1,8 @@
+# Home entries xdg-ninja should not report, one basename per line ($XN_IGNOREFILE).
+# The repo's bootstrap: it sets ZDOTDIR so zsh finds ~/.config/zsh.
+.zshenv
+# The macOS Trash, which Finder owns (xdg-ninja checks it as .trash).
+.trash
+.android
+.claude
+.codex
