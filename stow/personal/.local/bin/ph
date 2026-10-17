@@ -46,7 +46,8 @@ Options:
   -a, --all                 blocked: every blocked query, not one line per domain
   -h, --help                Show this help
 
-CLIENT is an IP address or a client name as Pi-hole shows it.
+CLIENT is an IP address or a client name as Pi-hole shows it. DOMAIN may be
+a pasted URL: only its host is used (not with -r, where it is a regex).
 
 The password is PIHOLE_PASSWORD, else the one `ph login` saved. With
 two-factor auth on, use an app password (Settings > Web interface / API >
@@ -216,6 +217,25 @@ urlencode() {
     jq -rn --arg s "$1" '$s | @uri'
 }
 
+# host_of ARG: the host of a URL (scheme, user info, port, path, query, and
+# fragment dropped); a bare domain comes back as given.
+host_of() {
+    local h="$1"
+    h="${h#*://}"
+    h="${h%%[/?#]*}"
+    h="${h##*@}"
+    h="${h%%:*}"
+    printf '%s' "${h}"
+}
+
+# hosts_of ARG...: host_of over every argument, unless they are regexes.
+hosts_of() {
+    local a
+    for a in "$@"; do
+        if [[ "${KIND}" == regex ]]; then printf '%s\n' "${a}"; else host_of "${a}"; printf '\n'; fi
+    done
+}
+
 # Lays out tab-separated rows as columns sized to fit, the first row a
 # heading (bold on a terminal). Lines without a tab pass through: those before
 # the table print first, those after it last. RIGHT lists the 1-based columns
@@ -282,7 +302,7 @@ cmd_domains_add() {
     local list="$1" body
     shift
     [[ $# -gt 0 ]] || die "${COMMAND} needs at least one domain"
-    body="$(jq -nc --arg c "${COMMENT}" '{domain: $ARGS.positional, comment: (if $c == "" then null else $c end), enabled: true}' --args "$@")"
+    body="$(hosts_of "$@" | jq -Rnc --arg c "${COMMENT}" '{domain: [inputs], comment: (if $c == "" then null else $c end), enabled: true}')"
     api POST "/domains/${list}/${KIND}" "${body}" | if [[ "${JSON}" == true ]]; then cat; else
         jq -r --arg list "${list}" --arg kind "${KIND}" "${JQ_CLEAN}"'
             (.processed.success[]? | "Added to \($list) (\($kind)): \(.item | clean)"),
@@ -295,6 +315,7 @@ cmd_domains_remove() {
     shift
     [[ $# -gt 0 ]] || die "${COMMAND} needs at least one domain"
     for domain in "$@"; do
+        [[ "${KIND}" == regex ]] || domain="$(host_of "${domain}")"
         api DELETE "/domains/${list}/${KIND}/$(urlencode "${domain}")" >/dev/null
         [[ "${JSON}" == true ]] || printf 'Removed from %s (%s): %s\n' "${list}" "${KIND}" "${domain}"
     done
@@ -319,8 +340,11 @@ cmd_list() {
 
 cmd_check() {
     [[ $# -eq 1 ]] || die "check takes one domain"
-    api GET "/search/$(urlencode "$1")?partial=false&N=20" | if [[ "${JSON}" == true ]]; then cat; else
-        jq -r --arg d "$1" "${JQ_CLEAN}"'
+    local domain
+    domain="$(host_of "$1")"
+    [[ -n "${domain}" ]] || die "no host in $1"
+    api GET "/search/$(urlencode "${domain}")?partial=false&N=20" | if [[ "${JSON}" == true ]]; then cat; else
+        jq -r --arg d "${domain}" "${JQ_CLEAN}"'
             .search as $s
             | ([$s.domains[]? | "  \(.type) list (\(.kind)\(if .enabled then "" else ", disabled" end)): \(.domain | clean)\(if .comment then "  # \(.comment | clean)" else "" end)"]
                + [$s.gravity[]? | "  \(if .type == "block" then "blocklist" else "allowlist" end): \(.address | clean)"]) as $lines

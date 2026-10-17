@@ -251,6 +251,32 @@ JSON
     assert_output "ok.test: on no list, so not blocked"
 }
 
+@test "ph: a pasted URL is reduced to its host; a regex is left alone" {
+    printf '{"search":{"domains":[],"gravity":[]}}' > "${FIX}/GET_search_mail.example.test"
+    run bash "${PH}" check 'https://user:pw@mail.example.test:8443/mk/un/v2/sh/AbC?x=1#frag'
+    assert_success
+    assert_output "mail.example.test: on no list, so not blocked"
+    run grep -c 'GET /search/mail.example.test?partial=false&N=20 sid=SID123' "${CALLS}"
+    assert_output "1"
+    run bash "${PH}" check 'https:///path'
+    assert_failure
+    assert_output "ph: no host in https:///path"
+    printf '{"processed":{"success":[{"item":"a.test"},{"item":"b.test"}],"errors":[]}}' > "${FIX}/POST_domains_allow_exact"
+    run bash "${PH}" allow 'http://a.test/x?y=z' b.test
+    assert_success
+    run grep -c 'POST /domains/allow/exact sid=SID123 body={"domain":\["a.test","b.test"\],"comment":null,"enabled":true}' "${CALLS}"
+    assert_output "1"
+    run bash "${PH}" undeny 'https://c.test/'
+    assert_success
+    assert_output --partial "Removed from deny (exact): c.test"
+    run grep -c 'DELETE /domains/deny/exact/c.test sid=SID123' "${CALLS}"
+    assert_output "1"
+    run bash "${PH}" deny -r 'https?://ads\.'
+    assert_success
+    run grep -c 'POST /domains/deny/regex sid=SID123 body={"domain":\["https?://ads\\\\."\]' "${CALLS}"
+    assert_output "1"
+}
+
 @test "ph: --json prints the API response" {
     printf '{"blocking":"enabled","timer":null}' > "${FIX}/POST_dns_blocking"
     run bash "${PH}" --json enable
