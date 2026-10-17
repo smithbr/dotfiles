@@ -15,6 +15,8 @@ MAS_BIN="${MAS_BIN:-mas}"
 XCODEBUILD_BIN="${XCODEBUILD_BIN:-xcodebuild}"
 XCODE_APP_PATH="${XCODE_APP_PATH:-/Applications/Xcode.app}"
 ZSH_BIN="${ZSH_BIN:-zsh}"
+UV_BIN="${UV_BIN:-uv}"
+NPM_BIN="${NPM_BIN:-npm}"
 # Empty means Homebrew's antidote, found through `brew --prefix`.
 ANTIDOTE_ZSH="${ANTIDOTE_ZSH:-}"
 
@@ -32,7 +34,8 @@ Run operating system and package-manager updates for this machine.
 - `macOS`: run `softwareupdate --install --all` when available
 - `App Store`: run `mas upgrade` when updates are available
 - `Xcode`: accept the license if a newly updated install requires it
-- `Homebrew`: run `brew update`, `upgrade`, `cleanup`, and clear the brew cache
+- `Homebrew`: run `brew update`, `upgrade --fetch-HEAD` (so formulae installed from HEAD, such as xdg-ninja, update too), `autoremove` (dependencies nothing needs any more), install any missing dependency `brew missing` reports, `cleanup`, and clear the brew cache
+- `Tool caches`: `uv cache prune` (drops unused uv cache entries) and `npm cache verify` (garbage-collects the cache `npx` fills) when installed
 - `zsh plugins`: run `antidote update` when antidote is installed (its own version comes from Homebrew)
 
 ## Examples
@@ -138,17 +141,67 @@ run_brew_updates() {
     fi
 
     _item "Running brew update"
-    _item "Running brew upgrade"
+    _item "Running brew upgrade --fetch-HEAD"
+    _item "Running brew autoremove"
     _item "Running brew cleanup --prune=all"
 
     "${BREW_BIN}" update
-    "${BREW_BIN}" upgrade
+    # A formula installed from HEAD (Brewfile args: ["HEAD"]) is otherwise only
+    # rebuilt when a new release comes out, and stays on its old commit.
+    "${BREW_BIN}" upgrade --fetch-HEAD
+    "${BREW_BIN}" autoremove
+    install_missing_brew_deps
     "${BREW_BIN}" cleanup --prune=all
 
     brew_cache="$("${BREW_BIN}" --cache)"
     clear_brew_cache "${brew_cache}"
 
     add_result "PASS" "Homebrew updates completed"
+}
+
+# `brew missing` prints "formula: dep dep" for each installed formula whose
+# dependencies are gone (a dependency uninstalled by hand, say) and exits 1
+# when it finds any.
+install_missing_brew_deps() {
+    local missing=""
+    local -a deps=()
+
+    missing="$("${BREW_BIN}" missing 2>/dev/null)" || true
+    [[ -n "${missing}" ]] || return 0
+    read -r -a deps <<< "$(printf '%s\n' "${missing}" | awk -F': ' 'NF > 1 { print $2 }' | tr '\n' ' ')"
+    (( ${#deps[@]} > 0 )) || return 0
+
+    _item "Installing missing Homebrew dependencies: ${deps[*]}"
+    "${BREW_BIN}" install "${deps[@]}"
+}
+
+# Package-manager caches that grow without bound. Both commands only drop
+# what nothing uses, so the next `uvx` or `npx` run does not refetch everything.
+run_tool_cache_cleanup() {
+    local section=""
+
+    printf '\n'
+    _header "Tool caches"
+
+    if has_command "${UV_BIN}"; then
+        _item "Running uv cache prune"
+        # A running uvx (an MCP server, say) holds the cache lock; skip rather
+        # than wait the default five minutes or fail the whole update.
+        if UV_LOCK_TIMEOUT=10 "${UV_BIN}" cache prune; then
+            section+="uv cache pruned"$'\n'
+        else
+            section+="Warning: uv cache is in use; prune skipped"$'\n'
+            add_result "WARN" "uv cache in use; run uv cache prune later"
+        fi
+    fi
+    if has_command "${NPM_BIN}"; then
+        _item "Running npm cache verify"
+        "${NPM_BIN}" cache verify
+        section+="npm cache verified"$'\n'
+    fi
+
+    _box "${section:-uv and npm not installed; nothing to prune}"
+    add_result "PASS" "Tool caches cleaned"
 }
 
 # antidote is a zsh function, so load it in a bare zsh with the ANTIDOTE_HOME
@@ -428,6 +481,7 @@ main() {
     esac
 
     run_antidote_updates
+    run_tool_cache_cleanup
     print_summary
 }
 

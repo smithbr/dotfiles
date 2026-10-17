@@ -517,7 +517,7 @@ MOCK
     assert_output --partial "sudo apt-get autoremove --purge -y"
     assert_output --partial "sudo apt-get autoclean -y"
     assert_output --partial "brew update"
-    assert_output --partial "brew upgrade"
+    assert_line "brew upgrade --fetch-HEAD"
     assert_output --partial "brew cleanup --prune=all"
     [[ ! -d "${TEST_TMPDIR}/.cache/Homebrew" ]]
 }
@@ -584,9 +584,67 @@ MOCK
     assert_output --partial "mas upgrade"
     assert_output --partial "sudo xcodebuild -license accept"
     assert_output --partial "brew update"
-    assert_output --partial "brew upgrade"
+    assert_line "brew upgrade --fetch-HEAD"
     assert_output --partial "brew cleanup --prune=all"
     [[ ! -d "${TEST_TMPDIR}/Library/Caches/Homebrew" ]]
+}
+
+@test "os-doctor removes orphaned Homebrew dependencies and installs missing ones" {
+    mkdir -p "${TEST_TMPDIR}/.cache/Homebrew"
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+exit 0
+MOCK
+    cat > "${BIN_SANDBOX}/brew" <<'MOCK'
+#!/usr/bin/env bash
+case "${1:-}" in
+    --cache) printf '%s\n' "${TEST_TMPDIR}/.cache/Homebrew" ;;
+    missing) printf 'cairo: libpng pixman\nwebp: libtiff\n'; exit 1 ;;
+    *) printf 'brew %s\n' "$*" ;;
+esac
+MOCK
+    chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/brew"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        "${PROJECT_ROOT}/stow/tools/.local/bin/os-doctor"
+    assert_success
+    assert_line "brew autoremove"
+    assert_line "brew install libpng pixman libtiff"
+}
+
+@test "os-doctor prunes the uv and npm caches when they are installed" {
+    mkdir -p "${TEST_TMPDIR}/.cache/Homebrew"
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+exit 0
+MOCK
+    cat > "${BIN_SANDBOX}/brew" <<'MOCK'
+#!/usr/bin/env bash
+[[ "${1:-}" == "--cache" ]] && printf '%s\n' "${TEST_TMPDIR}/.cache/Homebrew"
+exit 0
+MOCK
+    printf '#!/usr/bin/env bash\nprintf "uv %%s\\n" "$*"\n' > "${BIN_SANDBOX}/uv"
+    printf '#!/usr/bin/env bash\nprintf "npm %%s\\n" "$*"\n' > "${BIN_SANDBOX}/npm"
+    chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/brew" "${BIN_SANDBOX}/uv" "${BIN_SANDBOX}/npm"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        "${PROJECT_ROOT}/stow/tools/.local/bin/os-doctor"
+    assert_success
+    assert_line "uv cache prune"
+    assert_line "npm cache verify"
+
+    printf '#!/usr/bin/env bash\nexit 2\n' > "${BIN_SANDBOX}/uv"
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        "${PROJECT_ROOT}/stow/tools/.local/bin/os-doctor"
+    assert_success
+    assert_output --partial "uv cache is in use; prune skipped"
+    assert_line "npm cache verify"
+
+    rm "${BIN_SANDBOX}/uv" "${BIN_SANDBOX}/npm"
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        "${PROJECT_ROOT}/stow/tools/.local/bin/os-doctor"
+    assert_success
+    assert_output --partial "nothing to prune"
 }
 
 @test "os-doctor updates zsh plugins through Homebrew's antidote" {
