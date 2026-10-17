@@ -510,26 +510,49 @@ read_installs() {
     export DOTFILES_BREWFILES DOTFILES_BREW_OPTIONAL
 }
 
+# Ask HEADER over ITEMS (LABEL<TAB>NAME) with the names in MARKED ticked and
+# print the names picked; no items asks nothing, and Esc or an invalid answer
+# keeps the marked ones.
+pick_installs() {
+    local header="$1" marked=" $2 " item reply
+    shift 2
+    [[ "$#" -gt 0 ]] || return 0
+    if reply="$(choose_many --selected "${marked}" "${header}" "$@")"; then
+        tr '\n' ' ' <<< "${reply}"
+        return 0
+    fi
+    for item in "$@"; do
+        [[ "${marked}" != *" ${item#*$'\t'} "* ]] || printf '%s ' "${item#*$'\t'}"
+    done
+}
+
 # Settle the installs (the optional installs every persona gets, on by
 # default, and the persona's roles): --install/--no-install and
 # DOTFILES_INSTALLS decide outright; otherwise a terminal is asked on every
-# run, like the persona, with the saved or default installs and the ones
-# already applied preselected, so Enter keeps them; closed stdin keeps those. The answer
+# run, like the persona, first what the machine is for (the roles, when the
+# persona offers any) and then the optional installs, with the saved or
+# default installs and the ones already applied preselected, so Enter keeps
+# them; closed stdin keeps those. The answer
 # goes to link.sh as DOTFILES_INSTALLS, which saves it, orders it, and adds
 # the roles' layers. PENDING_INSTALLS is what is chosen but not yet applied.
 resolve_installs() {
-    local name detect reply chosen="" applied="" source="" source_was=""
-    local -a items=()
+    local name detect item chosen="" applied="" source="" source_was=""
+    local -a items=() roles=()
 
     OFFERED_INSTALLS="" PENDING_INSTALLS=""
     while IFS=$'\t' read -r name _ detect; do
         [[ -n "${name}" ]] || continue
         OFFERED_INSTALLS="${OFFERED_INSTALLS}${name} "
+        item="${name}"
         if [[ -n "${detect}" ]] && install_applied "${detect}"; then
             applied="${applied} ${name}"
-            items+=("${name} (applied)"$'\t'"${name}")
+            item="${name} (applied)"
+        fi
+        # A role (what the machine is for) gets its own question.
+        if [[ -f "${BASEDIR}/roles/${name}" ]]; then
+            roles+=("${item}"$'\t'"${name}")
         else
-            items+=("${name}"$'\t'"${name}")
+            items+=("${item}"$'\t'"${name}")
         fi
     done < <(bash "${LINK_SCRIPT}" offered)
     read_installs
@@ -542,11 +565,8 @@ resolve_installs() {
             chosen="${chosen// ${name} / }"
         done
         source=flag
-    elif [[ "${#items[@]}" -gt 0 ]] && on_terminal; then
-        # Esc or an invalid answer keeps the marked installs.
-        if reply="$(choose_many --selected "${chosen} ${applied}" "Installs for this machine" "${items[@]}")"; then
-            chosen="$(tr '\n' ' ' <<< "${reply}")"
-        fi
+    elif [[ "${#items[@]}" -gt 0 || "${#roles[@]}" -gt 0 ]] && on_terminal; then
+        chosen="$(pick_installs "What is this machine for?" "${chosen} ${applied}" ${roles[@]+"${roles[@]}"}) $(pick_installs "Installs for this machine" "${chosen} ${applied}" ${items[@]+"${items[@]}"})"
         source=chosen
     fi
     export DOTFILES_INSTALLS="${chosen}"

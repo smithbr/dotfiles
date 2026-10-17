@@ -1789,9 +1789,10 @@ claude-code	default	tool_installed claude"
     assert_line --index 1 "tailscale	default	tool_installed tailscale"
     assert_line --index 2 "claude-code	default	tool_installed claude"
     assert_line "pihole	optional	[[ -x /usr/bin/pihole-FTL && -x /usr/local/bin/pihole && -x /usr/sbin/unbound && -f /etc/unbound/unbound.conf.d/pi-hole.conf ]]"
+    # A vps is asked whether it is a Pi-hole too.
     DOTFILES_OS=linux run_link --persona vps offered
     assert_line --index 0 "docker	default	tool_installed docker"
-    refute_line --partial pihole
+    assert_line --partial "pihole	optional	"
 }
 
 @test "optional installs are the setup scripts with a detect line, the OS directory first, on every persona" {
@@ -1832,9 +1833,9 @@ zed	default	command -v zed"
     DOTFILES_OS=linux DOTFILES_INSTALLS="" run_link --persona server managed
     refute_line "${DEST}/.local/bin/ph-update"
 
-    DOTFILES_OS=linux DOTFILES_INSTALLS="pihole" run_link --persona vps installs
+    DOTFILES_OS=darwin DOTFILES_INSTALLS="pihole" run_link --persona server installs
     assert_failure 2
-    assert_output --partial "does not offer install 'pihole' on linux"
+    assert_output --partial "does not offer install 'pihole' on darwin"
     DOTFILES_OS=linux DOTFILES_INSTALLS="docker" run_link --persona server installs
     assert_line "installs=docker"
 }
@@ -1851,11 +1852,12 @@ zed	default	command -v zed"
     assert_line "installs=tailscale pihole docker"
     assert_line "installs_source=saved"
 
-    DOTFILES_OS=linux run_link --persona vps
+    # Every Linux persona offers pihole; the same persona on macOS does not.
+    DOTFILES_OS=darwin run_link --persona server
     assert_success
     assert_output --partial "does not offer the saved install 'pihole'"
     [ ! -e "${DEST}/.local/bin/ph-update" ]
-    DOTFILES_OS=linux DOTFILES_INSTALLS="" run_link --persona vps
+    DOTFILES_OS=darwin DOTFILES_INSTALLS="" run_link --persona server
     assert_output --partial "Saved installs none"
     [ "$(cat "${DEST}/.local/state/dotfiles/installs")" = "" ]
 

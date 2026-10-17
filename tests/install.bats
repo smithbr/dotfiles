@@ -216,19 +216,21 @@ run_resolve_persona() {
 }
 
 # Runs install.sh's resolve_installs against a stub link.sh that offers
-# docker and pihole (neither applied) with "docker" saved, on_terminal
-# answering TERMINAL (yes or no) and stdin as the picker's answer.
+# docker and pihole (pihole applied when PIHOLE_DETECT is true) with "docker"
+# saved, on_terminal answering TERMINAL (yes or no), stdin as the picker's
+# answer, and any further arguments as install.sh's --install/--no-install.
 run_resolve_installs() {
-    local terminal="$1" answer="$2"
-    cat > "${TEST_TMPDIR}/link.sh" <<'SH'
+    local terminal="$1" answer="$2" pihole_detect="${PIHOLE_DETECT:-false}"
+    shift 2
+    cat > "${TEST_TMPDIR}/link.sh" <<SH
 #!/usr/bin/env bash
-case "$1" in
-    offered) printf 'docker\tdefault\tfalse\npihole\toptional\tfalse\n' ;;
+case "\$1" in
+    offered) printf 'docker\\tdefault\\tfalse\\npihole\\toptional\\t${pihole_detect}\\n' ;;
     installs)
-        if [[ -n "${DOTFILES_INSTALLS+set}" ]]; then
-            printf 'installs=%s\ninstalls_source=env\n' "$(xargs <<< "${DOTFILES_INSTALLS}")"
+        if [[ -n "\${DOTFILES_INSTALLS+set}" ]]; then
+            printf 'installs=%s\\ninstalls_source=env\\n' "\$(xargs <<< "\${DOTFILES_INSTALLS}")"
         else
-            printf 'installs=docker\ninstalls_source=saved\n'
+            printf 'installs=docker\\ninstalls_source=saved\\n'
         fi
         ;;
 esac
@@ -237,27 +239,41 @@ SH
         source '${PROJECT_ROOT}/scripts/common.sh'
         LINK_SCRIPT='${TEST_TMPDIR}/link.sh' BASEDIR='${PROJECT_ROOT}'
         declare -a install_args=() no_install_args=()
-        $(sed -n '/^install_applied() {$/,/^}$/p;/^read_installs() {$/,/^}$/p;/^resolve_installs() {$/,/^}$/p' "${PROJECT_ROOT}/install.sh")
+        $(sed -n '/^install_applied() {$/,/^}$/p;/^read_installs() {$/,/^}$/p;/^pick_installs() {$/,/^}$/p;/^resolve_installs() {$/,/^}$/p' "${PROJECT_ROOT}/install.sh")
         on_terminal() { [[ '${terminal}' == yes ]]; }
         DOTFILES_PROMPT=read resolve_installs
         printf 'installs=%s source=%s pending=%s\n' \"\${INSTALLS}\" \"\${INSTALLS_SOURCE}\" \"\${PENDING_INSTALLS}\"
     " <<< "${answer}"
 }
 
-@test "install.sh asks for the installs on every terminal run, with the saved ones kept on Enter" {
-    # A saved choice is asked again, so a role left out before is a tick away.
-    run_resolve_installs yes "1 2"
+@test "install.sh asks what the machine is for, then the installs, on every terminal run" {
+    # The roles (pihole) get their own question before the optional installs,
+    # and a saved choice is asked again, so a role left out before is a tick away.
+    run_resolve_installs yes $'1\n1'
     assert_success
+    assert_output --partial "What is this machine for?"
+    assert_output --partial "1) [ ] pihole"
     assert_output --partial "Installs for this machine"
     assert_output --partial "1) [x] docker"
-    assert_output --partial "2) [ ] pihole"
-    assert_output --partial "installs=docker pihole source=chosen pending=docker pihole "
+    assert_output --partial "installs=pihole docker source=chosen pending=pihole docker "
 
-    run_resolve_installs yes ""
+    # Enter keeps the marks in both.
+    run_resolve_installs yes $'\n'
     assert_success
     assert_output --partial "installs=docker source=chosen"
 
-    run_resolve_installs no "1 2"
+    # A role already applied is marked, so Enter keeps it.
+    PIHOLE_DETECT=true run_resolve_installs yes $'\n'
+    assert_success
+    assert_output --partial "1) [x] pihole (applied)"
+    assert_output --partial "installs=pihole docker source=chosen pending=docker "
+
+    # An invalid answer keeps that question's marks.
+    run_resolve_installs yes $'9\n'
+    assert_success
+    assert_output --partial "installs=docker source=chosen"
+
+    run_resolve_installs no $'1\n1'
     assert_success
     assert_output "installs=docker source=saved pending=docker "
 }

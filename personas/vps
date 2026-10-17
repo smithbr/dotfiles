@@ -7,3 +7,4 @@ editors=no
 harden=yes
 brew=core
 brew_optional=
+roles_optional=pihole
