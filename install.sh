@@ -785,7 +785,7 @@ if [[ -n "${zsh_path}" ]]; then
             printf '%s\n' "${zsh_path}" | sudo tee -a /etc/shells >/dev/null
         fi
     fi
-    if [[ "${SHELL}" != "${zsh_path}" ]]; then
+    if [[ "${SHELL##*/}" != zsh ]]; then
         if [[ "${dry_run}" -eq 1 ]]; then
             _item "Would run chsh -s ${zsh_path}"
         else

@@ -9,7 +9,7 @@ Brewfiles and `brew.sh`. A persona's `brew` and `brew_optional` keys pick which 
 
 One source per kind of tool. Agents follow this on every machine (the agents repo's install rule points here), and the shell refuses the two installs it rules out.
 
-- **zsh:** Homebrew's on both platforms (`Brewfile.core`); `install.sh` makes the `zsh` first on PATH, Homebrew's, the login shell. On Linux, apt's zsh stays as the shell that exists before Homebrew does.
+- **zsh:** Homebrew's on both platforms (`Brewfile.core`); `install.sh` makes the `zsh` first on PATH, Homebrew's, the login shell when the login shell is not zsh already; any zsh is left alone. On Linux, apt's zsh stays as the shell that exists before Homebrew does.
 - **What the OS ships:** on a Mac, git, curl, and bash are Apple's, never Homebrew's. `tests/run_tests.sh` builds its own bash for Bats into the test cache (`tests/README.md`).
 - **A command-line tool you always want:** `Brewfile.core` (`df-add brew NAME`), or apt for what needs root or runs before brew (above).
 - **A Mac app:** a cask in a Brewfile; adopt one installed by hand with `brew install --cask --adopt NAME`. App Store apps are `mas` entries.
