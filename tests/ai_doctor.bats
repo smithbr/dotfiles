@@ -81,7 +81,7 @@ JSON
     printf '# Rules\n' > "${HOME}/.claude/CLAUDE.md"
     run ai_doctor
     assert_success
-    assert_line --index 0 --regexp "^ai-doctor: claude · 2 skills \(~[0-9]+ tokens\) · 0 plugins$"
+    assert_line --index 0 --regexp "^ai-doctor: claude · 2 skills from 2 bundles · 0 plugins · ~[0-9]+ tokens before you type$"
     assert_line --index 1 "  Nothing to do."
     refute_output --partial "ok  "
     refute_output --partial "--fix"
@@ -110,6 +110,7 @@ JSON
     assert_output --partial "skills-add vault  [auto]"
     assert_output --regexp "trim  2 skill bundles beyond the home persona cost ~[0-9]+ tokens a session"
     assert_output --partial "skill-drop cloud data  [auto]"
+    assert_output --regexp "every session drops 2 skills \(~[0-9]+ tokens\); skills-add brings a bundle back"
     assert_output --partial "Run ai-doctor --fix to do 1, 2 (asks before each)"
     refute test -e "${TEST_TMPDIR}/skills-add.log"
 
@@ -221,7 +222,7 @@ JSON
     assert_output --partial "[mcp_servers.web]"
 }
 
-@test "ai-doctor: a plugin installed and synced is a trim --fix removes, and sign-in waits are one trim" {
+@test "ai-doctor: a plugin installed and synced is a trim --fix removes, and sign-in waits are a trim per plugin" {
     local installed="${HOME}/.claude/plugins/cache/cf/cloudflare/1.0.0" synced="${HOME}/.claude/plugins/synced/org/abc"
     mkdir -p "${installed}/skills/deploy" "${synced}/.claude-plugin" "${synced}/skills/deploy" "${HOME}/.claude/plugins/synced/org/eng/.claude-plugin" "${TEST_TMPDIR}/elsewhere"
     touch "${installed}/skills/deploy/SKILL.md" "${synced}/skills/deploy/SKILL.md"
@@ -234,11 +235,15 @@ JSON
     printf '{"plugin:cloudflare:cloudflare": {}, "plugin:engineering:slack": {}}\n' > "${HOME}/.claude/mcp-needs-auth-cache.json"
     run ai_doctor
     assert_success
-    assert_output --partial "· 4 plugins ·"
+    assert_output --partial "· 2 skills from 2 bundles + 2 from 4 plugins · 3 MCP servers (2 wait for a sign-in) ·"
     assert_output --partial "trim  Plugin cloudflare loads twice: installed here and synced from claude.ai"
     assert_output --partial "claude plugin uninstall cloudflare@cloudflare  [auto]"
-    assert_output --partial "trim  2 MCP servers from plugins wait for a sign-in"
-    assert_output --partial "turn off the plugins you don't use in Claude's settings: cloudflare, engineering"
+    assert_output --partial "every session drops the duplicate's 1 skill"
+    assert_output --partial "trim  Plugin cloudflare: 1 of 1 MCP server waits for a sign-in; use not recorded"
+    assert_output --partial "trim  Plugin engineering: 1 of 2 MCP servers waits for a sign-in; use not recorded"
+    assert_output --partial "sign in with /mcp, or turn it off in Claude's settings (claude.ai plugins)"
+    assert_output --partial "off, every session drops 1 skill (~0 tokens), 1 MCP server; turn it back on when a task needs it"
+    refute_output --partial "no recorded use"
     refute_output --partial "gmail"
 
     run ai_doctor --fix --yes
@@ -247,6 +252,35 @@ JSON
     assert_output "['other@m']"
     refute test -e "${HOME}/.claude/plugins/cache/cf"
     assert test -d "${synced}"
+}
+
+@test "ai-doctor: counts agents, and a plugin Claude Code records no use of is a trim that says what it costs" {
+    local used="${HOME}/.claude/plugins/synced/org/used" idle="${HOME}/.claude/plugins/synced/org/idle"
+    mkdir -p "${HOME}/.claude/agents" "${used}/.claude-plugin" "${used}/skills/a" "${idle}/.claude-plugin" "${idle}/skills/b" "${idle}/agents"
+    printf -- '---\nname: lead\ndescription: Runs the team\n---\n' > "${HOME}/.claude/agents/lead.md"
+    printf -- '---\nname: qa\ndescription: Writes tests\n---\n' > "${HOME}/.claude/agents/qa.md"
+    printf -- '---\nname: helper\ndescription: Helps\n---\n' > "${idle}/agents/helper.md"
+    printf '{"name": "used"}\n' > "${used}/.claude-plugin/plugin.json"
+    printf '{"name": "idle"}\n' > "${idle}/.claude-plugin/plugin.json"
+    printf -- '---\nname: a\ndescription: Skill a\n---\n' > "${used}/skills/a/SKILL.md"
+    printf -- '---\nname: b\ndescription: Skill b is twelve chars\n---\n' > "${idle}/skills/b/SKILL.md"
+    printf '{"numStartups": 9, "pluginUsage": {"used@inline": {"usageCount": 3, "lastUsedAt": 1, "lastUsedNumStartups": 8}, "idle@inline": {"usageCount": 0, "lastUsedAt": 1, "lastUsedNumStartups": 2}}}\n' > "${HOME}/.claude.json"
+    run ai_doctor
+    assert_success
+    assert_output --partial "· 2 skills from 2 bundles + 2 from 2 plugins · 3 agents ·"
+    assert_output --partial "trim  Plugin idle has no recorded use"
+    assert_output --partial "turn it off in Claude's settings (claude.ai plugins)"
+    assert_output --partial "off, every session drops 1 skill (~6 tokens), 1 agent; turn it back on when a task needs it"
+    refute_output --partial "Plugin used"
+    refute_output --partial "[auto]"
+
+    run ai_doctor -v
+    assert_success
+    assert_output --partial "~/.claude/agents: 2 agents, ~8 tokens"
+    assert_output --partial "lead, qa"
+    assert_output --partial "plugin idle: 1 agent, ~3 tokens"
+    assert_output --regexp "used \(claude.ai\): 1 skill \(~2 tokens\); used 3 times, last [0-9]+ days ago"
+    assert_output --partial "idle (claude.ai): 1 skill (~6 tokens), 1 agent; no recorded use"
 }
 
 @test "ai-doctor: -v reports experimental flags and a default agent" {

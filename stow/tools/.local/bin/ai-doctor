@@ -7,21 +7,28 @@
   ai-doctor             what needs doing, as a short numbered list
   ai-doctor --fix       do it: asks before each fix (--yes asks nothing)
   ai-doctor -v          also everything checked: instructions, skills per
-                        bundle, plugins, and MCP servers, with token sizes
+                        bundle and per plugin, agents, plugins with their
+                        use, and MCP servers, with token sizes
   ai-doctor --app NAME  only claude, codex, or cursor (repeatable)
 
-It looks for MCP servers that cannot start, secrets written into MCP config,
-broken skill links, skill bundles beyond what the dotfiles persona asks for,
-plugins loaded twice, and plugins whose servers wait for a sign-in. Each item
-says what to do. An item marked [auto] is one --fix can do: it unlinks skill
-bundles with skills-add, removes or repairs a server with the app's own
-command (or edits its config, after a backup), and deletes broken links.
-Backups go to ~/.local/state/ai-doctor/<time>/.
+The summary line says where each session's load comes from: skills from the
+persona's bundles and from plugins, agents, MCP servers by state (ready,
+waiting for a sign-in, off, can't start), and the tokens read before you
+type. It then looks for MCP servers that cannot start, secrets written into
+MCP config, broken skill links, skill bundles beyond what the dotfiles
+persona asks for, plugins loaded twice, plugins whose servers wait for a
+sign-in, and plugins Claude Code records no use of. Each item says what to
+do and what every session loses when you do it, so the setup can stay lean
+and a plugin can be turned on only while it is needed. An item marked [auto]
+is one --fix can do: it unlinks skill bundles with skills-add, removes or
+repairs a server with the app's own command (or edits its config, after a
+backup), and deletes broken links. Backups go to ~/.local/state/ai-doctor/<time>/.
 
 Exits 1 while something is broken (not just worth trimming), otherwise 0.
-Connectors kept only on claude.ai, and the tools the desktop apps add
-themselves, are not on disk; turn those off in the app. Sizes are rough,
-about 4 characters a token.
+Connectors kept only on claude.ai, the tools the desktop apps add themselves,
+and Claude Code's built-in skills and agents are not on disk, so they are not
+counted; turn connectors off in the app. Sizes are rough, about 4 characters
+a token, and leave out each MCP tool's name and schema.
 """
 
 import argparse
@@ -58,11 +65,12 @@ SECRET_VALUE = re.compile(r"^(bearer\s+)?(gh[opsur]_|github_pat_|sk-|xox[abp]-|g
 class Finding:
     """One thing to do: broken (fix) or worth trimming (trim)."""
 
-    def __init__(self, kind, title, todo, apply=None):
+    def __init__(self, kind, title, todo, apply=None, effect=None):
         self.kind = kind
         self.title = title
         self.todo = todo  # one line: the command or the step
         self.apply = apply  # callable(backup_dir) -> message, when --fix can do it
+        self.effect = effect  # one line: what every session loses or gains
 
 
 class Report:
@@ -71,6 +79,7 @@ class Report:
         self.verbose = verbose
         self.findings = []
         self.stats = {}
+        self.plugins = {}  # name -> what it adds, filled by check_plugins
 
     def paint(self, code, text):
         return f"\033[{code}m{text}\033[0m" if self.color else text
@@ -91,11 +100,11 @@ class Report:
     def note(self, text):
         self.line(f"{self.paint('2', '--')}  {text}")
 
-    def fix(self, title, todo, apply=None):
-        self.findings.append(Finding("fix", title, todo, apply))
+    def fix(self, title, todo, apply=None, effect=None):
+        self.findings.append(Finding("fix", title, todo, apply, effect))
 
-    def trim(self, title, todo, apply=None):
-        self.findings.append(Finding("trim", title, todo, apply))
+    def trim(self, title, todo, apply=None, effect=None):
+        self.findings.append(Finding("trim", title, todo, apply, effect))
 
 
 def tilde(path):
@@ -108,6 +117,10 @@ def tilde(path):
 
 def plural(count, word):
     return f"{count} {word}" if count == 1 else f"{count} {word}s"
+
+
+def waits(count):
+    return "waits" if count == 1 else "wait"
 
 
 def tokens(chars):
@@ -226,6 +239,7 @@ def check_instructions(report, apps, cwd):
         size = len(read_text(path) or "")
         total += size
         report.ok(f"{label} {tilde(path)}: {tokens(size)}")
+    report.stats["instruction_chars"] = total
     rules = AGENTS_DIR / "rules"
     if rules.is_dir():
         size = sum(len(read_text(p) or "") for p in sorted(rules.iterdir()) if p.is_file())
@@ -322,8 +336,11 @@ def check_skills(report, apps):
         report.ok(f"{tilde(folder)}{where}: {count} skills, {tokens(chars)}")
         for bundle, skills in sorted(bundles.items(), key=lambda kv: (-len(kv[1]), kv[0])):
             report.line(f"{bundle:<18} {len(skills):>3} skills  {tokens(sum(s for _, s in skills))}", 6)
-        if real == shared and (AGENTS_DIR / "skills").is_dir():
-            compare_persona(report, bundles)
+        if real == shared:
+            report.stats["bundles"] = len(set(bundles) - {"local", "linked elsewhere"})
+            report.stats["bundle_skills"] = count
+            if (AGENTS_DIR / "skills").is_dir():
+                compare_persona(report, bundles)
 
 
 def compare_persona(report, bundles):
@@ -335,11 +352,13 @@ def compare_persona(report, bundles):
     missing = sorted(set(wanted) - linked)
     skills_add = AGENTS_DIR / "scripts" / "skills-add"
     if extra:
+        count = sum(len(bundles[b]) for b in extra)
         chars = sum(s for b in extra for _, s in bundles[b])
         report.trim(
             f"{plural(len(extra), 'skill bundle')} beyond the {persona} persona cost {tokens(chars)} a session",
             f"skill-drop {' '.join(extra)}",
-            run([str(skills_add), "-D", *extra]) if skills_add.is_file() else None)
+            run([str(skills_add), "-D", *extra]) if skills_add.is_file() else None,
+            f"every session drops {plural(count, 'skill')} ({tokens(chars)}); skills-add brings a bundle back")
     if missing:
         report.fix(f"{plural(len(missing), 'skill bundle')} the {persona} persona asks for are not linked",
                    f"skills-add {' '.join(missing)}",
@@ -351,11 +370,95 @@ def compare_persona(report, bundles):
 # Plugins ------------------------------------------------------------------
 
 
+def agent_files(folder):
+    """(name, description size) for each agent definition in a folder."""
+    folder = Path(folder)
+    if not folder.is_dir():
+        return []
+    return [(p.stem, len(frontmatter_text(p))) for p in sorted(folder.glob("*.md")) if p.is_file()]
+
+
+def check_agents(report, apps, plugins):
+    """Agents under ~/.claude/agents and in plugins; Claude Code's own are not on disk."""
+    if "claude" not in apps:
+        return
+    report.section("Agents (each name and description is in every session)")
+    folder = HOME / ".claude" / "agents"
+    own = agent_files(folder)
+    if own:
+        real = folder.resolve()
+        where = f" -> {tilde(real)}" if real != folder.absolute() else ""
+        report.ok(f"{tilde(folder)}{where}: {plural(len(own), 'agent')}, {tokens(sum(s for _, s in own))}")
+        report.line(", ".join(n for n, _ in own), 6)
+    from_plugins = [(name, agent_files(Path(root) / "agents")) for name, _s, root, _k in plugins]
+    from_plugins = [(name, agents) for name, agents in from_plugins if agents]
+    for name, agents in from_plugins:
+        report.ok(f"plugin {name}: {plural(len(agents), 'agent')}, {tokens(sum(s for _, s in agents))}")
+    if not own and not from_plugins:
+        report.note("none on disk; Claude Code's built-in agents are not counted")
+    report.stats["agents"] = len(own) + sum(len(a) for _, a in from_plugins)
+    report.stats["agent_chars"] = sum(s for _, s in own) + sum(s for _, a in from_plugins for _, s in a)
+
+
 def plugin_contents(root):
+    """What a plugin adds to every session: skill count and size, MCP servers, agents."""
     root = Path(root)
-    skills = sum(len(list(root.glob(p))) for p in ("SKILL.md", "skills/*/SKILL.md", "commands/*.md"))
+    skill_files = [f for p in ("SKILL.md", "skills/*/SKILL.md", "commands/*.md") for f in root.glob(p)]
     servers = (read_json(root / ".mcp.json") or {}).get("mcpServers", {})
-    return skills, servers if isinstance(servers, dict) else {}
+    return {
+        "skills": len(skill_files),
+        "skill_chars": sum(len(frontmatter_text(f)) for f in skill_files),
+        "servers": servers if isinstance(servers, dict) else {},
+        "agents": len(agent_files(root / "agents")),
+    }
+
+
+def plugin_usage():
+    """Plugin name -> (uses, days since last use, startups since) from Claude Code's own record,
+    or None when it keeps none."""
+    state = read_json(HOME / ".claude.json") or {}
+    usage = state.get("pluginUsage")
+    if not isinstance(usage, dict):
+        return None
+    startups = state.get("numStartups") or 0
+    found = {}
+    for key, record in usage.items():
+        if not isinstance(record, dict):
+            continue
+        name = key.split("@")[0]
+        uses = record.get("usageCount") or 0
+        last = record.get("lastUsedAt")
+        days = int((time.time() - last / 1000) // 86400) if isinstance(last, (int, float)) and last else None
+        since = startups - (record.get("lastUsedNumStartups") or 0)
+        if name not in found or uses > found[name][0]:
+            found[name] = (uses, days, since)
+    return found
+
+
+def describe_usage(usage):
+    if usage is None:
+        return "use not recorded"
+    uses, days, since = usage
+    if not uses:
+        return "no recorded use"
+    when = f"{days} days ago" if days else "today"
+    return f"used {plural(uses, 'time')}, last {when}"
+
+
+def plugin_effect(contents):
+    """What every session loses when a plugin is turned off."""
+    parts = [f"{plural(contents['skills'], 'skill')} ({tokens(contents['skill_chars'])})"]
+    if contents["servers"]:
+        parts.append(plural(len(contents["servers"]), "MCP server"))
+    if contents["agents"]:
+        parts.append(plural(contents["agents"], "agent"))
+    return "off, every session drops " + ", ".join(parts) + "; turn it back on when a task needs it"
+
+
+def plugin_todo(source, key):
+    if source == "installed":
+        return f"claude plugin uninstall {key}"
+    return "turn it off in Claude's settings (claude.ai plugins)"
 
 
 def plugin_name(root):
@@ -401,17 +504,38 @@ def check_plugins(report, plugins):
     if not plugins:
         report.note("none installed")
         return
+    usage = plugin_usage()
     sources = {}
+    report.plugins = {}
     for name, source, root, key in plugins:
-        skills, servers = plugin_contents(root)
-        extra = f", {plural(len(servers), 'MCP server')}" if servers else ""
-        report.ok(f"{name} ({source}): {plural(skills, 'skill')}{extra}")
+        contents = plugin_contents(root)
+        used = (usage or {}).get(name) if usage is not None else None
+        report.plugins[name] = {"source": source, "key": key, "root": root, "usage": used, **contents}
+        report.stats["plugin_skills"] = report.stats.get("plugin_skills", 0) + contents["skills"]
+        report.stats["plugin_skill_chars"] = report.stats.get("plugin_skill_chars", 0) + contents["skill_chars"]
+        extra = f", {plural(len(contents['servers']), 'MCP server')}" if contents["servers"] else ""
+        extra += f", {plural(contents['agents'], 'agent')}" if contents["agents"] else ""
+        report.ok(f"{name} ({source}): {plural(contents['skills'], 'skill')} ({tokens(contents['skill_chars'])})"
+                  f"{extra}; {describe_usage(used if usage is not None else None)}")
         sources.setdefault(name, {})[source] = (key, root)
     for name, found in sorted(sources.items()):
         if "installed" in found and "claude.ai" in found:
             key, root = found["installed"]
+            contents = plugin_contents(root)
             report.trim(f"Plugin {name} loads twice: installed here and synced from claude.ai",
-                        f"claude plugin uninstall {key}", uninstall_plugin(key, root))
+                        f"claude plugin uninstall {key}", uninstall_plugin(key, root),
+                        f"every session drops the duplicate's {plural(contents['skills'], 'skill')} "
+                        f"({tokens(contents['skill_chars'])}); the claude.ai copy stays")
+
+
+def unused_plugins(report, flagged):
+    """Plugins Claude Code records no use of, beyond those already flagged."""
+    for name, info in sorted(report.plugins.items()):
+        if name in flagged or info["usage"] is None or info["usage"][0]:
+            continue
+        apply = uninstall_plugin(info["key"], info["root"]) if info["source"] == "installed" else None
+        report.trim(f"Plugin {name} has no recorded use", plugin_todo(info["source"], info["key"]),
+                    apply, plugin_effect(info))
 
 
 # MCP servers --------------------------------------------------------------
@@ -443,7 +567,7 @@ def collect_servers(apps, cwd, plugins):
         for name, conf in ((read_json(cwd / ".mcp.json") or {}).get("mcpServers") or {}).items():
             servers.append(("claude", cwd / ".mcp.json", "project", name, conf))
         for plugin, _source, root, _key in plugins:
-            for name, conf in plugin_contents(root)[1].items():
+            for name, conf in plugin_contents(root)["servers"].items():
                 servers.append(("claude", root / ".mcp.json", f"plugin {plugin}", f"plugin:{plugin}:{name}", conf))
     if "codex" in apps:
         config = HOME / ".codex" / "config.toml"
@@ -545,6 +669,11 @@ def check_servers(report, apps, cwd, plugins):
     needs_auth = read_json(HOME / ".claude" / "mcp-needs-auth-cache.json") or {}
     waiting = {}
     seen = set()
+    states = report.stats.setdefault("server_states", {})
+
+    def count(state):
+        states[state] = states.get(state, 0) + 1
+
     for app, file, scope, name, conf in collect_servers(apps, cwd, plugins):
         if name is None:
             report.note(f"{app}: {tilde(file)} needs Python 3.11 to read; skipped")
@@ -555,13 +684,21 @@ def check_servers(report, apps, cwd, plugins):
         report.stats["servers"] = report.stats.get("servers", 0) + 1
         label = f"{app}: {name}"
         if conf.get("enabled") is False or conf.get("disabled") is True:
+            count("disabled")
             report.note(f"{label}: turned off")
             continue
         if conf.get("type") in ("http", "sse") and not conf.get("url") and not conf.get("command"):
+            count("ready")
             report.note(f"{label}: a claude.ai connector fills in its url")
             continue
         problem = server_problem(conf)
         plugin = scope[7:] if scope.startswith("plugin ") else None
+        if problem:
+            count("can't start")
+        elif app == "claude" and name in needs_auth:
+            count("wait for a sign-in")
+        else:
+            count("ready")
         if problem and plugin:
             report.note(f"{label}: {problem}; the {plugin} plugin ships it that way")
         elif problem == "url":
@@ -581,12 +718,20 @@ def check_servers(report, apps, cwd, plugins):
                 report.fix(title + ", and other users can read the file", f"chmod 600 {tilde(file)}",
                            lambda _b, file=file: os.chmod(file, 0o600))
             report.fix(title, secret_todo(app, tilde(file), field, key))
-    if waiting:
-        count = sum(len(v) for v in waiting.values())
-        for where, names in waiting.items():
-            report.note(f"waiting for sign-in in {where}: {', '.join(n.rsplit(':', 1)[-1] for n in names)}")
-        report.trim(f"{plural(count, 'MCP server')} from plugins wait for a sign-in",
-                    f"turn off the plugins you don't use in Claude's settings: {', '.join(waiting)}")
+    for where, names in waiting.items():
+        report.note(f"waiting for sign-in in {where}: {', '.join(n.rsplit(':', 1)[-1] for n in names)}")
+        info = report.plugins.get(where)
+        if info is None:
+            report.trim(f"{plural(len(names), 'MCP server')} in {where} {waits(len(names))} for a sign-in",
+                        "sign in with /mcp, or remove the ones you don't use",
+                        effect="each one's tool names stay in every session until then")
+            continue
+        report.trim(f"Plugin {where}: {len(names)} of {plural(len(info['servers']), 'MCP server')} "
+                    f"{waits(len(names))} for a sign-in; {describe_usage(info['usage'])}",
+                    f"sign in with /mcp, or {plugin_todo(info['source'], info['key'])}",
+                    uninstall_plugin(info["key"], info["root"]) if info["source"] == "installed" else None,
+                    plugin_effect(info))
+    unused_plugins(report, set(waiting))
 
 
 # Settings -----------------------------------------------------------------
@@ -612,14 +757,31 @@ def installed_apps():
 
 
 def summary(report, apps):
+    """One line: where every session's load comes from and what it costs."""
     stats = report.stats
     parts = [", ".join(apps)]
     if "skills" in stats:
-        parts.append(f"{stats['skills']} skills ({tokens(stats['skill_chars'])})")
-    if "plugins" in stats:
+        skills = f"{stats['skills']} skills"
+        if stats.get("bundles"):
+            local = stats["skills"] - stats["bundle_skills"]
+            skills = f"{stats['bundle_skills']} skills from {plural(stats['bundles'], 'bundle')}"
+            skills += f" + {local} local" if local else ""
+        if stats.get("plugin_skills"):
+            skills += f" + {stats['plugin_skills']} from {plural(stats['plugins'], 'plugin')}"
+        elif "plugins" in stats:
+            skills += f" · {plural(stats['plugins'], 'plugin')}"
+        parts.append(skills)
+    elif "plugins" in stats:
         parts.append(plural(stats["plugins"], "plugin"))
+    if stats.get("agents"):
+        parts.append(plural(stats["agents"], "agent"))
     if "servers" in stats:
-        parts.append(plural(stats["servers"], "MCP server"))
+        states = ", ".join(f"{n} {state}" for state, n in stats.get("server_states", {}).items()
+                           if state != "ready" and n)
+        parts.append(plural(stats["servers"], "MCP server") + (f" ({states})" if states else ""))
+    load = sum(stats.get(k, 0) for k in ("instruction_chars", "skill_chars", "plugin_skill_chars", "agent_chars"))
+    if load:
+        parts.append(f"{tokens(load)} before you type")
     return " · ".join(parts)
 
 
@@ -634,6 +796,8 @@ def print_findings(report):
         auto = report.paint("2", "  [auto]") if finding.apply else ""
         print(f"  {number:>2}  {mark}  {finding.title}")
         print(f"            {report.paint('36', finding.todo)}{auto}")
+        if finding.effect:
+            print(f"            {report.paint('2', finding.effect)}")
     return findings
 
 
@@ -695,6 +859,7 @@ def main(argv=None):
     plugins = claude_plugins() if "claude" in apps else []
     check_instructions(report, apps, cwd)
     check_skills(report, apps)
+    check_agents(report, apps, plugins)
     if "claude" in apps:
         check_plugins(report, plugins)
     check_servers(report, apps, cwd, plugins)
