@@ -58,5 +58,8 @@ export NPM_CONFIG_USERCONFIG="${XDG_CONFIG_HOME}/npm/npmrc"
 export PNPM_HOME="${XDG_DATA_HOME}/pnpm"
 export PATH="${PNPM_HOME}/bin:${PATH}"
 
+# bun's global commands (domain-check-mcp, say), installed under the cache.
+export PATH="${XDG_CACHE_HOME}/.bun/bin:${PATH}"
+
 # Keep $path/$PATH entries unique so re-sourcing / exec reloads don't duplicate them.
 typeset -U path PATH

@@ -81,6 +81,20 @@ load test_helper
     teardown_tmpdir
 }
 
+@test "non-interactive zsh puts bun's global commands on PATH under XDG_CACHE_HOME" {
+    command -v zsh >/dev/null || skip "zsh not installed"
+    setup_tmpdir
+    local home="${TEST_TMPDIR}/home" zdotdir="${TEST_TMPDIR}/home/.config/zsh"
+    mkdir -p "${zdotdir}"
+    cp "${PROJECT_ROOT}/stow/common/.config/zsh/.zshenv" "${zdotdir}/"
+
+    run env -i HOME="${home}" ZDOTDIR="${zdotdir}" PATH="/usr/bin:/bin" \
+        zsh -c 'print -rl -- $path'
+    assert_success
+    assert_line "${home}/.cache/.bun/bin"
+    teardown_tmpdir
+}
+
 @test "non-interactive zsh sets the tool paths df-doctor and scripts rely on" {
     command -v zsh >/dev/null || skip "zsh not installed"
     setup_tmpdir
