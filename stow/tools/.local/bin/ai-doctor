@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# ///
 """List what to fix or trim in Claude Code, Codex, and Cursor, and fix it.
 
   ai-doctor             what needs doing, as a short numbered list

@@ -9,13 +9,21 @@ AI_DOCTOR="${PROJECT_ROOT}/stow/tools/.local/bin/ai-doctor"
 
 setup() {
     setup_tmpdir
-    local python
+    local python uv
     python="$(command -v python3 || true)"
     [[ -n "${python}" ]] || skip "python3 is required"
-    # Only python3 on PATH, so no real claude or codex command is ever run.
+    "${python}" -c 'import sys; sys.exit(sys.version_info < (3, 11))' || skip "python3 3.11+ is required"
+    uv="$(command -v uv || true)"
+    [[ -n "${uv}" ]] || skip "uv is required"
+    # Only uv and python3 on PATH, so no real claude or codex command is ever
+    # run; ai-doctor's shebang is `uv run --script`, held to this python3 and
+    # kept offline, with uv's cache shared by the file's tests.
     mkdir -p "${TEST_TMPDIR}/bin"
     ln -s "${python}" "${TEST_TMPDIR}/bin/python3"
+    ln -s "${uv}" "${TEST_TMPDIR}/bin/uv"
     export PATH="${TEST_TMPDIR}/bin:/usr/bin:/bin"
+    export UV_PYTHON="${TEST_TMPDIR}/bin/python3" UV_NO_PYTHON_DOWNLOADS=1 UV_NO_CONFIG=1
+    export UV_CACHE_DIR="${BATS_FILE_TMPDIR}/uv-cache"
 
     export HOME="${TEST_TMPDIR}/home"
     export XDG_CONFIG_HOME="${HOME}/.config"
