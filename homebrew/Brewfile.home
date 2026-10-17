@@ -3,6 +3,7 @@
 
 # Only the home Mac gets the vault and its backups: Obsidian and restic stay
 # out of every other persona.
+brew "bun"
 brew "restic"
 brew "vhs"
 brew "superradcompany/tap/microsandbox"

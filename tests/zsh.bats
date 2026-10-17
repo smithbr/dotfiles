@@ -65,23 +65,7 @@ load test_helper
     teardown_tmpdir
 }
 
-@test "non-interactive zsh puts pnpm's global commands on PATH under XDG_DATA_HOME" {
-    command -v zsh >/dev/null || skip "zsh not installed"
-    setup_tmpdir
-    local home="${TEST_TMPDIR}/home" zdotdir="${TEST_TMPDIR}/home/.config/zsh"
-    mkdir -p "${zdotdir}"
-    cp "${PROJECT_ROOT}/stow/common/.config/zsh/.zshenv" "${zdotdir}/"
-
-    # pnpm refuses global installs unless its bin folder is on PATH.
-    run env -i HOME="${home}" ZDOTDIR="${zdotdir}" PATH="/usr/bin:/bin" \
-        zsh -c 'printf "%s\n" "${PNPM_HOME}"; print -rl -- $path'
-    assert_success
-    assert_line --index 0 "${home}/.local/share/pnpm"
-    assert_line "${home}/.local/share/pnpm/bin"
-    teardown_tmpdir
-}
-
-@test "non-interactive zsh puts bun's global commands on PATH under XDG_CACHE_HOME" {
+@test "non-interactive zsh keeps bun's global packages under XDG_DATA_HOME, on PATH" {
     command -v zsh >/dev/null || skip "zsh not installed"
     setup_tmpdir
     local home="${TEST_TMPDIR}/home" zdotdir="${TEST_TMPDIR}/home/.config/zsh"
@@ -89,9 +73,10 @@ load test_helper
     cp "${PROJECT_ROOT}/stow/common/.config/zsh/.zshenv" "${zdotdir}/"
 
     run env -i HOME="${home}" ZDOTDIR="${zdotdir}" PATH="/usr/bin:/bin" \
-        zsh -c 'print -rl -- $path'
+        zsh -c 'printf "%s\n" "${BUN_INSTALL}"; print -rl -- $path'
     assert_success
-    assert_line "${home}/.cache/.bun/bin"
+    assert_line --index 0 "${home}/.local/share/bun"
+    assert_line "${home}/.local/share/bun/bin"
     teardown_tmpdir
 }
 
@@ -315,3 +300,4 @@ MOCK
     assert_line --index 1 "lsa=local-lsa"
     teardown_tmpdir
 }
+

@@ -53,13 +53,12 @@ export NPM_CONFIG_CACHE="${XDG_CACHE_HOME}/npm"
 export NPM_CONFIG_INIT_MODULE="${XDG_CONFIG_HOME}/npm/npm-init.js"
 export NPM_CONFIG_USERCONFIG="${XDG_CONFIG_HOME}/npm/npmrc"
 
-# pnpm's global packages and their commands; what `pnpm setup` would append
-# to .zshrc, here so scripts see them too and pnpm never edits shell files.
-export PNPM_HOME="${XDG_DATA_HOME}/pnpm"
-export PATH="${PNPM_HOME}/bin:${PATH}"
 
-# bun's global commands (domain-check-mcp, say), installed under the cache.
-export PATH="${XDG_CACHE_HOME}/.bun/bin:${PATH}"
+# bun's global packages and their commands (domain-check-mcp, say). Without
+# BUN_INSTALL, bun puts them under XDG_CACHE_HOME, where a cache cleanup would
+# delete them.
+export BUN_INSTALL="${XDG_DATA_HOME}/bun"
+export PATH="${BUN_INSTALL}/bin:${PATH}"
 
 # Keep $path/$PATH entries unique so re-sourcing / exec reloads don't duplicate them.
 typeset -U path PATH
