@@ -1,0 +1,16 @@
+" Vim 9.1.0327 and later read this file when there is no ~/.vimrc or
+" ~/.vim/vimrc. Older Vims ignore it and keep their own defaults.
+
+" A user vimrc stops Vim loading defaults.vim (syntax, filetype detection,
+" incsearch, the last cursor position), so load it first.
+unlet! skip_defaults_vim
+source $VIMRUNTIME/defaults.vim
+
+" History and netrw's bookmarks under XDG_STATE_HOME instead of ~/.viminfo
+" and ~/.vim.
+let s:state = (empty($XDG_STATE_HOME) ? $HOME .. '/.local/state' : $XDG_STATE_HOME) .. '/vim'
+if !isdirectory(s:state)
+    call mkdir(s:state, 'p', 0700)
+endif
+let &viminfofile = s:state .. '/viminfo'
+let g:netrw_home = s:state

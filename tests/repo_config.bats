@@ -299,6 +299,32 @@ tracked() {
     assert_output ""
 }
 
+@test "the vimrc keeps Vim's defaults and keeps its history under XDG_STATE_HOME" {
+    local vim
+    vim="$(command -v vim)" || skip "vim not installed"
+    mkdir -p "${TEST_TMPDIR}/home"
+
+    # The values the vimrc leaves set, as Vim sees them after loading it.
+    vim_settings() {
+        local out="${TEST_TMPDIR}/vim.out"
+        rm -f "${out}"
+        env -i HOME="${TEST_TMPDIR}/home" PATH=/usr/bin:/bin "$@" "${vim}" -Nu "${PROJECT_ROOT}/stow/common/.config/vim/vimrc" -es \
+            -c "call writefile([&viminfofile, g:netrw_home, &incsearch, &scrolloff], '${out}')" -c 'qa!' </dev/null
+        cat "${out}"
+    }
+
+    run vim_settings XDG_STATE_HOME="${TEST_TMPDIR}/state"
+    assert_success
+    assert_output "${TEST_TMPDIR}/state/vim/viminfo"$'\n'"${TEST_TMPDIR}/state/vim"$'\n'"1"$'\n'"5"
+    assert test -d "${TEST_TMPDIR}/state/vim"
+    [ "$(stat -c %a "${TEST_TMPDIR}/state/vim" 2>/dev/null || stat -f %Lp "${TEST_TMPDIR}/state/vim")" = 700 ]
+
+    # Without XDG_STATE_HOME, its default under the home.
+    run vim_settings
+    assert_success
+    assert_line --index 0 "${TEST_TMPDIR}/home/.local/state/vim/viminfo"
+}
+
 @test "zsh plugin list names GitHub repos, with optional antidote annotations" {
     run grep -Ev '^[[:space:]]*(#|$)|^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+( [a-z]+:[^ ]+)*$' \
         "${PROJECT_ROOT}/stow/common/.config/zsh/.zsh_plugins.txt"

@@ -172,6 +172,7 @@ This is process-level isolation, not a real container or VM.
 
 - Checks the shipped personas and roles: only settings `link.sh` knows, with valid values; their layers, Brewfiles, roles, setup scripts, and `requires` exist; every persona for this OS loads in `link.sh` without writing anything; every stow package and Brewfile is used; every detect command parses; a role's setup script has no detect line of its own
 - Parses every tracked JSON, TOML (examples too), YAML, and `.itermcolors` file, the zsh and bash startup files, and the zsh plugin list, skipping a check whose parser is missing
+- Runs Vim with the shipped vimrc: Vim's defaults still load, and history and netrw's bookmarks go under `XDG_STATE_HOME` (or `~/.local/state`) in a private `vim` folder
 
 [`test_helper.bash`](test_helper.bash)
 
