@@ -6,7 +6,7 @@
 # entries, DOTFILES_BREW_PICKS answers it); run on its own this installs core
 # and offers macos. Brewfiles are plain `brew bundle` files: an entry that only
 # applies to macOS says so with `if OS.mac?`. It also writes Homebrew's global
-# npmrc so npm never caches in ~/.npm. Nothing is upgraded here; os-update
+# npmrc so npm never caches in ~/.npm. Nothing is upgraded here; os-doctor
 # does that.
 
 set -euo pipefail

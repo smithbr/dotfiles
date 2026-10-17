@@ -127,7 +127,7 @@ check "zsh login exports XDG paths"  zsh -lc '[[ "${XDG_CONFIG_HOME}" == "${HOME
 check "default optional installs ran" bash -lc 'command -v docker && command -v tailscale && test -x ~/.local/bin/claude'
 check "vps persona saved"            grep -qx vps /home/tester/.local/state/dotfiles/persona
 check "agents clone failed cleanly"  test ! -e /home/tester/.config/agents
-check "tools layer linked"           test -L /home/tester/.local/bin/os-update
+check "tools layer linked"           test -L /home/tester/.local/bin/os-doctor
 
 exit "${fail}"
 GUEST

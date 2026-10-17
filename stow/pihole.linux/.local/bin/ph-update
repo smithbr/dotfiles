@@ -3,11 +3,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OS_UPDATE_SCRIPT="${SCRIPT_DIR}/os-update"
-# Linked into ~/.local/bin, os-update sits beside this script. Run from the
+OS_UPDATE_SCRIPT="${SCRIPT_DIR}/os-doctor"
+# Linked into ~/.local/bin, os-doctor sits beside this script. Run from the
 # repo, it is in the tools layer instead.
-if [[ ! -x "${OS_UPDATE_SCRIPT}" && -x "${SCRIPT_DIR}/../../../tools/.local/bin/os-update" ]]; then
-    OS_UPDATE_SCRIPT="$(cd "${SCRIPT_DIR}/../../../tools/.local/bin" && pwd)/os-update"
+if [[ ! -x "${OS_UPDATE_SCRIPT}" && -x "${SCRIPT_DIR}/../../../tools/.local/bin/os-doctor" ]]; then
+    OS_UPDATE_SCRIPT="$(cd "${SCRIPT_DIR}/../../../tools/.local/bin" && pwd)/os-doctor"
 fi
 
 # Root searches only system directories, never the caller's user-writable ones
@@ -36,7 +36,7 @@ Run the Pi-hole maintenance flow for this machine.
 
 | Step | Description |
 |------|-------------|
-| `os-update` | Run system package updates before privilege escalation |
+| `os-doctor` | Run system package updates before privilege escalation |
 | `Pi-hole` | Run `pihole -up` and `pihole -f` |
 
 ## Examples
@@ -59,7 +59,7 @@ Usage:
   ph-update -r
   ph-update --help
 
-Run os-update, refresh Pi-hole, and optionally restart Linux.
+Run os-doctor, refresh Pi-hole, and optionally restart Linux.
 EOF
 }
 
@@ -73,7 +73,7 @@ is_linux() {
 run_os_update() {
     if [[ "${EUID}" -eq 0 ]]; then
         if [[ -z "${SUDO_USER:-}" ]]; then
-            die "error: ph-update needs SUDO_USER set to run os-update as the calling user."
+            die "error: ph-update needs SUDO_USER set to run os-doctor as the calling user."
         fi
 
         sudo -u "${SUDO_USER}" env PATH="${PATH}" "${OS_UPDATE_SCRIPT}"
@@ -108,9 +108,9 @@ check_deps() {
     _header "Dependencies"
 
     if [[ ! -x "${OS_UPDATE_SCRIPT}" ]]; then
-        add_result "FAIL" "os-update helper is not executable"
+        add_result "FAIL" "os-doctor helper is not executable"
         add_next_step "Ensure ${OS_UPDATE_SCRIPT} exists and is executable"
-        _box "FAIL  os-update helper is not executable"$'\n'"Fix: Ensure ${OS_UPDATE_SCRIPT} exists and is executable"
+        _box "FAIL  os-doctor helper is not executable"$'\n'"Fix: Ensure ${OS_UPDATE_SCRIPT} exists and is executable"
         return 1
     fi
 
@@ -275,8 +275,8 @@ main() {
     if [[ "${PH_UPDATE_SKIP_OS_UPDATE:-0}" -eq 0 ]]; then
         run_step \
             "OS Update" \
-            "os-update completed" \
-            "os-update did not complete successfully" \
+            "os-doctor completed" \
+            "os-doctor did not complete successfully" \
             "Run ${OS_UPDATE_SCRIPT} directly and fix any reported update errors" \
             "Running ${OS_UPDATE_SCRIPT}" \
             run_os_update || true

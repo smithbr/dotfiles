@@ -476,15 +476,15 @@ MOCK
     done
 }
 
-@test "os-update displays help" {
-    run "${PROJECT_ROOT}/stow/tools/.local/bin/os-update" --help
+@test "os-doctor displays help" {
+    run "${PROJECT_ROOT}/stow/tools/.local/bin/os-doctor" --help
     assert_success
     assert_output --partial "Usage:"
-    assert_output --partial "os-update"
+    assert_output --partial "os-doctor"
     assert_output --partial "package-manager updates"
 }
 
-@test "os-update runs linux apt and Homebrew updates" {
+@test "os-doctor runs linux apt and Homebrew updates" {
     mkdir -p "${TEST_TMPDIR}/.cache/Homebrew"
 
     cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
@@ -510,7 +510,7 @@ MOCK
     chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/apt-get" "${BIN_SANDBOX}/brew"
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        "${PROJECT_ROOT}/stow/tools/.local/bin/os-update"
+        "${PROJECT_ROOT}/stow/tools/.local/bin/os-doctor"
     assert_success
     assert_output --partial "sudo apt-get update"
     assert_output --partial "sudo apt-get full-upgrade -y"
@@ -522,7 +522,7 @@ MOCK
     [[ ! -d "${TEST_TMPDIR}/.cache/Homebrew" ]]
 }
 
-@test "os-update runs macOS system and Homebrew updates" {
+@test "os-doctor runs macOS system and Homebrew updates" {
     mkdir -p "${TEST_TMPDIR}/Applications/Xcode.app"
     mkdir -p "${TEST_TMPDIR}/Library/Caches/Homebrew"
 
@@ -578,7 +578,7 @@ MOCK
         PATH="${BIN_SANDBOX}:/usr/bin:/bin" \
         OSTYPE="darwin24" \
         XCODE_APP_PATH="${TEST_TMPDIR}/Applications/Xcode.app" \
-        "${PROJECT_ROOT}/stow/tools/.local/bin/os-update"
+        "${PROJECT_ROOT}/stow/tools/.local/bin/os-doctor"
     assert_success
     assert_output --partial "sudo softwareupdate --install --all"
     assert_output --partial "mas upgrade"
@@ -589,7 +589,7 @@ MOCK
     [[ ! -d "${TEST_TMPDIR}/Library/Caches/Homebrew" ]]
 }
 
-@test "os-update updates zsh plugins through Homebrew's antidote" {
+@test "os-doctor updates zsh plugins through Homebrew's antidote" {
     local prefix="${TEST_TMPDIR}/brew-prefix"
     mkdir -p "${prefix}/opt/antidote/share/antidote" "${TEST_TMPDIR}/.cache/Homebrew"
     : > "${prefix}/opt/antidote/share/antidote/antidote.zsh"
@@ -612,13 +612,13 @@ MOCK
 
     run env -u ANTIDOTE_HOME PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
         HOME="${TEST_TMPDIR}" XDG_CACHE_HOME="${TEST_TMPDIR}/.cache" APT_GET_BIN=no-apt-get \
-        "${PROJECT_ROOT}/stow/tools/.local/bin/os-update"
+        "${PROJECT_ROOT}/stow/tools/.local/bin/os-doctor"
     assert_success
     assert_line "zsh ANTIDOTE_HOME=${TEST_TMPDIR}/.cache/antidote args=-fc source \"\$1\" && antidote update zsh ${prefix}/opt/antidote/share/antidote/antidote.zsh"
     assert_output --partial "PASS  zsh plugin updates completed"
 }
 
-@test "os-update skips zsh plugins when antidote is not installed" {
+@test "os-doctor skips zsh plugins when antidote is not installed" {
     cat > "${BIN_SANDBOX}/zsh" <<'MOCK'
 #!/usr/bin/env bash
 printf 'zsh called\n'
@@ -627,16 +627,16 @@ MOCK
 
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
         APT_GET_BIN=no-apt-get BREW_BIN=no-brew ANTIDOTE_ZSH="${TEST_TMPDIR}/missing/antidote.zsh" \
-        "${PROJECT_ROOT}/stow/tools/.local/bin/os-update"
+        "${PROJECT_ROOT}/stow/tools/.local/bin/os-doctor"
     assert_success
     refute_output --partial "zsh called"
     assert_output --partial "antidote not installed; skipping zsh plugin updates"
 }
 
-@test "os-update sources the repo common.sh through its stow symlink, not a planted one" {
+@test "os-doctor sources the repo common.sh through its stow symlink, not a planted one" {
     local home="${TEST_TMPDIR}/home"
     mkdir -p "${home}/.local/bin" "${TEST_TMPDIR}/scripts"
-    ln -s "${PROJECT_ROOT}/stow/tools/.local/bin/os-update" "${home}/.local/bin/os-update"
+    ln -s "${PROJECT_ROOT}/stow/tools/.local/bin/os-doctor" "${home}/.local/bin/os-doctor"
 
     # Three levels above the link: the path the old lookup sourced.
     cat > "${TEST_TMPDIR}/scripts/common.sh" <<'PLANTED'
@@ -665,14 +665,14 @@ MOCK
 
     run env -u XDG_CONFIG_HOME -u DOTFILES_DIR HOME="${home}" \
         TEST_TMPDIR="${TEST_TMPDIR}" PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-        "${home}/.local/bin/os-update"
+        "${home}/.local/bin/os-doctor"
     assert_success
     assert_output --partial "brew update xdg=${home}/.config"
     refute_output --partial "PLANTED"
     [[ ! -e "${TEST_TMPDIR}/planted-ran" ]]
 }
 
-@test "os-update refuses to clear a Homebrew cache path that is not a Homebrew directory" {
+@test "os-doctor refuses to clear a Homebrew cache path that is not a Homebrew directory" {
     local home="${TEST_TMPDIR}/home"
     local reply=""
     mkdir -p "${home}" "${TEST_TMPDIR}/other-cache"
@@ -708,7 +708,7 @@ MOCK
     for reply in "" "/" "${home}" "${TEST_TMPDIR}/other-cache"; do
         run env HOME="${home}" TEST_TMPDIR="${TEST_TMPDIR}" BREW_CACHE_REPLY="${reply}" \
             PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
-            "${PROJECT_ROOT}/stow/tools/.local/bin/os-update"
+            "${PROJECT_ROOT}/stow/tools/.local/bin/os-doctor"
         assert_success
         assert_output --partial "not clearing unexpected Homebrew cache path"
         [[ ! -e "${TEST_TMPDIR}/rm.log" ]]
@@ -849,10 +849,10 @@ pihole-FTL --config webserver.tls.cert /etc/pihole/a.test.pem"
     assert_output --partial "Usage:"
     assert_output --partial "ph-update"
     assert_output --partial "ph-update -r"
-    assert_output --partial "Run os-update, refresh Pi-hole, and optionally restart Linux"
+    assert_output --partial "Run os-doctor, refresh Pi-hole, and optionally restart Linux"
 }
 
-@test "ph-update runs os-update before self-elevating through sudo" {
+@test "ph-update runs os-doctor before self-elevating through sudo" {
     cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
 #!/usr/bin/env bash
 printf 'sudo %s\n' "$*"
@@ -922,7 +922,7 @@ MOCK
 
 @test "ph-update restarts Linux after a successful run when -r is set" {
     local probe_script="${TEST_TMPDIR}/ph-update"
-    ln -sf "${PROJECT_ROOT}/stow/tools/.local/bin/os-update" "${TEST_TMPDIR}/os-update"
+    ln -sf "${PROJECT_ROOT}/stow/tools/.local/bin/os-doctor" "${TEST_TMPDIR}/os-doctor"
 
     sed 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
         "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-update" > "${probe_script}"
@@ -954,7 +954,7 @@ MOCK
 
 @test "ph-update -r does not restart Linux when the Pi-hole update fails" {
     local probe_script="${TEST_TMPDIR}/ph-update"
-    ln -sf "${PROJECT_ROOT}/stow/tools/.local/bin/os-update" "${TEST_TMPDIR}/os-update"
+    ln -sf "${PROJECT_ROOT}/stow/tools/.local/bin/os-doctor" "${TEST_TMPDIR}/os-doctor"
     sed 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
         "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-update" > "${probe_script}"
     chmod +x "${probe_script}"
@@ -978,7 +978,7 @@ MOCK
     [ ! -e "${TEST_TMPDIR}/shutdown.log" ]
 }
 
-@test "ph-update fails before os-update when pihole is unavailable" {
+@test "ph-update fails before os-doctor when pihole is unavailable" {
     cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
 #!/usr/bin/env bash
 printf 'sudo %s\n' "$*"
@@ -1003,7 +1003,7 @@ MOCK
 
     [[ ! -e /usr/local/bin/pihole && ! -e /usr/bin/pihole ]] || skip "pihole is installed on this host"
 
-    # Take the root branch without being root; stay out of os-update and sudo.
+    # Take the root branch without being root; stay out of os-doctor and sudo.
     sed -e 's/^if (( EUID == 0 )); then$/if true; then/' \
         -e 's/if \[\[ "${EUID}" -ne 0 \]\]; then/if false; then/' \
         "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-update" > "${probe_script}"

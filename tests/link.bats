@@ -1367,7 +1367,7 @@ persona_state() {
     DEST="${TEST_TMPDIR}/mini-home"
     run_link --persona server
     assert_success
-    [ -L "${DEST}/.local/bin/os-update" ]
+    [ -L "${DEST}/.local/bin/os-doctor" ]
     [ ! -e "${DEST}/.local/bin/ph-update" ]
 
     DEST="${TEST_TMPDIR}/vps-home"

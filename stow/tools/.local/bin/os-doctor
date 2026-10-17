@@ -22,7 +22,7 @@ usage() {
     local help_text
 
     help_text="$(cat <<'EOF'
-# os-update
+# os-doctor
 
 Run operating system and package-manager updates for this machine.
 
@@ -37,7 +37,7 @@ Run operating system and package-manager updates for this machine.
 
 ## Examples
 
-- `os-update`: run the full update flow for the current platform
+- `os-doctor`: run the full update flow for the current platform
 EOF
 )"
 
@@ -48,8 +48,8 @@ EOF
 
     cat <<'EOF'
 Usage:
-  os-update
-  os-update --help
+  os-doctor
+  os-doctor --help
 
 Run operating system and package-manager updates for this machine.
 EOF
@@ -105,7 +105,7 @@ platform_label() {
 print_intro() {
     local section=""
 
-    _header "os-update"
+    _header "os-doctor"
     section+="Platform: $(platform_label)"
     section+=$'\n'"apt-get: ${APT_GET_BIN}"
     section+=$'\n'"brew: ${BREW_BIN}"
@@ -418,10 +418,10 @@ main() {
             ;;
         *)
             add_result "FAIL" "Unsupported OS: ${OSTYPE}"
-            add_next_step "Run os-update on macOS or Linux"
+            add_next_step "Run os-doctor on macOS or Linux"
             printf '\n'
             _header "Platform"
-            _box "FAIL  Unsupported OS: ${OSTYPE}"$'\n'"Fix: Run os-update on macOS or Linux"
+            _box "FAIL  Unsupported OS: ${OSTYPE}"$'\n'"Fix: Run os-doctor on macOS or Linux"
             print_summary
             exit 1
             ;;
