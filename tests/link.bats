@@ -1512,7 +1512,7 @@ persona_state() {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     run_link --persona home
     assert_success
-    [ -L "${DEST}/.config/ghostty/config" ]
+    assert test -L "${DEST}/.config/ghostty/config.ghostty"
     [ -L "${DEST}/.local/bin/sshkey" ]
     [ -L "${DEST}/.local/bin/df-deploy" ]
     [ ! -e "${DEST}/.local/bin/ph-update" ]
@@ -1693,7 +1693,8 @@ plant_single_layer_links() {
     refute_output --partial "Backed up"
     [ "$(readlink "${DEST}/.local/bin/sshkey")" = "../../.dotfiles/stow/tools/.local/bin/sshkey" ] \
         || [ "$(cd "${DEST}/.local/bin" && cd -P "$(dirname "$(readlink sshkey)")" && pwd)" = "${PROJECT_ROOT}/stow/tools/.local/bin" ]
-    [ -e "${DEST}/.config/ghostty/config" ]
+    assert test -L "${DEST}/.config/ghostty/config.ghostty"
+    refute test -L "${DEST}/.config/ghostty/config"
     [ ! -L "${DEST}/.local/bin/ph-update" ]
     [ ! -L "${DEST}/.local/bin/ph-backup" ]
     [ ! -e "${DEST}/.local/state/dotfiles/clobbered" ]

@@ -1,0 +1,33 @@
+# ============================================
+# Ghostty - configuration
+# ============================================
+# Copy to: ~/.config/ghostty/config
+# Reload: Cmd+Shift+, (macOS)
+# View options: ghostty +show-config --default --docs
+
+# Appearance
+adjust-cell-height = 2
+background-opacity = 0.9
+font-family = Jetbrains Mono Nerd Font
+font-size = 14
+font-thicken = false
+minimum-contrast = 3
+scrollback-limit = 25000000
+theme = dark:Catppuccin Frappe,light:Catppuccin Latte
+unfocused-split-opacity = 0.55
+window-height = 40
+window-theme = system
+window-width = 110
+
+# Misc settings
+clipboard-paste-bracketed-safe = true
+clipboard-paste-protection = true
+desktop-notifications = false
+quit-after-last-window-closed = true
+
+# SSH fixes
+shell-integration-features = ssh-env
+shell-integration-features = ssh-terminfo
+
+# Keybindings
+keybind = super+shift+r=reload_config
