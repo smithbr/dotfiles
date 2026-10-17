@@ -1271,6 +1271,94 @@ linked_package_path() {
     grep -q 'stow/common/.local/bin/tool' "${FIXTURE}/tests/check"
 }
 
+@test "mv renames the repo file of a link renamed in ~ and keeps its layer" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_move_fixture
+    mv "${DEST}/.config/app/config" "${DEST}/.config/app/settings"
+
+    run_fixture_link --dry-run mv "${DEST}/.config/app/settings" < /dev/null
+    assert_success
+    assert_output --partial "Would move stow/common/.config/app/config to stow/common/.config/app/settings and relink ~/.config/app/settings"
+    [ -z "$(git -C "${FIXTURE}" status --porcelain)" ]
+
+    run_fixture_link mv "${DEST}/.config/app/settings" < /dev/null
+    assert_success
+    assert_output --partial "Moved stow/common/.config/app/config to stow/common/.config/app/settings; ~/.config/app/settings links there"
+    assert_output --partial "Renamed 1 file(s) in the repo to match ~"
+    refute_output --partial "Layer to move"
+    [ "$(cat "${DEST}/.config/app/settings")" = a ]
+    [ "$(linked_package_path "${DEST}/.config/app/settings")" = stow/common/.config/app/settings ]
+    run git -C "${FIXTURE}" diff --cached -M --name-status
+    assert_output "$(printf 'R100\tstow/common/.config/app/config\tstow/common/.config/app/settings')"
+
+    # The next link run keeps the new name and brings back nothing at the old one.
+    run_fixture_link
+    assert_success
+    [ ! -e "${DEST}/.config/app/config" ] && [ ! -L "${DEST}/.config/app/config" ]
+    [ "$(linked_package_path "${DEST}/.config/app/settings")" = stow/common/.config/app/settings ]
+    [ ! -e "${DEST}/.local/state/dotfiles/clobbered" ]
+}
+
+@test "mv still asks for the layer of a renamed file on a terminal, defaulting to its own" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_move_fixture
+    mv "${DEST}/.config/app/config" "${DEST}/.config/app/settings"
+    mv "${DEST}/.config/app/themes/dark" "${DEST}/.config/app/themes/night"
+
+    run_fixture_link_on_tty "" mv "${DEST}/.config/app/settings"
+    assert_success
+    assert_output --partial "Layer to move the files to"
+    assert_output --partial "Choice [common]"
+    assert_output --partial "Renamed 1 file(s) in the repo to match ~"
+    [ "$(linked_package_path "${DEST}/.config/app/settings")" = stow/common/.config/app/settings ]
+
+    run_fixture_link_on_tty extra mv "${DEST}/.config/app/themes/night"
+    assert_success
+    assert_output --partial "Moved 1 file(s) to layer extra"
+    [ "$(linked_package_path "${DEST}/.config/app/themes/night")" = stow/extra/.config/app/themes/night ]
+    [ "$(cat "${DEST}/.config/app/themes/night")" = b ]
+}
+
+@test "mv follows a link moved to another depth, whose old text no longer resolves" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_move_fixture
+    mv "${DEST}/.local/bin/tool" "${DEST}/.config/tool"
+    [ ! -e "${DEST}/.config/tool" ]
+
+    run_fixture_link mv "${DEST}/.config/tool" < /dev/null
+    assert_success
+    [ -x "${DEST}/.config/tool" ]
+    [ "$(cat "${DEST}/.config/tool")" = "$(printf '#!/bin/sh\necho tool')" ]
+    [ "$(linked_package_path "${DEST}/.config/tool")" = stow/common/.config/tool ]
+    [[ "$(readlink "${DEST}/.config/tool")" != /* ]]
+    [ ! -e "${FIXTURE}/stow/common/.local" ]
+}
+
+@test "mv follows a renamed directory, and --layer changes the layer too" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_move_fixture
+    mv "${DEST}/.config/app" "${DEST}/.config/app2"
+
+    run_fixture_link mv --layer extra "${DEST}/.config/app2" < /dev/null
+    assert_success
+    [ "$(linked_package_path "${DEST}/.config/app2/config")" = stow/extra/.config/app2/config ]
+    [ "$(linked_package_path "${DEST}/.config/app2/themes/dark")" = stow/extra/.config/app2/themes/dark ]
+    [ "$(cat "${DEST}/.config/app2/themes/dark")" = b ]
+    [ ! -e "${FIXTURE}/stow/common/.config/app" ]
+}
+
+@test "mv refuses a rename that add would refuse, with nothing changed" {
+    command -v stow >/dev/null 2>&1 || skip "stow not installed"
+    make_move_fixture
+    mv "${DEST}/.config/app/config" "${DEST}/.config/app/config.local"
+
+    run_fixture_link mv "${DEST}/.config/app/config.local" < /dev/null
+    assert_failure
+    assert_output --partial "Not moving ~/.config/app/config.local: a .local file holds this machine's overrides"
+    [ -z "$(git -C "${FIXTURE}" status --porcelain)" ]
+    [ -f "${FIXTURE}/stow/common/.config/app/config" ]
+}
+
 # ---------------------------------------------------------------------------
 # Personas
 # ---------------------------------------------------------------------------

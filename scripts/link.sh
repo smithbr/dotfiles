@@ -136,7 +136,10 @@ Commands:
             managed link in it)
   mv PATH...
             Move linked files to another layer: git mv each repo file there,
-            then relink it (a directory moves every managed link in it)
+            then relink it (a directory moves every managed link in it).
+            A link already moved or renamed in ~ renames its repo file to
+            match; the layer prompt defaults to its current layer, and
+            without a terminal the file stays in it
 
 Options:
   -n, --dry-run           Report what would change without touching anything
@@ -1569,7 +1572,7 @@ layer_description() {
 # $1, each layer described from the tree. Only layers this persona links
 # qualify, so the files stay linked right here.
 choose_add_layer() {
-    local title="${1:-Layer for the new files}" layer width=0
+    local title="${1:-Layer for the new files}" default="${2:-}" layer width=0
     local -a layers=() choices=()
     read -r -a layers <<< "${PERSONA_LAYERS}"
 
@@ -1590,7 +1593,7 @@ choose_add_layer() {
     for layer in "${layers[@]}"; do
         choices+=("$(layer_description "${layer}" "${width}")"$'\t'"${layer}")
     done
-    ADD_LAYER="$(choose_one "${title}" "" "${choices[@]}")"
+    ADD_LAYER="$(choose_one "${title}" "${default}" "${choices[@]}")"
     if [[ -z "${ADD_LAYER}" ]]; then
         log_error "No layer chosen; nothing changed"
         exit 1
@@ -1699,6 +1702,27 @@ stow_link_source() {
     printf '%s\n' "${destination#"${REPO}"/}"
 }
 
+# The repo file (stow/<package>/...) a link stands for after it was moved or
+# renamed in the home directory. A relative link moved to another depth no
+# longer resolves, so its text is searched for a stow/ part that names a file
+# in this repo.
+moved_link_source() {
+    local text rest
+    stow_link_source "$1" && return 0
+    [[ -L "$1" ]] || return 1
+    text="$(readlink "$1")"
+    rest="${text}"
+    while [[ "${rest}" == *stow/* ]]; do
+        rest="stow/${rest#*stow/}"
+        if [[ "${rest}" == stow/*/* && -f "${REPO}/${rest}" && ! -L "${REPO}/${rest}" ]]; then
+            printf '%s\n' "${rest}"
+            return 0
+        fi
+        rest="${rest#stow/}"
+    done
+    return 1
+}
+
 # Why rm and mv will not take a path that is not a link into the repo's stow/.
 link_refusal() {
     local path="$1" relative="$2" dir
@@ -1725,7 +1749,8 @@ link_refusal() {
 # or every such link under a directory. Every other path is refused, each one
 # reported (Not $1 ~/PATH) before any change.
 collect_linked_files() {
-    local verb="$1" path absolute link source real_dest relative refused=0
+    local verb="$1" path absolute link source real_dest relative refused=0 finder=stow_link_source
+    [[ "${verb}" != moving ]] || finder=moved_link_source
     real_dest="$(cd -P "${DEST}" && pwd)"
     for path in "${path_args[@]}"; do
         if [[ ! -e "${path}" && ! -L "${path}" ]]; then
@@ -1746,10 +1771,10 @@ collect_linked_files() {
         relative="${absolute#"${real_dest}"/}"
         if [[ -d "${absolute}" && ! -L "${absolute}" ]]; then
             while IFS= read -r link; do
-                source="$(stow_link_source "${link}")" || continue
+                source="$("${finder}" "${link}")" || continue
                 printf '%s|%s\n' "${link#"${real_dest}"/}" "${source}"
             done < <(find "${absolute}" -type l)
-        elif source="$(stow_link_source "${absolute}")"; then
+        elif source="$("${finder}" "${absolute}")"; then
             printf '%s|%s\n' "${relative}" "${source}"
         else
             log_error "Not ${verb} ~/${relative}: $(link_refusal "${absolute}" "${relative}")"
@@ -1883,8 +1908,20 @@ moved_link_text() {
     fi
 }
 
+# Relative link text from the directory FROM to the path TO, both absolute
+# and physical, as stow writes it.
+relative_link() {
+    local from="$1" to="$2" up=""
+    while [[ "${from}" != / && "${to}" != "${from}/"* ]]; do
+        from="$(dirname "${from}")"
+        up="../${up}"
+    done
+    printf '%s%s\n' "${up}" "${to#"${from%/}"/}"
+}
+
 move_files() {
-    local files entry relative source dest old new inner target tmp refused=0 refs owners
+    local files entry relative source dest old new inner target tmp reason refused=0 refs owners
+    local change_layer=0 renames=0 same_layer=1 current=""
     local -a entries=() moves=()
 
     files="$(collect_linked_files moving)" || exit 1
@@ -1895,31 +1932,54 @@ move_files() {
         log_error "No managed files to move"
         exit 1
     fi
-    choose_add_layer "Layer to move the files to"
+    # A link moved or renamed in ~ takes its repo file along to the new path.
+    # On a terminal the layer is still asked, defaulting to the files' current
+    # one; without one, renamed files stay in their layer, and a file that
+    # stays put needs --layer.
+    [[ -z "${ADD_LAYER}" && "${ADD_PLATFORM}" -eq 0 && "${MOVE_NO_PLATFORM}" -eq 0 ]] || change_layer=1
+    [[ ! -t 0 ]] || change_layer=1
+    for entry in "${entries[@]}"; do
+        relative="${entry%%|*}" source="${entry#*|}"
+        old="${source#stow/}"
+        [[ "${relative}" != "${old#*/}" ]] || change_layer=1
+        old="${old%%/*}"
+        old="${old%%.*}"
+        [[ -z "${current}" || "${current}" == "${old}" ]] && current="${old}" || current="-"
+    done
+    [[ "${current}" != - ]] || current=""
+    [[ "${change_layer}" -eq 0 ]] || choose_add_layer "Layer to move the files to" "${current}"
 
-    # Each file keeps its path inside the package; the package changes to the
-    # layer, or its part for this OS when asked or when the file is in one.
+    # Each file takes its path in ~ inside the package; the package changes to
+    # the layer, or its part for this OS when asked or when the file is in one.
     for entry in "${entries[@]}"; do
         relative="${entry%%|*}" source="${entry#*|}"
         old="${source#stow/}"
         old="${old%%/*}"
         inner="${source#stow/"${old}"/}"
-        if [[ "${ADD_PLATFORM}" -eq 1 ]]; then
+        if [[ "${change_layer}" -eq 0 ]]; then
+            new="${old}"
+        elif [[ "${ADD_PLATFORM}" -eq 1 ]]; then
             new="${ADD_LAYER}.$(platform)"
         elif [[ "${MOVE_NO_PLATFORM}" -eq 0 && "${old}" == *.* ]]; then
             new="${ADD_LAYER}.${old#*.}"
         else
             new="${ADD_LAYER}"
         fi
-        dest="stow/${new}/${inner}"
-        if [[ "${new}" == "${old}" ]]; then
+        dest="stow/${new}/${relative}"
+        reason=""
+        [[ "${relative}" == "${inner}" ]] || reason="$(add_refusal "${relative}" "${REPO}/${source}")"
+        if [[ "${new}" == "${old}" && "${relative}" == "${inner}" ]]; then
             log_error "Not moving ~/${relative}: already in stow/${old}"
             refused=1
         elif [[ -e "${REPO}/${dest}" || -L "${REPO}/${dest}" ]]; then
             log_error "Not moving ~/${relative}: ${dest} already exists"
             refused=1
+        elif [[ -n "${reason}" ]]; then
+            log_error "Not moving ~/${relative}: ${reason}"
+            refused=1
         else
             moves+=("${relative}|${source}|${dest}")
+            [[ "${new}" == "${old}" ]] || same_layer=0
         fi
     done
     [[ "${refused}" -eq 0 ]] || exit 1
@@ -1941,7 +2001,12 @@ move_files() {
         mkdir -p "$(dirname "${REPO}/${dest}")"
         cp -p "${REPO}/${source}" "${REPO}/${dest}"
         tmp="$(dirname "${target}")/.df-mv.$$"
-        ln -s "$(moved_link_text "${target}" "${old%%/*}" "${new%%/*}" "${source#stow/*/}")" "${tmp}"
+        if [[ "${old#*/}" == "${new#*/}" ]]; then
+            ln -s "$(moved_link_text "${target}" "${old%%/*}" "${new%%/*}" "${source#stow/*/}")" "${tmp}"
+        else
+            ln -s "$(relative_link "$(cd -P "$(dirname "${target}")" && pwd)" "${REPO}/${dest}")" "${tmp}"
+            renames=$((renames + 1))
+        fi
         mv -f "${tmp}" "${target}"
         if repo_tracks "${source}"; then
             git -C "${REPO}" mv -f -- "${source}" "${dest}"
@@ -1962,6 +2027,11 @@ move_files() {
         done
     fi
 
+    if [[ "${same_layer}" -eq 1 ]]; then
+        printf 'Renamed %d file(s) in the repo to match ~. Commit with: git -C %s commit\n' "${renames}" "${REPO}"
+        printf 'Other machines link the new paths and drop the old links on their next df-link or df-deploy.\n'
+        return 0
+    fi
     printf 'Moved %d file(s) to layer %s. Commit with: git -C %s commit\n' "${#moves[@]}" "${ADD_LAYER}" "${REPO}"
     owners="$(layer_owners "${ADD_LAYER}")"
     if [[ "${owners}" == "every persona" ]]; then
