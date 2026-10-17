@@ -2,10 +2,10 @@
 
 These rules apply throughout this repository. Before changing a directory, read its `README.md`: it says how that part works, and its rules apply there too.
 
-- [`scripts/`](scripts/README.md): `link.sh`, the `df-*` wrappers, `brew-add.sh`, and the file review and cleanup.
+- [`scripts/`](scripts/README.md): `link.sh`, the `df-*` wrappers, `brew-add.sh`, and `df-doctor` (`doctor.sh`), the machine check and cleanup.
 - [`roles/`](roles/README.md): what a machine is for (a Pi-hole), chosen in the install and applied last with the optional installs (Docker, Tailscale, Claude Code), which every persona gets on by default.
 - [`scripts/bootstrap/`](scripts/bootstrap/README.md): OS bootstrap, optional Linux installs, `iterm2.sh`, and `harden.sh` with its check `harden-test.sh` for servers.
-- [`stow/`](stow/README.md): layers, where a new file goes, git identity, iTerm2's profile and `st`, `home-audit`, `df-deploy`.
+- [`stow/`](stow/README.md): layers, where a new file goes, git identity, iTerm2's profile and `st`, `df-deploy`.
 - [`homebrew/`](homebrew/README.md): which package manager and Brewfile a package belongs in.
 - [`seed/`](seed/README.md) and [`editors/`](editors/README.md): copied-once app config and shared editor settings.
 - [`tests/`](tests/README.md): what each suite covers and how tests are written.

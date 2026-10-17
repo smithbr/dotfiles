@@ -90,8 +90,8 @@ stat_mode() {
 
     [ -L "${DEST}/.zshenv" ]
     [ -L "${DEST}/.config/git/config" ]
-    [ -L "${DEST}/.local/bin/home-audit" ]
-    [ -x "${DEST}/.local/bin/home-audit" ]
+    [ -L "${DEST}/.local/bin/df-doctor" ]
+    [ -x "${DEST}/.local/bin/df-doctor" ]
     [ "$(cat "${DEST}/.zshenv")" = "$(cat "$(package_file common/.zshenv)")" ]
     # --no-folding: directories stay real, so apps cannot write into the repo.
     [ -d "${DEST}/.config" ] && [ ! -L "${DEST}/.config" ]
@@ -1453,6 +1453,7 @@ dest_git_config() {
     run_link --persona work
     assert_success
     assert_output --partial "${DEST}/.gitconfig sets [user]"
+    assert_output --partial "then archive it with df-doctor"
     run_link --persona work status
     assert_line "shadowed ${DEST}/.gitconfig"
     [ "$(cat "${DEST}/.gitconfig")" = "$(printf '[user]\n    email = old@example.com')" ]

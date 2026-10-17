@@ -3181,16 +3181,15 @@ fake_df_repo() {
     assert_output --partial "/fake repo/scripts/link.sh|mv|--layer|tools|a file|"
 }
 
-@test "df-file-review runs the cleanup review by default and passes arguments through" {
-    fake_df_repo df-file-review file-review.sh
-    run "${TEST_TMPDIR}/home/.local/bin/df-file-review"
+@test "df-doctor runs its repo's doctor.sh with every argument" {
+    fake_df_repo df-doctor doctor.sh
+    run "${TEST_TMPDIR}/home/.local/bin/df-doctor"
     assert_success
-    assert_output --partial "/fake repo/scripts/file-review.sh|--cleanup|"
+    assert_output --regexp "/fake repo/scripts/doctor\.sh\|$"
 
-    run "${TEST_TMPDIR}/home/.local/bin/df-file-review" --all
+    run "${TEST_TMPDIR}/home/.local/bin/df-doctor" --fix --all
     assert_success
-    assert_output --partial "file-review.sh|--all|"
-    refute_output --partial "--cleanup"
+    assert_output --partial "doctor.sh|--fix|--all|"
 }
 
 # Sets up a fake remote machine for df-deploy: an origin repo with a link.sh that logs its

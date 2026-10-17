@@ -368,7 +368,7 @@ apply_dotfiles() {
     log_info "Linking complete"
 }
 
-# The archive picker needs a real terminal and a run that may change files;
+# df-doctor's --fix questions need a real terminal and a run that may change files;
 # stow's own simulate flags make the whole install a dry run.
 file_cleanup_is_interactive() {
     local index=0
@@ -385,20 +385,20 @@ file_cleanup_is_interactive() {
 }
 
 # Report only: this runs boxed, which holds output until it exits, so it must
-# never prompt. A failed review clears offer_cleanup so no picker follows.
+# never prompt. A failed check clears offer_cleanup so no questions follow.
 review_existing_files() {
-    local -a review_args=(--source "${BASEDIR}")
+    local -a review_args=(--source "${BASEDIR}" --report)
 
-    [[ "${offer_cleanup:-0}" -eq 1 ]] && review_args+=(--no-cleanup-hint)
-    if ! bash "${BASEDIR}/scripts/file-review.sh" "${review_args[@]}"; then
+    [[ "${offer_cleanup:-0}" -eq 1 ]] && review_args+=(--no-hint)
+    if ! bash "${BASEDIR}/scripts/doctor.sh" "${review_args[@]}"; then
         offer_cleanup=0
         log_warn "File review incomplete; inspect the errors above before cleaning up"
     fi
 }
 
-# Unboxed so the picker can draw on the terminal.
+# Unboxed so df-doctor's --fix questions can draw on the terminal.
 select_files_to_archive() {
-    if ! bash "${BASEDIR}/scripts/file-review.sh" --source "${BASEDIR}" --select; then
+    if ! bash "${BASEDIR}/scripts/doctor.sh" --source "${BASEDIR}" --fix-only; then
         log_warn "File cleanup did not finish; inspect the errors above"
     fi
 }
@@ -470,7 +470,7 @@ prompt_persona() {
 }
 
 # Settle the persona before anything changes, and pass it on to link.sh and
-# file-review.sh through the environment. A terminal is asked until a choice
+# doctor.sh through the environment. A terminal is asked until a choice
 # is saved, and again with --reconfigure.
 resolve_persona() {
     local resolved name source

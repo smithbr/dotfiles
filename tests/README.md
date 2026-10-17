@@ -97,7 +97,7 @@ This is process-level isolation, not a real container or VM.
 - Runs `os-update` and `ph-sec-audit` against mocked system tools
 - Runs `ts-test` in a fully mocked sandbox
 - Runs `sshkey` help, local key creation, and cleanup flows inside an isolated home directory; `delete` only once confirmed, `--dry-run` refused outside `cleanup` (it would skip the confirmation), the protected `id_rsa` never deleted, recreated, or touched by `cleanup` unless `SSHKEY_PROTECTED_LOCAL_KEY_NAME=''`, and an orphaned private key removed
-- Runs `df-link`, `df-rm`, `df-mv`, and `df-file-review` through a stow-style link into a fake repo: arguments pass through (`df-rm` as `link.sh rm`, `df-mv` as `link.sh mv`), `df-file-review` defaults to `--cleanup`, and a wrapper outside a repo fails clearly
+- Runs `df-link`, `df-rm`, `df-mv`, and `df-doctor` through a stow-style link into a fake repo: arguments pass through (`df-rm` as `link.sh rm`, `df-mv` as `link.sh mv`, `df-doctor` to `doctor.sh`), and a wrapper outside a repo fails clearly
 - Runs `df-deploy` with a stub `ssh` that runs the remote command against a scratch clone: pull and relink, every named or `DF_DEPLOY_HOSTS` host, a non-fast-forward pull failing that host before linking, a failed host not stopping the rest, dry runs, a missing host, and the unpushed-commit warning
 
 [`brew_add.bats`](brew_add.bats)
@@ -117,21 +117,15 @@ This is process-level isolation, not a real container or VM.
 - Tests `require_non_root`, `sudo_cmd`, `spin`, and `tool_installed` (a tool on PATH, in `~/.local/bin`, or under `HOMEBREW_PREFIX`, with Homebrew's usual prefixes as the fallback)
 - Tests what sourcing sets (`XDG_CONFIG_HOME` under `HOME`, only when `HOME` is set), `die` (stderr, exit 1, through gum when styled), the run summary (`add_result` counts, `add_next_step` keeps each step once), `prompt_mode` (`DOTFILES_PROMPT`, plain reads without a terminal), and the plain markers when stdout is captured
 
-[`file_review.bats`](file_review.bats)
+[`doctor.bats`](doctor.bats)
 
-- Exercises file inventory against a fixture repo, replaced links, broken managed links, and migration backup reporting
-- Explains a `~/.gitconfig` `[user]` that overrides `config.local`
-- Keeps a local file out of the review when the repo manages its `.example` (`teams.toml` beside `teams.toml.example`)
-- Verifies bulk archival preserves contents and symlinks, excludes protected paths, and is safe to repeat
-- Checks closed stdin, invalid selections, a failed inventory query, alternate destinations, and installer report integration
-- Verifies home dotfiles are grouped by `home-audit` verdict and the picker lists them in that order with their reasons
-
-[`home_audit.bats`](home_audit.bats)
-
-- Runs `home-audit` against a sandboxed home, a fixture xdg-ninja database, and a fixture dotfiles repo
-- Verifies JUNK/LEFTOVER/MOVE/REVIEW/KEEP classification, environment-redirect detection, and `--days`/`--all`
-- Checks that the audited home is left untouched and that missing data sources are reported, including a machine with no xdg-ninja at all
-- Verifies last-change ages in notes, the 1Password agent link and folder-to-command aliases, and `--tsv` output
+- Runs `scripts/doctor.sh` against a scratch home, a fixture repo, and fixture xdg-ninja data, with a new zsh's environment from the home's own `.zshenv`
+- Verifies the Links, Fix, Decide, and Ignore groups, the closing hint, `--all`, `--tsv`, `--explain` with xdg-ninja's full advice, `--days`, option errors, and that a report changes nothing
+- Classifies by xdg-ninja (export-only advice on a `how:` line, no XDG support, a stated move target only for that kind of entry and only once a new shell sets any variable the advice exports, an existing target left for a hand merge), by a new shell's redirect (the old copy, naming the variable whose path matches the entry), and by owner and last change
+- Lists config directly in `~/.config` and commands in `~/.local/bin` that the repo does not manage under Not in the repo (with owner, age, or link target; a stale unowned folder under Decide; the XDG places from a new shell), makes broken links and old zsh completion caches fixes, replaces control characters in names, and reports missing xdg-ninja data and an incomplete check (which offers no fixes)
+- The list of changes: Enter applies the Fix suggestions and skips the rest (`keep` still reads as skip); one line archives, adds (`link.sh add`), and ignores together; delete removes only after a yes and never follows a symlink; missing links get a `relink` row that runs `df-link` (skipped without GNU Stow); an unreadable line, `none`, closed stdin (no question printed), and nothing to fix change nothing; on macOS a test drives the terminal list through `script` with one key per change
+- Never touches managed parents, credentials, private agents, local overrides, or the repo; archives folders and links without following them, once; respects `--destination`; leaves files in a symlinked folder alone; refuses a symlinked archive, a move through a symlinked parent, and a move while a program has the files open
+- The installer's boxed report with closed stdin, its incomplete-check warning, and the unboxed `--fix-only` list after the report
 
 [`link.bats`](link.bats)
 

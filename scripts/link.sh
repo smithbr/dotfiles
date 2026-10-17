@@ -882,7 +882,7 @@ prune_stale_links() {
 
 BACKUP_DIR=""
 # Backups can hold credentials, so the directories are private and never
-# reached through a symlinked parent (as in file-review.sh's archive).
+# reached through a symlinked parent (as in doctor.sh's archive).
 backup_path() {
     local target="$1" relative="${1#"${DEST}"/}" parent backup_dir
     backup_dir="${BACKUP_DIR:-$(state_dir)/clobbered/$(date +%Y%m%d-%H%M%S)}"
@@ -1164,7 +1164,7 @@ warn_git_identity() {
     local state
     state="$(git_identity_state)"
     case "${state%% *}" in
-        shadowed) log_warn "${state#* } sets [user] and overrides ~/.config/git/config.local; move anything you need into config.local, then archive it with file-review.sh --cleanup" ;;
+        shadowed) log_warn "${state#* } sets [user] and overrides ~/.config/git/config.local; move anything you need into config.local, then archive it with df-doctor" ;;
         unset) log_warn "No git identity for persona '${PERSONA_NAME}': set name and email under [user] in ${state#* }" ;;
     esac
 }

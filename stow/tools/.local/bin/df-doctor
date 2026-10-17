@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Check this machine against the dotfiles repo: repo links that are off, then
+# what to fix, what to decide, and what to ignore. On a terminal a list
+# follows where each item gets keep, archive, delete, ignore, add to the repo,
+# or move, all applied at once; --help explains the rest. Every argument goes
+# to scripts/doctor.sh as it is.
+
+set -euo pipefail
+
+# The script lives at <repo>/stow/tools/.local/bin/df-doctor, reached through its stow link.
+repo="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../../.." && pwd)"
+if [[ ! -f "${repo}/scripts/doctor.sh" ]]; then
+    printf 'df-doctor: cannot find scripts/doctor.sh in %s\n' "${repo}" >&2
+    exit 1
+fi
+exec bash "${repo}/scripts/doctor.sh" "$@"

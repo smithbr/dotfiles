@@ -10,6 +10,7 @@ alias xdn="xdg-ninja --skip-ok --skip-unsupported"
 # shell
 alias c="claude"
 alias ddf="cd ~/.dotfiles"
+alias dfd="df-doctor"
 alias ff="fastfetch -c all"
 alias fish="asciiquarium"
 alias rl="exec ${SHELL} -l"
