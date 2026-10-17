@@ -109,6 +109,11 @@ Commands:
                      the TV's menus, run again to see what changed; reset
                      drops the saved snapshot
   clean              trim app caches and show the storage freed
+  apps               list the apps you installed, with version codes
+  install FILE.apk   sideload an app, or update one in place (needs Apps
+                     from unknown sources on)
+  uninstall PACKAGE  remove an app you installed and its data, after asking;
+                     built-in and core packages are refused
   reboot             restart the TV
   disconnect         drop the ADB connection
 
@@ -1032,6 +1037,68 @@ cmd_clean() {
     _check "App caches trimmed: $(((after - before) / 1024)) MB freed, $((after / 1024)) MB free"
 }
 
+# Apps installed after the factory image, "PACKAGE<TAB>VERSIONCODE". Amazon's
+# resource overlays (*.overlay.*, version 0) count as installed but belong to
+# the system, so they are left out.
+user_apps() {
+    adb_tv shell pm list packages -3 --show-versioncode | tr -d '\r' \
+        | sed -n 's/^package:\([^ ]*\) versionCode:\([0-9]*\)$/\1	\2/p' \
+        | { grep -v '\.overlay\.' || true; } \
+        | sort
+}
+
+cmd_apps() {
+    local apps pkg version
+
+    ensure_connected
+    apps="$(user_apps)" || die "Could not list the TV's apps"
+    if [[ -z "${apps}" ]]; then
+        _item "No apps installed beyond the built-in ones"
+        return 0
+    fi
+    while IFS=$'\t' read -r pkg version; do
+        printf '  %-44s %s\n' "${pkg}" "${version}"
+    done <<< "${apps}"
+}
+
+cmd_install() {
+    local file="$1" output
+
+    [[ "${file}" == *.apk ]] || die "Not an APK: ${file}"
+    [[ -f "${file}" ]] || die "No such file: ${file}"
+    ensure_connected
+    output="$(adb_tv install -r "${file}" 2>&1 | tr -d '\r' || true)"
+    case "${output}" in
+        *Success*) _check "Installed ${file##*/}" ;;
+        *INSTALL_FAILED_VERIFICATION_FAILURE*|*"unknown sources"*)
+            die "The TV refused ${file##*/}: turn on Developer options > Apps from unknown sources" ;;
+        *) die "Install failed: ${output}" ;;
+    esac
+}
+
+cmd_uninstall() {
+    local pkg="$1" answer output
+
+    [[ "${pkg}" =~ ^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$ ]] || die "Not a package name: ${pkg}"
+    [[ " ${CORE_PACKAGES} " != *" ${pkg} "* ]] || die "${pkg} is a core package the TV needs; firetv will not remove it"
+    [[ "${pkg}" != *.overlay.* ]] || die "${pkg} is a system resource overlay; firetv will not remove it"
+    ensure_connected
+    if ! user_apps | cut -f1 | grep -qxF "${pkg}"; then
+        if tv_packages | grep -qxF "${pkg}"; then
+            die "${pkg} is built in and can't be uninstalled; firetv disable ${pkg} turns it off instead"
+        fi
+        die "${pkg} is not on this TV"
+    fi
+    answer="$(choose_one "Uninstall ${pkg} and delete its data?" no $'Yes, uninstall\tyes' $'No\tno')"
+    if [[ "${answer}" != yes ]]; then
+        _skip "${pkg} kept"
+        return 0
+    fi
+    output="$(adb_tv uninstall "${pkg}" 2>&1 | tr -d '\r' || true)"
+    [[ "${output}" == *Success* ]] || die "Uninstall failed: ${output}"
+    _check "Uninstalled ${pkg}"
+}
+
 main() {
     parse_args "$@"
     case "${COMMAND}" in
@@ -1040,6 +1107,8 @@ main() {
         animations) ((${#COMMAND_ARGS[@]} <= 1)) || die "animations takes fast or normal (see firetv --help)" ;;
         tweak) ((${#COMMAND_ARGS[@]} == 2)) || die "Use: firetv tweak NAME on|off (see firetv tweaks)" ;;
         settings-diff) ((${#COMMAND_ARGS[@]} <= 1)) || die "settings-diff takes only reset" ;;
+        install) ((${#COMMAND_ARGS[@]} == 1)) || die "install takes one APK file (see firetv --help)" ;;
+        uninstall) ((${#COMMAND_ARGS[@]} == 1)) || die "uninstall takes one package (see firetv --help)" ;;
         *) ((${#COMMAND_ARGS[@]} == 0)) || die "${COMMAND} takes no arguments (see firetv --help)" ;;
     esac
     case "${COMMAND}" in
@@ -1054,6 +1123,9 @@ main() {
         tweak) cmd_tweak "${COMMAND_ARGS[@]}" ;;
         settings-diff) cmd_settings_diff ${COMMAND_ARGS[@]+"${COMMAND_ARGS[@]}"} ;;
         clean) cmd_clean ;;
+        apps) cmd_apps ;;
+        install) cmd_install "${COMMAND_ARGS[0]}" ;;
+        uninstall) cmd_uninstall "${COMMAND_ARGS[0]}" ;;
         reboot) ensure_connected; adb_tv reboot; _check "Rebooting ${FIRETV_HOST}" ;;
         disconnect) require_adb; "${ADB_BIN}" disconnect "${FIRETV_HOST}" ;;
         *) die "Unknown command: ${COMMAND} (see firetv --help)" ;;

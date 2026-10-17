@@ -3657,6 +3657,9 @@ case "$*" in
     "disconnect "*) rm -f "${FIRETV_STATE}/offline" ;;
     "shell getprop ro.product.model") printf 'AFTDEC012E\r\n' ;;
     "shell getprop ro.build.version.name") printf 'Fire OS 8.1.8.5 (RS8185/3885)\r\n' ;;
+    "shell pm list packages -3 --show-versioncode")
+        printf 'package:%s\r\n' 'com.netflix.ninja versionCode:27207' 'com.amazon.tv.settings.v2.overlay.localisation.common versionCode:0' \
+            $({ grep -v -E '^(com\.amazon|com\.example)' "${FIRETV_STATE}/installed" || true; } | sed 's/$/ versionCode:1/' | tr ' ' '#') | tr '#' ' ' ;;
     "shell pm list packages -d") sed 's/^/package:/' "${FIRETV_STATE}/disabled" ;;
     "shell pm list packages"*) sed 's/^/package:/' "${FIRETV_STATE}/installed" ;;
     # Settings as "NAMESPACE KEY VALUE" lines, the last one winning; "-" deletes.
@@ -3669,6 +3672,14 @@ case "$*" in
     "shell settings list "*)
         awk -v ns="$4" '$1 == ns { if (!($2 in v)) o[++n] = $2; v[$2] = $3 } END { for (i = 1; i <= n; i++) if (v[o[i]] != "-") printf "%s=%s\r\n", o[i], v[o[i]] }' \
             "${FIRETV_STATE}/settings" 2>/dev/null || true ;;
+    "install -r "*)
+        [[ "$3" != *broken* ]] || { printf 'Failure [INSTALL_PARSE_FAILED_NOT_APK]\n'; exit 1; }
+        basename "$3" .apk >> "${FIRETV_STATE}/installed"
+        printf 'Performing Streamed Install\r\nSuccess\r\n' ;;
+    "uninstall "*)
+        grep -vxF "$2" "${FIRETV_STATE}/installed" > "${FIRETV_STATE}/i.tmp" || true
+        mv "${FIRETV_STATE}/i.tmp" "${FIRETV_STATE}/installed"
+        printf 'Success\r\n' ;;
     "shell df -k /data")
         printf 'Filesystem 1K-blocks Used Available Use%% Mounted on\r\n/dev/block/dm-17 9339420 2299140 %s 26%% /data\r\n' \
             "$(cat "${FIRETV_STATE}/free" 2>/dev/null || printf 6892824)" ;;
@@ -4236,4 +4247,65 @@ MOCK
     printf '%s\n' 6892824 > "${FIRETV_STATE}/free"
     run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" doctor < /dev/null
     assert_output --partial "ok: Storage: 6731 MB free"
+}
+
+@test "firetv apps lists installed apps without system overlays, and install sideloads an APK" {
+    setup_firetv_sandbox
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" apps
+    assert_success
+    assert_line --regexp '^  com\.netflix\.ninja +27207$'
+    refute_output --partial "overlay"
+
+    printf 'not really an apk' > "${TEST_TMPDIR}/org.example.clock.apk"
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" install "${TEST_TMPDIR}/org.example.clock.apk"
+    assert_success
+    assert_output --partial "Installed org.example.clock.apk"
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" apps
+    assert_line --regexp '^  org\.example\.clock +1$'
+
+    printf 'x' > "${TEST_TMPDIR}/broken.apk"
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" install "${TEST_TMPDIR}/broken.apk"
+    assert_failure
+    assert_output --partial "Install failed: Failure [INSTALL_PARSE_FAILED_NOT_APK]"
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" install "${TEST_TMPDIR}/missing.apk"
+    assert_failure
+    assert_output --partial "No such file"
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" install "${TEST_TMPDIR}/notes.txt"
+    assert_failure
+    assert_output --partial "Not an APK"
+}
+
+@test "firetv uninstall removes only your own apps, and only when told yes" {
+    setup_firetv_sandbox
+    printf '%s\n' org.example.clock >> "${FIRETV_STATE}/installed"
+
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" uninstall org.example.clock < /dev/null
+    assert_success
+    assert_output --partial "org.example.clock kept"
+    run grep -c ' uninstall org.example.clock$' "${FIRETV_STATE}/calls.log"
+    assert_output "0"
+
+    run bash -c 'printf "1\n" | env PATH="$1" DOTFILES_PROMPT=read "$2" uninstall org.example.clock' _ "${BIN_SANDBOX}:${PATH}" "${FIRETV}"
+    assert_success
+    assert_output --partial "Uninstalled org.example.clock"
+    run grep -cxF org.example.clock "${FIRETV_STATE}/installed"
+    assert_output "0"
+
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" uninstall com.amazon.tv.launcher < /dev/null
+    assert_failure
+    assert_output --partial "core package the TV needs"
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" uninstall com.amazon.tv.settings.v2.overlay.localisation.common < /dev/null
+    assert_failure
+    assert_output --partial "system resource overlay"
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" uninstall com.amazon.tv.acr < /dev/null
+    assert_failure
+    assert_output --partial "built in and can't be uninstalled; firetv disable com.amazon.tv.acr"
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" uninstall org.example.gone < /dev/null
+    assert_failure
+    assert_output --partial "org.example.gone is not on this TV"
+    run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" uninstall 'x;reboot' < /dev/null
+    assert_failure
+    assert_output --partial "Not a package name"
+    run grep -c -E ' uninstall [^ ]+$' "${FIRETV_STATE}/calls.log"
+    assert_output "1"
 }
