@@ -153,6 +153,32 @@ run_harden_test() {
     refute_output --partial "passed"
 }
 
+@test "harden-test.sh skips the sudo check, not fails it, when the sudoers files are unreadable" {
+    (( EUID != 0 )) || skip "running as root"
+    # Debian: sudoers.d is listable but its files are 0440 root, and so is
+    # /etc/sudoers, where the grant may also be; seen as the user, that is
+    # not proof of missing sudo.
+    chmod 000 "${HARDEN_ROOT}/etc/sudoers.d/90-admin"
+
+    run_harden_test --user admin
+    assert_success
+    assert_line "  skipped: whether admin can sudo needs root to read /etc/sudoers and sudoers.d"
+    refute_output --partial "admin cannot sudo"
+    assert_line "Some checks need root: run again with sudo."
+
+    run_harden_test --user admin --brief
+    assert_success
+    refute_output --partial "sudo"
+
+    # An unreadable /etc/sudoers alone is reason enough.
+    chmod 644 "${HARDEN_ROOT}/etc/sudoers.d/90-admin"
+    printf 'root ALL=(ALL) ALL\n' > "${HARDEN_ROOT}/etc/sudoers"
+    chmod 000 "${HARDEN_ROOT}/etc/sudoers"
+    : > "${HARDEN_ROOT}/etc/sudoers.d/90-admin"
+    run_harden_test --user admin
+    assert_line "  skipped: whether admin can sudo needs root to read /etc/sudoers and sudoers.d"
+}
+
 @test "harden-test.sh reads the config files the way sshd does: sshd_config.d first, first value wins" {
     rm "${TEST_BIN}/sshd"
     printf 'PermitRootLogin yes\nPasswordAuthentication yes\n' > "${HARDEN_ROOT}/etc/ssh/sshd_config.d/50-cloud-init.conf"

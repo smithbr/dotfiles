@@ -207,6 +207,18 @@ check_ssh() {
     fi
 }
 
+# A sudo grant may sit in a file only root can read: /etc/sudoers itself, or
+# a 0440 file under sudoers.d, whose directory is usually listable. Seen as a
+# user, such a file means the check cannot tell, not that sudo is missing.
+sudoers_unreadable() {
+    local file
+
+    for file in "${ROOT_PREFIX}/etc/sudoers" "${ROOT_PREFIX}/etc/sudoers.d" "${ROOT_PREFIX}"/etc/sudoers.d/*; do
+        [[ -e "${file}" && ! -r "${file}" ]] && return 0
+    done
+    return 1
+}
+
 check_admin_user() {
     local home keys groups
 
@@ -225,8 +237,8 @@ check_admin_user() {
         pass "${ADMIN_USER} can sudo (group)"
     elif [[ -n "$(cat "${ROOT_PREFIX}"/etc/sudoers.d/* 2>/dev/null | grep -E "^${ADMIN_USER}[[:space:]]" || true)" ]]; then
         pass "${ADMIN_USER} can sudo (sudoers.d)"
-    elif [[ -d "${ROOT_PREFIX}/etc/sudoers.d" && ! -r "${ROOT_PREFIX}/etc/sudoers.d" ]]; then
-        skip "whether ${ADMIN_USER} can sudo needs root to read sudoers.d"
+    elif sudoers_unreadable; then
+        skip "whether ${ADMIN_USER} can sudo needs root to read /etc/sudoers and sudoers.d"
     else
         fail "${ADMIN_USER} cannot sudo"
     fi
