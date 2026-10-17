@@ -8,7 +8,7 @@
 #     this box's own network only) and, on a Pi-hole, its DNS, admin page,
 #     and DHCP and NTP when they are on, to the LAN; public SSH closes only
 #     when this very session came in over Tailscale, which proves that door
-#     works, or from the console
+#     works, or from the console; one whose origin cannot be told keeps it
 #   - unattended security upgrades
 # Run as root on a new machine with only a root login, it needs nothing else
 # from this repo:
@@ -68,6 +68,7 @@ ADMIN_USER=""
 CLOUDFLARE=0
 KEEP_PUBLIC_SSH=0
 SSH_PORT=22
+SSH_MODE=tailnet
 SOURCE_USER=""
 SOURCE_KEYS=""
 USER_HOME=""
@@ -492,29 +493,50 @@ tailnet_address() {
     [[ "${address}" == fd7a:115c:a1e0:* ]]
 }
 
+# Whether this process sits on a pseudo-terminal (an SSH session or a
+# terminal window) rather than a console or no terminal at all.
+on_pseudo_terminal() {
+    local tty=""
+
+    tty="$(ps -o tty= -p "$$" 2>/dev/null | tr -d ' ' || true)"
+    [[ "${tty}" == pts* || "${tty}" == ttys* ]]
+}
+
 # Whether this run may close public SSH: only when the tailnet door is
 # proven to work, by this session having come through it, or when no SSH
 # session is at stake. "tailscale ip" says Tailscale is up, not that its ACLs
-# let you in.
-ssh_mode() {
+# let you in, and a session whose origin cannot be told is not proof either.
+# Sets SSH_MODE (its logging shares stdout, so it returns nothing).
+decide_ssh_mode() {
     local client=""
 
+    SSH_MODE=tailnet
+
     if [[ "${KEEP_PUBLIC_SSH}" -eq 1 ]]; then
-        printf 'public\n'
+        SSH_MODE=public
         return 0
     fi
     if ! tailscale_connected; then
         log_warn "Tailscale is not connected, so public SSH stays open; run this again over Tailscale once it is."
-        printf 'public\n'
+        SSH_MODE=public
         return 0
     fi
     client="$(session_client)"
-    if [[ -n "${client}" ]] && ! tailnet_address "${client}"; then
-        log_warn "This session came in from ${client}, not over Tailscale, so public SSH stays open; log in as ${ADMIN_USER} over Tailscale and run this again to close it."
-        printf 'public\n'
+    if [[ -n "${client}" ]]; then
+        if tailnet_address "${client}"; then
+            log_info "This session came in from ${client} over Tailscale, so public SSH can close"
+        else
+            log_warn "This session came in from ${client}, not over Tailscale, so public SSH stays open; log in as ${ADMIN_USER} over Tailscale and run this again to close it."
+            SSH_MODE=public
+            return 0
+        fi
+    elif on_pseudo_terminal; then
+        log_warn "Cannot tell where this session came in from (no SSH_CONNECTION, and who knows nothing of this terminal), so public SSH stays open; run this again as: sudo --preserve-env=SSH_CONNECTION bash ${BASH_SOURCE[0]}"
+        SSH_MODE=public
         return 0
+    else
+        log_info "No SSH session is at stake here, so public SSH can close"
     fi
-    printf 'tailnet\n'
 }
 
 # Services listening on every address that only the tailnet and the LAN
@@ -601,7 +623,6 @@ APT::Periodic::Unattended-Upgrade "1";'
 }
 
 main() {
-    local mode=""
     local ts_name=""
 
     parse_args "$@"
@@ -618,8 +639,8 @@ main() {
     setup_tailscale
     harden_ssh
     SSH_PORT="$(ssh_port)"
-    mode="$(ssh_mode)"
-    setup_firewall "${mode}"
+    decide_ssh_mode
+    setup_firewall "${SSH_MODE}"
     enable_auto_upgrades
 
     if tailscale_connected; then

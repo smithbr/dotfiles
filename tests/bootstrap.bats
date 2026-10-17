@@ -543,7 +543,8 @@ git clone --quiet file://${TEST_TMPDIR}/origin ${TEST_TMPDIR}/home/.dotfiles"
 # the mocked tailscale report a connection; ROOT_KEYS=0 leaves root without
 # SSH keys and ROOT_KEYS=2 gives root only a key tied to a command; SUDO_MOCK=1
 # replaces sudo with one that only prints its arguments; SSH_FROM=IP makes
-# this an SSH session from IP (else the console); the mocked ip routes
+# this an SSH session from IP (else the console, or with PTS=1 a terminal
+# whose origin nothing knows); the mocked ip routes
 # 192.168.0.0/24 and fe80::/64 on eth0 unless NO_ROUTE=1; PIHOLE=1 puts a
 # Pi-hole on the box (PIHOLE_DHCP=true with its DHCP on); CF_BAD=1 makes
 # Cloudflare's range list garbage. Arguments go to harden.sh.
@@ -610,6 +611,10 @@ printf "tcp LISTEN 0 128 [::]:8080 [::]:*\n"
 printf "tcp LISTEN 0 128 100.64.0.1:9000 0.0.0.0:*\n"
 MOCK
         printf "#!/usr/bin/env bash\nexit 1\n" > "${TEST_BIN}/who"
+        cat > "${TEST_BIN}/ps" <<'"'"'MOCK'"'"'
+#!/usr/bin/env bash
+if [[ "${PTS:-0}" -eq 1 ]]; then printf "pts/0\n"; else printf "?\n"; fi
+MOCK
         printf "#!/usr/bin/env bash\nexit 0\n" > "${TEST_BIN}/apt-get"
         printf "#!/usr/bin/env bash\nexit 0\n" > "${TEST_BIN}/systemctl"
         printf "#!/usr/bin/env bash\nexit 1\n" > "${TEST_BIN}/sshd"
@@ -712,13 +717,28 @@ MOCK
 
     SSH_FROM=100.101.102.103 TS_UP=1 _run_harden --dry-run --user admin
     assert_success
+    assert_output --partial "This session came in from 100.101.102.103 over Tailscale, so public SSH can close"
     assert_output --partial "Public SSH closed"
-    refute_output --partial "not over Tailscale"
     refute_output --partial "would run: ufw limit 22/tcp"
 
     SSH_FROM=fd7a:115c:a1e0::1234 TS_UP=1 _run_harden --dry-run --user admin
     assert_success
     assert_output --partial "Public SSH closed"
+
+    # The console: no SSH session is at stake.
+    TS_UP=1 _run_harden --dry-run --user admin
+    assert_success
+    assert_output --partial "No SSH session is at stake here, so public SSH can close"
+    assert_output --partial "Public SSH closed"
+
+    # A terminal whose origin nothing knows (a plain sudo dropped
+    # SSH_CONNECTION and who has no entry) is not proof of anything.
+    PTS=1 TS_UP=1 _run_harden --dry-run --user admin
+    assert_success
+    assert_output --partial "Cannot tell where this session came in from"
+    assert_output --partial "sudo --preserve-env=SSH_CONNECTION bash"
+    assert_output --partial "would run: ufw limit 22/tcp"
+    refute_output --partial "Public SSH closed"
 }
 
 @test "harden.sh opens a Pi-hole's DNS and admin page to the LAN and names what only the tailnet will reach" {
