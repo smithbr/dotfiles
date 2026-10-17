@@ -7,7 +7,8 @@
 #
 # `docker exec` without -i leaves stdin closed, which is what makes this a
 # valid guard for the non-interactive bootstrap path: a read at EOF must not
-# abort the run or silently accept the default.
+# abort the run, and it keeps the defaults, so the optional installs that are
+# on by default run and nothing off by default does.
 #
 # Two install steps are skipped, because the container cannot support them
 # rather than because they go untested elsewhere:
@@ -120,7 +121,7 @@ check "~/.zshenv linked"             test -L /home/tester/.zshenv -a -f /home/te
 check "~/.config/zsh/.zshrc linked"  test -L /home/tester/.config/zsh/.zshrc -a -f /home/tester/.config/zsh/.zshrc
 check "~/.config is a real dir"      test ! -L /home/tester/.config
 check "zsh login exports XDG paths"  zsh -lc '[[ "${XDG_CONFIG_HOME}" == "${HOME}/.config" ]]'
-check "no optional installs ran"     bash -lc '! command -v docker && ! command -v tailscale'
+check "default optional installs ran" bash -lc 'command -v docker && command -v tailscale && test -x ~/.local/bin/claude'
 check "vps persona saved"            grep -qx vps /home/tester/.local/state/dotfiles/persona
 check "agents clone failed cleanly"  test ! -e /home/tester/.config/agents
 check "tools layer linked"           test -L /home/tester/.local/bin/os-update
