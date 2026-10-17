@@ -40,6 +40,7 @@ brew "onefetch"
 brew "starship"
 brew "yazi"
 brew "zoxide"
+brew "zsh"
 
 # macOS only: Homebrew on Linux has no casks.
 if OS.mac?
