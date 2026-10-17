@@ -280,6 +280,30 @@ MOCK
     teardown_tmpdir
 }
 
+@test "claude wrapper adds --agent lead only in iTerm2 or tmux" {
+    command -v zsh >/dev/null || skip "zsh not installed"
+    setup_tmpdir
+    mkdir -p "${TEST_TMPDIR}/bin"
+    printf '#!/bin/sh\necho "$*"\n' > "${TEST_TMPDIR}/bin/claude"
+    chmod +x "${TEST_TMPDIR}/bin/claude"
+    local fns="${PROJECT_ROOT}/stow/common/.config/shell/functions"
+    local path="${TEST_TMPDIR}/bin:/usr/bin:/bin"
+
+    run env -i PATH="${path}" TERM_PROGRAM=iTerm.app zsh -fc "source '${fns}'; claude 'fix it'"
+    assert_output "--agent lead fix it"
+    run env -i PATH="${path}" TMUX=/tmp/x zsh -fc "source '${fns}'; claude"
+    assert_output "--agent lead"
+    run env -i PATH="${path}" TERM_PROGRAM=ghostty zsh -fc "source '${fns}'; claude 'fix it'"
+    assert_output "fix it"
+    run env -i PATH="${path}" TERM_PROGRAM=iTerm.app zsh -fc "source '${fns}'; claude --agent eng"
+    assert_output "--agent eng"
+    run env -i PATH="${path}" TERM_PROGRAM=iTerm.app zsh -fc "source '${fns}'; claude mcp list"
+    assert_output "mcp list"
+    run env -i PATH="${path}" TERM_PROGRAM=iTerm.app zsh -fc "source '${fns}'; claude -p hi"
+    assert_output "-p hi"
+    teardown_tmpdir
+}
+
 @test "interactive zsh: repo aliases win over plugins, and .zshrc.local wins over both" {
     command -v zsh >/dev/null || skip "zsh not installed"
     setup_tmpdir

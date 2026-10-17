@@ -44,6 +44,32 @@ na() {
     echo "added: alias ${name}=\"${escaped}\""
 }
 
+# claude: start as the lead agent in terminals that show teammate panes
+# (iTerm2, or any terminal inside tmux). Left alone: an --agent you pass,
+# print mode, help and version, and subcommands such as `claude mcp`.
+claude() {
+    local arg
+    if [[ "${TERM_PROGRAM:-}" != "iTerm.app" && -z "${TMUX:-}" ]]; then
+        command claude "$@"
+        return
+    fi
+    case "${1:-}" in
+        agents|attach|auth|auto-mode|doctor|gateway|import|install|logs|mcp|plugin|plugins|purge|respawn|rm|setup-token|stop|kill|ultrareview|update|upgrade)
+            command claude "$@"
+            return
+            ;;
+    esac
+    for arg in "$@"; do
+        case "${arg}" in
+            --agent|--agent=*|-p|--print|-h|--help|-v|--version)
+                command claude "$@"
+                return
+                ;;
+        esac
+    done
+    command claude --agent lead "$@"
+}
+
 # npm: refuse global installs, which bypass the Brewfiles; use npx or bunx, or
 # a Brewfile (homebrew/README.md, "Where a tool comes from"). Global uninstalls
 # and everything else pass through. NPM_ALLOW_GLOBAL=1 allows one.
