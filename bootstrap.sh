@@ -3,14 +3,10 @@
 #
 #   bash <(curl -fsSL https://raw.githubusercontent.com/smithbr/dotfiles/main/bootstrap.sh) [--user NAME] [INSTALL_ARGS...]
 #
-# It installs git when missing (apt, or the Xcode Command Line Tools), clones
-# the repo into ~/.dotfiles (DOTFILES_REPO overrides the URL) unless it is
-# there, and runs install.sh with the remaining arguments, stdin on the
-# terminal so its questions work when piped. Run as root on a box with only
-# a root login, --user NAME first creates and hardens for that admin user
-# (scripts/bootstrap/linux/harden.sh; HARDEN_ARGS adds its options, such as
-# "--allow 80 --allow 443"), then continues as that user. Needs nothing
-# else from the repo, and is safe to run again.
+# Installs git, clones to ~/.dotfiles (DOTFILES_REPO overrides the URL), runs
+# install.sh with the remaining arguments. As root, --user NAME first creates
+# and hardens that admin user (harden.sh; HARDEN_ARGS adds its options).
+# Self-contained and safe to rerun.
 
 set -euo pipefail
 

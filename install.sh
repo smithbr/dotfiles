@@ -11,10 +11,11 @@ usage() {
 Usage: install.sh [OPTIONS] [-- STOW_ARGS...]
 
 Sets this machine up: asks what it is (persona, installs, optional packages)
-once and remembers, offers to harden a Linux server or VPS first when it is
-not, then links the repo into place, ensures an SSH key exists, runs the OS
-bootstrap and Homebrew, links the dotfiles with GNU Stow, and applies the
-chosen installs. Safe to run again: every step skips what is already done.
+and remembers, offers to harden a Linux server or VPS first when it is not,
+then points ~/.dotfiles at this checkout, runs the OS bootstrap, ensures an SSH
+key exists, installs Homebrew and its Brewfiles, links the dotfiles with GNU
+Stow, sets the login shell, and applies the chosen installs. Safe to run
+again: every step skips what is already done.
 
 Options:
   -n, --dry-run      Report what would change without touching the system
@@ -30,9 +31,8 @@ Options:
                      tailscale, claude-code, on by default; holeberry, off) or a
                      role the persona offers (see roles/: pihole);
                      --no-install NAME drops one.
-                     Saved for later runs; without either, a terminal asks until
-                     a choice is saved. DOTFILES_INSTALLS="a b" sets the whole
-                     list
+                     Saved for later runs; without either, a terminal asks
+                     every run. DOTFILES_INSTALLS="a b" sets the whole list
       --harden       Run scripts/bootstrap/linux/harden.sh first (key-only SSH
                      over Tailscale, ufw, unattended upgrades; HARDEN_ARGS adds
                      its options). Without it, a server or vps persona on Linux
@@ -176,10 +176,7 @@ run_boxed() {
     return "${status}"
 }
 
-# Live output in a step's style: each line indented and the "INFO " label
-# dropped as run_boxed does, for a step that must show things as they happen
-# (a backup being made, a login URL to open) rather than hold them for a box.
-# The command keeps the terminal as stdin, so a prompt it draws there works.
+# Like run_boxed but live, keeping the terminal on stdin for prompts.
 run_streamed() {
     local line status=0
 
@@ -232,10 +229,7 @@ ensure_local_install_ssh_key() {
         return 0
     fi
 
-    # A public key present without a private key on disk means the key is managed
-    # by an external SSH agent (e.g. 1Password keeps the private half in the vault
-    # and exposes only the .pub here as the IdentityFile). Generating a new keypair
-    # would clobber it and break SSH auth and commit signing, so leave it alone.
+    # A .pub with no private key: an external agent (1Password) holds it.
     if [[ -f "${LOCAL_INSTALL_SSH_KEY_PATH}.pub" ]]; then
         log_info "Found ${LOCAL_INSTALL_SSH_KEY_PATH}.pub with no private key on disk; assuming an external agent (e.g. 1Password) manages it, leaving it untouched"
         return 0
@@ -255,9 +249,8 @@ copy_and_list_local_example_files() {
     local local_path
     local review_message=""
 
-    # Only the examples this persona links; another layer's example has no
-    # linked copy here to start from. Read once: piping it into grep -q
-    # would stop link.sh with SIGPIPE, which pipefail reports as no match.
+    # Only the examples this persona links. Read whole: grep -q exiting early
+    # trips pipefail.
     managed="$(bash "${LINK_SCRIPT}" managed)" || {
         log_error "Could not list managed paths"
         return 1
@@ -365,8 +358,8 @@ apply_dotfiles() {
     log_info "Linking complete"
 }
 
-# df-doctor's --fix questions need a real terminal and a run that may change files;
-# stow's own simulate flags make the whole install a dry run.
+# df-doctor's --fix questions need a real terminal and a run that may change
+# files; stow's simulate flags make the link step a dry run.
 file_cleanup_is_interactive() {
     local index=0
 
@@ -418,12 +411,8 @@ install_applied() {
     bash -c "source '${BASEDIR}/scripts/common.sh' && $1" >/dev/null 2>&1
 }
 
-# Apply the chosen installs in order, last, once everything is linked, so a
-# machine gets what it is for (Tailscale, a Pi-hole) when it is ready. One
-# whose detect command already succeeds is skipped; a failure is reported,
-# not fatal, and the install stays chosen so the next run retries. A setup
-# script's output streams, since a vendor installer may take minutes or
-# print a login URL, but in the step's style.
+# Apply the chosen installs last, in order, skipping any whose detect passes.
+# A failure is reported, not fatal; the next run retries it.
 run_installs() {
     local name setup detect script
 
@@ -451,10 +440,8 @@ run_installs() {
     done <<< "${INSTALL_INFO}"
 }
 
-# Ask which persona this machine is, when a terminal is available and neither
-# --persona nor DOTFILES_PERSONA chose one. Unboxed, before the steps, so the
-# picker can draw. A closed stdin, EOF or an empty answer keeps the default
-# (the saved choice, else the OS default); SOURCE saved names it in the header.
+# Ask for the persona. EOF or an empty answer keeps DEFAULT; SOURCE=saved
+# names it in the header.
 #   prompt_persona DEFAULT [SOURCE]
 prompt_persona() {
     local default="$1" source="${2:-}" name header="Which persona is this machine?"
@@ -492,9 +479,9 @@ resolve_persona() {
     PERSONA_SOURCE="${source}"
 }
 
-# The persona's install lists from link.sh: brew=, brew_optional=, installs=
-# (chosen, in run order), installs_source=, and an
-# install=NAME<TAB>SETUP<TAB>DETECT line per chosen install.
+# The persona's lists from link.sh: brew=, brew_optional=, harden=, installs=
+# (in run order), installs_source=, and an install=NAME<TAB>SETUP<TAB>DETECT
+# line per chosen install.
 read_installs() {
     local key value
     INSTALL_INFO="$(bash "${LINK_SCRIPT}" installs)" || exit 2
@@ -526,15 +513,11 @@ pick_installs() {
     done
 }
 
-# Settle the installs (the optional installs every persona gets, on by
-# default, and the persona's roles): --install/--no-install and
-# DOTFILES_INSTALLS decide outright; otherwise a terminal is asked on every
-# run, like the persona, first what the machine is for (the roles, when the
-# persona offers any) and then the optional installs, with the saved or
-# default installs and the ones already applied preselected, so Enter keeps
-# them; closed stdin keeps those. The answer
-# goes to link.sh as DOTFILES_INSTALLS, which saves it, orders it, and adds
-# the roles' layers. PENDING_INSTALLS is what is chosen but not yet applied.
+# Settle the installs: --install/--no-install edit the saved list and skip
+# the question; otherwise a terminal is asked every run (roles, then optional
+# installs) with DOTFILES_INSTALLS, else the saved or default list, plus the
+# applied ones preselected. The answer goes to link.sh as DOTFILES_INSTALLS.
+# PENDING_INSTALLS is what is chosen but not yet applied.
 resolve_installs() {
     local name detect item chosen="" applied="" source="" source_was=""
     local -a items=() roles=()
@@ -577,13 +560,9 @@ resolve_installs() {
     done
 }
 
-# Offer hardening first, before anything is installed, on a Linux box whose
-# persona says harden=yes (server, vps) when harden-test.sh finds it is not:
-# its --brief output lists what is missing. --harden runs harden.sh outright
-# (it is safe to run again) and --no-harden skips the question; closed stdin
-# skips it too, since on a server in use harden.sh closes every port but the
-# tailnet's and allows only one SSH user. The question is asked in a dry run
-# as well, so the dry run shows the step.
+# On Linux with harden=yes and gaps from harden-test.sh --brief, offer
+# harden.sh (default no; --harden and --no-harden answer it). Asked in a dry
+# run too, so the step shows.
 resolve_harden() {
     local gap question
     HARDEN=0 HARDEN_SOURCE="" HARDEN_GAPS=""
@@ -648,9 +627,7 @@ resolve_brew_picks() {
     [[ -z "${DOTFILES_BREW_PICKS}" ]] || BREW_PICK_COUNT="$(wc -l <<< "${DOTFILES_BREW_PICKS}" | tr -d ' ')"
 }
 
-# One sudo prompt up front when a step will need it, so no password prompt
-# hides inside a boxed step or a spinner. ponytail: no keepalive; sudo's own
-# timeout covers a normal run.
+# One sudo prompt up front, so none hides inside a boxed step or a spinner.
 prime_sudo() {
     [[ "${dry_run}" -eq 0 && "${EUID}" -ne 0 ]] || return 0
     command -v sudo >/dev/null 2>&1 || return 0

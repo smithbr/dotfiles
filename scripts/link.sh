@@ -1,54 +1,12 @@
 #!/usr/bin/env bash
 # Link the dotfiles into place with GNU Stow, and report what the repo owns.
-#
-#   personas/<name>         which layers, editors, agents and installs a machine
-#                           gets: key=value lines for os, layers, agents,
-#                           agent_apps, skills, editors, brew, brew_optional,
-#                           roles (on by default), roles_optional (offered), and
-#                           harden (yes: install.sh offers harden.sh first on a
-#                           Linux box that harden-test.sh finds unhardened).
-#   roles/<name>            what a machine is for (a Pi-hole, a hardened VPS):
-#                           key=value lines for os, layers, brew, requires
-#                           (installs run first), detect (a command that
-#                           succeeds once the role is applied) and setup (the
-#                           script install.sh runs, named after the role when
-#                           unset). A role's layers link like the persona's own.
-#   scripts/bootstrap/<os>/<name>.sh, scripts/bootstrap/<name>.sh
-#                           a setup script with a "# detect: COMMAND" line is an
-#                           optional install (Docker, Tailscale, Claude Code),
-#                           offered to every persona and on by default, unless
-#                           it also has "# default: off": then it is
-#                           offered unticked. The chosen installs come from
-#                           DOTFILES_INSTALLS, else the saved choice, else what
-#                           is on by default.
-#   stow/<layer>, stow/<layer>.<os>
-#                           mirror $HOME; every file becomes a symlink into the
-#                           repo, so editing the live file edits the repo.
-#   seed/<layer>, seed/<layer>.<os>
-#                           copied once when missing, then owned by the app
-#                           (docker and gh rewrite these themselves).
-#   editors/<name>          one copy of shared editor settings, linked into each
-#                           editor's user directory listed in editor_dirs.
-#   AGENT_LINKS             symlinks into the private agents checkout, which is
-#                           cloned into ~/.config/agents and refreshed weekly.
-#   SKILL_LINKS             link to ~/.agents/skills, a real directory that Stow
-#                           fills from the agents repo's skills/ bundles: the
-#                           persona's skills list (core when unset). A bundle no
-#                           persona lists is left to skills-add; one another
-#                           persona lists is removed as stale.
-#
-# A persona without agents gets none of these: its agent links are removed as
-# stale, and a leftover checkout is reported but never deleted. Each app's own
-# settings (~/.claude/settings.json, ~/.cursor/cli-config.json, ~/.codex/
-# config.toml) are left to the app.
+# The layout (personas, roles, stow and seed layers, editors, agent and skill
+# links) is described in AGENTS.md, roles/README.md and stow/README.md.
 #
 # A real file where a link belongs is replaced only when its content matches
-# the repo. Anything else is moved to ~/.local/state/dotfiles/clobbered/ first,
-# so linking never loses data.
-#
-# A link into the repo's stow/ or editors/ that no longer belongs here (its file
-# moved or was deleted, or its package no longer applies) is stale and removed.
-# Only links are removed; real files are never touched this way.
+# the repo; anything else is moved to ~/.local/state/dotfiles/clobbered/ first.
+# A link into the repo that no longer belongs is stale and removed; real files
+# are never removed this way.
 
 set -euo pipefail
 
@@ -125,7 +83,8 @@ Usage: link.sh [OPTIONS] [COMMAND] [-- STOW_ARGS...]
 Commands:
   apply     Link packages, editor settings, agent links and seed files (default)
   managed   Print every destination path the repo owns
-  status    Report missing, replaced, foreign, broken and stale links
+  status    Report links that are missing, replaced, foreign, broken, stale,
+            shadowed, unset, unlinked or unused
   persona   Print the persona in effect and where it came from
             (flag, env, saved or default)
   personas  List the personas this OS can use
@@ -494,10 +453,8 @@ setup_script() {
     return 1
 }
 
-# The optional installs: the setup scripts for this platform that carry a
-# "# detect:" line, offered to every persona and on by default unless the
-# script also says "# default: off". The platform's own directory first, then
-# the shared one, each in name order.
+# Setup scripts with a "# detect:" line; platform directory first, then the
+# shared one, each in name order.
 optional_installs() {
     local dir script name seen=""
     for dir in "$(bootstrap_dir)" "${REPO}/scripts/bootstrap"; do
@@ -512,9 +469,8 @@ optional_installs() {
     done
 }
 
-# True when NAME is a role or an optional install this platform has. The
-# list is read whole: grep -q quitting early would end the pipeline in
-# SIGPIPE, which pipefail reports as no match.
+# True when NAME is a role or an optional install this platform has. Read
+# whole: grep -q exiting early trips pipefail.
 install_exists() {
     local file="${REPO}/roles/$1"
     if [[ -f "${file}" ]]; then
@@ -578,10 +534,8 @@ visit_install() {
     ORDERED="${ORDERED} ${name}"
 }
 
-# The chosen installs: DOTFILES_INSTALLS (set, maybe empty), else the saved
-# choice, else what is on by default. Each must be offered here; a saved one
-# no longer offered (a persona switch) is dropped with a warning. A role's
-# layers link like the persona's own.
+# DOTFILES_INSTALLS (set, maybe empty), else the saved choice, else the
+# defaults; a saved one no longer offered is dropped with a warning.
 load_installs() {
     local saved name offered kept=""
     if [[ -n "${DOTFILES_INSTALLS+x}" ]]; then
@@ -731,11 +685,9 @@ normalize_path() {
     printf '%s\n' "${out:-/}"
 }
 
-# True when the destination already resolves to the package file. A link this
-# script made points at the source path itself, and one stow made is relative
-# to the target's directory, so one readlink and some string work settle most
-# files; resolving both sides physically is the fallback for a repo or home
-# reached through a symlink.
+# True when the destination already resolves to the package file. Fast string
+# check first; resolve physically only for a repo or home reached through a
+# symlink.
 is_linked() {
     local target="$1" source="$2" resolved
     [[ -L "${target}" ]] || return 1
@@ -788,9 +740,6 @@ link_destination() {
 is_repo_link() {
     local destination
     [[ -L "$1" ]] || return 1
-    # Links made here point straight into the repo and stow's are relative to
-    # their directory; resolving physically is only needed for a repo reached
-    # through a symlink.
     destination="$(readlink "$1")" || return 1
     [[ "${destination}" == /* ]] || destination="$(normalize_path "$(dir_of "$1")/${destination}")"
     [[ "${destination}" == "${REPO}/stow/"* || "${destination}" == "${REPO}/editors/"* ]] && return 0
@@ -1384,10 +1333,8 @@ path_prefixes() {
     awk -F/ '{ p = $1; print p; for (i = 2; i <= NF; i++) { p = p "/" $i; print p } }'
 }
 
-# Real files or folders where a layer this persona does not link would put its
-# files, such as ~/.local/bin/cf-cert on work. Each is the shallowest path no other
-# layer uses, so shared parents like ~/.config or ~/.local/bin are never named.
-# Only reported; nothing is moved.
+# Real paths a layer this persona skips would own: the shallowest path no
+# other layer uses. Reported only.
 unlinked_layer_paths() {
     local dir layer relative shared
     for layer in $(for dir in "${REPO}"/stow/*/; do
@@ -1470,10 +1417,8 @@ print_link_state() {
     fi
 }
 
-# One line per problem: <state> <path>. States: missing, replaced (a real file
-# where a link belongs), foreign (a link to somewhere else), broken, and for
-# git, shadowed (~/.gitconfig overrides the identity) or unset (no user.email),
-# and unlinked (a real path owned by a layer this persona does not link).
+# One line per problem: <state> <path>. States: missing, replaced, foreign,
+# broken, stale, shadowed, unset, unlinked, unused.
 print_status() {
     local target entry
     while IFS= read -r entry; do
@@ -1596,8 +1541,7 @@ layer_owners() {
     printf '%s\n' "${owners}"
 }
 
-# What belongs in a layer, for the layers whose rule is not obvious from
-# their files (stow/README.md). Empty for any other layer.
+# What belongs in a layer (stow/README.md); empty for a layer with no rule.
 layer_rule() {
     case "$1" in
         common) printf 'config for a tool that every machine has\n' ;;
@@ -1609,11 +1553,7 @@ layer_rule() {
     esac
 }
 
-# How a layer is offered: what belongs in it (layer_rule), else what it holds,
-# read from the tree (top-level paths, dot-directories one level down, a few
-# script names for .local/bin); then the personas whose layers= name it (else
-# the role that brings it), and the platform when it exists only as a
-# platform part.
+# One picker line: rule or contents, then owners, then platform.
 #   layer_description LAYER WIDTH
 layer_description() {
     local layer="$1" width="$2" dir entry paths="" item owners platform="" file

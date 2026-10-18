@@ -35,19 +35,19 @@ Under `scripts/`, set `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 
 | Root and sudo | `require_non_root`, `sudo_cmd` |
 | Is a tool installed | `tool_installed NAME` |
 
-If a script needs a helper that two scripts would share (a `confirm`, a summary printer), add it to `common.sh` with a test in `tests/common.bats` rather than writing it inline. Colors are the ones these helpers use (212 headers, 76 pass, 214 warn, 196 fail, 244 dim, 240 borders); a script does not pick its own palette.
+A helper two scripts would share (a `confirm`, a summary printer) goes in `common.sh` with a test in `tests/common.bats`, not inline. Colors are the ones these helpers use (212 headers, 76 pass, 214 warn, 196 fail, 244 dim, 240 borders); a script does not pick its own palette.
 
 ## 2. Shape of the file
 
 Top to bottom: shebang and `set -euo pipefail`, a one-line comment saying what the script is for, the `common.sh` block, settings, `usage()`, the work functions, `parse_args()`, `main()`, and `main "$@"` as the last line.
 
-- Settings are uppercase variables with an environment override: `FOO_BIN="${FOO_BIN:-foo}"` for every external command (so tests can stub it), and state under `${XDG_STATE_HOME:-${HOME}/.local/state}/<script>`.
+- Settings are uppercase variables with an environment override: `FOO_BIN="${FOO_BIN:-foo}"` for every external command, so tests can stub it, and state under `${XDG_STATE_HOME:-${HOME}/.local/state}/<script>`.
 - Name a script for what it does, with the family prefix where one exists: `df-` wraps a repo script, `ph-` works on the Pi-hole, `<area>-doctor` checks something and offers fixes.
 - A script with more than one action takes a subcommand (`firetv disable ads`), never a flag per action.
 
 ## 3. Help
 
-- `-h` and `--help` (and `help` as a subcommand) print help and exit 0.
+- `-h`, `--help`, and `help` as a subcommand print help and exit 0.
 - Help is one markdown heredoc in `usage()`: `# name`, one sentence on what it does, then `## Commands` (a table) or `## Steps` (a list), `## Options`, and `## Examples`. On a terminal with gum it goes through `gum format`; otherwise the same text prints as is. Never keep a second, shorter plain version.
 - Help says what the script changes and what it never touches, and the first-run setup a person needs.
 
@@ -84,7 +84,7 @@ A single action ends with one line saying what changed (`Disabled 4 packages`), 
 - A yes/no question defaults to no: `gum confirm` on a terminal, else `Question? [y/N]`. `--yes` answers yes; `--dry-run` asks nothing.
 - No terminal or closed stdin never hangs and never opts in to anything: the script takes the saved choice or the safe default, or fails with the choices it would have offered and the flag that sets one. Guard `read` for `set -e` (`IFS= read -r reply || reply=""`).
 - A script with subcommands and no arguments, on a terminal, may offer `gum choose` over the subcommands; without a terminal it prints usage and exits 2.
-- Many items to decide on (more than a handful) get one list with each row set to its suggestion and Enter applying all of them, as `df-doctor` does, not a question per item.
+- More than a handful of items to decide on get one list with each row set to its suggestion and Enter applying all of them, as `df-doctor` does, not a question per item.
 
 ## 8. Making changes
 
@@ -101,6 +101,6 @@ Use a `uv run --script` Python file (as `ai-doctor` and `st` do) when the script
 ## 10. Before it is done
 
 - Tests in the relevant Bats file (`tests/bin_scripts.bats` for small tools, or the script's own file): `--help`, an unknown option, closed stdin, `--dry-run` changing nothing, and the main path with stubbed commands. Assert exit status and output or files.
-- `./tests/run_tests.sh tests/<file>.bats` passes (it runs ShellCheck first).
+- `./tests/run_tests.sh tests/<file>.bats` passes; it runs ShellCheck first.
 - The script is listed where its layer is described in [`stow/README.md`](../stow/README.md), or in this directory's [`README.md`](README.md) for repo tooling.
 - `NAME | cat`, `NAME < /dev/null`, and `NAME --help` all read well.

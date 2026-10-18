@@ -1,211 +1,52 @@
-# Tests
+# tests/
 
-This directory contains the shell test suite for the dotfiles repo.
+The Bats suite for the repo. Run it with `./tests/run_tests.sh`; the [root `AGENTS.md`](../AGENTS.md) says when to run which files.
 
 ## Runner
 
-Run the full suite with:
+- `run_tests.sh` lints the repo's shell scripts with ShellCheck first, then runs Bats with `--jobs` set to the core count. `--lint-only` stops after the lint (named files limit it to those it would lint anyway) and touches neither the network nor the cache; `--no-lint` skips the lint and does not need `shellcheck`. Test files or directories named on the command line replace the default of every suite; other arguments go to Bats (`./tests/run_tests.sh tests/link.bats --filter add`).
+- The suite's own tools live in `~/.cache/dotfiles/tests` (`XDG_CACHE_HOME` or `DOTFILES_TEST_DEPS` move it), which `deps.sh` fills on the first run: `bats-core`, `bats-support`, `bats-assert`, GNU `parallel`, a `python3` link to a uv-managed Python 3.11+ (without `uv`, the tests that need it skip), and on macOS a `bash` 5 built from source. Each download is checked against the sha256 pinned in `deps.sh`; a rerun with everything present is offline and silent; `rm -rf ~/.cache/dotfiles/tests` starts over. Nothing is installed through Homebrew for the tests. The machine's own `shellcheck` and `stow` are required, not installed (`Brewfile.core`, apt), and on Debian `bzip2`.
+- Bats runs on the cache's bash through a `bash` shim first on `PATH` that sends only Bats' own programs there: `bash -c`, `run bash script`, and `#!/usr/bin/env bash` scripts under test still run on `/bin/bash`, as on a fresh Mac. Code a test sources in-process runs on the new bash. The cache's `python3` comes first on `PATH`, its `bats` and `parallel` last.
+- Bumping a pin: set the version and the tarball's sha256 in `deps.sh` (cross-check with the GNU `.sig` or `brew info --json=v2 NAME`), then delete the cache directory. CI's cache key is the file's hash.
+- CI ([`ci.yml`](../.github/workflows/ci.yml)) runs on every push as four parallel macOS jobs: one `--lint-only` and three `--no-lint` Bats shards: `link.bats`; `doctor.bats` with `install.bats`; and every other `*.bats` file by glob, so a new file runs there without a workflow change. Move a file between shards (and in `NAMED`) when one shard grows well past the others.
 
-```bash
-./tests/run_tests.sh
-```
+## Git hooks
 
-The suite's own tools live in a per-user cache, `~/.cache/dotfiles/tests` (`XDG_CACHE_HOME` or `DOTFILES_TEST_DEPS` move it), that [`deps.sh`](deps.sh) fills on the first run and never touches again until a pin changes: `bats-core`, `bats-support`, `bats-assert`, GNU `parallel` (the Perl script Bats' `--jobs` needs, with its own `PARALLEL_HOME`), a `python3` link to a uv-managed Python 3.11+ (`tomllib`; without `uv` the tests that need it skip), and on macOS a `bash` 5 built from source, because `/bin/bash` 3.2 lets a failing `[[ ]]` that is not a test's last line pass silently. Each download is checked against the sha256 pinned in `deps.sh` and installed by renaming a finished directory into place, so a rerun with everything present is offline and silent, and `rm -rf ~/.cache/dotfiles/tests` starts over. Nothing is installed through Homebrew for the tests.
-The machine's own tools are required, not installed: `shellcheck` and `stow` (`Brewfile.core`, apt; the runner names the install command when one is missing), and on Debian `bzip2` for parallel's tarball. [`run_tests.sh`](run_tests.sh) lints the repo's shell scripts first (`--lint-only` stops there and touches neither the network nor the cache), then runs Bats with `--jobs` set to the core count (`--no-lint` skips the lint and does not need `shellcheck`).
-CI ([`ci.yml`](../.github/workflows/ci.yml)) runs on every push as four parallel macOS jobs: one `--lint-only`, and three `--no-lint` Bats shards of about equal time on CI's runners: `link.bats`, `doctor.bats` with `install.bats`, and every other `*.bats` file by glob, so a new file runs there without a workflow change. Move a file between shards (and in `NAMED`) when one shard grows well past the others; the job logs' step times show it.
-Bats runs on the cache's bash through a `bash` shim first on `PATH` that sends only Bats' own programs there: `bash -c`, `run bash script`, and `#!/usr/bin/env bash` scripts under test still run on `/bin/bash`, as on a fresh Mac. Code a test sources in-process runs on the new bash. The cache's `python3` comes first on `PATH` so every test sees the same interpreter, and its `bats` and `parallel` last.
-Bumping a pin: set the version and the tarball's sha256 in `deps.sh` (cross-check with the GNU `.sig` or `brew info --json=v2 NAME`), then delete the cache directory; CI's cache key is the file's hash, so it refetches on its own.
-
-## Git Hooks
-
-This repo can use the versioned hooks in [`.githooks`](../.githooks):
-
-- `pre-commit` runs ShellCheck on the staged shell scripts (`run_tests.sh --lint-only FILE...`, so the
-  same files the full lint picks, from the working tree), then `~/.config/agents/scripts/check-drift`
-  (retired terms, and `AGENT_LINKS` against the agents repo); it skips check-drift with a note when the
-  agents checkout is missing, and says when `check-drift` crashed (killed by a signal) rather than found drift
-- `pre-push` runs ShellCheck (`run_tests.sh --lint-only`), then a container
-  install via [`sandbox-install.sh`](sandbox-install.sh); CI runs the full suite,
-  sharded, on every push
-
-To enable them locally:
+The versioned hooks in [`.githooks`](../.githooks): `pre-commit` runs ShellCheck on the staged shell scripts (`run_tests.sh --lint-only FILE...`), then `~/.config/agents/scripts/check-drift`, skipped with a note when the agents checkout is missing. `pre-push` runs `run_tests.sh --lint-only`, then `sandbox-install.sh` when the pushed commits touch `install.sh`, `scripts/`, `stow/`, `seed/`, `editors/`, `homebrew/`, or the script itself; `SKIP_SANDBOX_INSTALL=1` bypasses it, and it skips itself without `docker`. Enable them with:
 
 ```bash
 git config core.hooksPath .githooks
 chmod +x .githooks/pre-commit .githooks/pre-push
 ```
 
-## Sandbox Install
+## Sandbox install
 
-[`sandbox-install.sh`](sandbox-install.sh) runs `install.sh` inside a throwaway Debian
-container. It is the only check that sees a genuinely bare machine: no `git`,
-no `curl`, no `zsh`, and stdin closed. The Bats suite mocks all of that away, so
-regressions in the non-interactive bootstrap path are invisible to it.
+`sandbox-install.sh` runs `install.sh` inside a throwaway Debian container: the only check that sees a bare machine, with no `git`, `curl`, or `zsh` and stdin closed. It needs a container runtime (`brew install colima docker && colima start` on macOS). It tests `HEAD`, not the working tree. A failed run prints the last 40 lines and keeps the full log at `~/.local/state/dotfiles/sandbox-install.log` (`SANDBOX_LOG` moves it). Homebrew and `chsh` are skipped: Linux aarch64 has no brew bottles, and `chsh` needs a password the container user does not have.
 
-It needs a container runtime. On macOS:
+## What each file covers
 
-```bash
-brew install colima docker && colima start
-```
+Tests run against scratch homes, overridden `PATH`, and stub executables: process-level isolation, not a container. Each `.bats` file names its cases; this list says only what each is for.
 
-Run it directly with:
-
-```bash
-./tests/sandbox-install.sh
-```
-
-Notes:
-
-- It tests `HEAD`, not the working tree, so commit before running it.
-- A failed run prints the last 40 lines of the install and keeps the full log at
-  `~/.local/state/dotfiles/sandbox-install.log` (`SANDBOX_LOG` moves it); read it
-  there before running the install again.
-- Homebrew and `chsh` are skipped: Linux aarch64 has no brew bottles, and `chsh`
-  needs a password the container user does not have.
-- `pre-push` only runs it when the pushed commits touch `install.sh`, `scripts/`,
-  `stow/`, `seed/`, `editors/`, `homebrew/`, or the script itself. Set `SKIP_SANDBOX_INSTALL=1` to bypass it, and it
-  skips itself when `docker` is absent.
-
-## Isolation Model
-
-The suite uses Bats plus temporary directories, overridden `HOME`, overridden `PATH`, and stub executables to keep tests isolated.
-
-- Unit-style tests exercise parsing, guard clauses, and helper behavior in-process.
-- Integration-style tests run the real scripts with sandboxed `HOME` and mocked commands so actions stay inside temporary test directories instead of your live home directory.
-
-This is process-level isolation, not a real container or VM.
-
-## Test Files
-
-[`ai_doctor.bats`](ai_doctor.bats)
-
-- Runs `ai-doctor` (in `stow/tools/.local/bin`) against a scratch home with fixture Claude Code, Codex, and Cursor config, a fixture agents checkout with a logging `skills-add`, and a fixture persona; only `uv` and `python3` are on PATH (ai-doctor's shebang is `uv run --script`, held to that `python3` and kept offline), so no real `claude` or `codex` runs
-- Verifies the default output (a summary line, then only the numbered fixes and trims, or `Nothing to do.`) and `-v` (instruction sizes, skill sizes from names and descriptions only, folded lines too, experimental flags and a default agent)
-- Verifies each finding and its `--fix --yes`: bundles beyond or missing from the persona's `skills=` (through `skills-add`), a broken skill link removed, Claude servers that can't start removed from `~/.claude.json` (user and project scope, other keys kept, the original backed up once), a missing folder reported rather than every file under it, a Cursor URL moved from `command` to `url` and the file made private while its token, never printed, stays a fix, a Codex table and its sub-tables removed (turned-off servers kept; needs Python 3.11), and a plugin both installed and synced removed with its cache while the claude.ai copy stays; servers waiting for sign-in are one trim and connector placeholders none
-- Verifies `--fix` on closed stdin and answering no change nothing, `--help`, a bad `--app`, a home with no AI apps, the exit status, and that a run without `--fix` through its stow link changes nothing
-
-[`bootstrap.bats`](bootstrap.bats)
-
-- Validates `scripts/bootstrap/linux/apt-packages.txt`
-- Verifies Linux bootstrap guard clauses for missing `apt-get`
-- Runs `pihole.sh` against a scratch root (`PIHOLE_ROOT`) with mocked `apt-get`, `systemctl`, `sysctl`, `unbound-checkconf`, `dig`, `curl`, and `pihole-FTL`: a fresh install writes Unbound's Pi-hole config, disables the resolvconf hook, raises the receive buffer, restarts Unbound, seeds `pihole.toml` and runs the installer unattended; a rerun changes nothing but sets Pi-hole's upstreams and DNSSEC back; a rejected Unbound config stops before Pi-hole
-- Runs `macos/holeberry.sh` with mocked tools into a scratch `HOLEBERRY_APPS_DIR`: it installs the release DMG, leaves an installed copy alone, and refuses another team's app, one Gatekeeper rejects, or a release with no DMG
-- Runs `docker.sh` and `tailscale.sh` to verify they skip a tool on PATH or in Homebrew's bin, and `claude-code.sh` to verify the native installer runs only when Claude Code is in neither place
-- Dry-runs `harden.sh` against a scratch root (`HARDEN_ROOT`) with mocked system tools: required arguments, closing public SSH only once Tailscale is connected and the session came in over it or from the console (never from a terminal whose origin is unknown), Cloudflare-only ports, a Pi-hole's DNS and admin page (and DHCP when on) and `--lan` ports opened to the routed subnets only, the listeners only the tailnet will reach named, and stopping before any change when there is no usable key to copy, no LAN to open to, or Cloudflare's ranges are not CIDRs
-- Verifies the macOS iTerm2 step enables the Python API, makes the repo profile the default, adds the Catppuccin color presets (rewriting a stale one, keeping the user's own), and rewrites nothing on a second run
-- Verifies that `harden.sh` re-runs itself through sudo for the user who ran it, keeping `SSH_CONNECTION` and `TS_AUTHKEY`
-- Runs `bootstrap.sh` with logging `git`, `sudo`, `curl`, and `apt-get`: the clone and its rerun, `--help`, git installed through apt (and refused without sudo), and as root with `--user` the fetched `harden.sh`, then the clone and `install.sh` as that user
-- Checks shell script shebangs, strict mode, `common.sh` sourcing, and `BASEDIR` conventions
-
-[`harden_test.bats`](harden_test.bats)
-
-- Runs `scripts/bootstrap/linux/harden-test.sh` against a scratch root (`HARDEN_ROOT`) with mocked `sshd`, `ufw`, `tailscale`, `docker`, `systemctl`, `apt-get`, and `getent`: a hardened box passes with its open ports listed, a fresh box fails with the config files read the way sshd does (`sshd_config.d/` first, first value wins) and the checks that need root skipped, `--brief` prints only the failures, a locked-out or root admin user fails, unreadable sudoers files skip the sudo check rather than fail it, public SSH is judged against Tailscale, ports open to the box's own network are listed apart from the internet's and a Pi-hole fails when 53 is not among them, Docker ports published to all interfaces, pending upgrades, and a needed reboot warn, and bad arguments are rejected
-
-[`bin_scripts.bats`](bin_scripts.bats)
-
-- Covers scripts in [`stow/tools/.local/bin`](../stow/tools/.local/bin), [`stow/personal/.local/bin`](../stow/personal/.local/bin), and [`stow/pihole.linux/.local/bin`](../stow/pihole.linux/.local/bin)
-- Runs `st` (in `stow/desktop/.local/bin`) under plain Python: team listing and dry runs, a team without agents as one tab, the missing-teams-file hint, every team in the tracked `teams.toml.example`, a directory or the current directory as a one-tab team, a team winning over a same-named directory, and each tab running its command as the tab's program
-- Verifies help output, startup probing, and the Unbound rows for `ph-padd`
-- Runs `cf-cert` against a mocked acme.sh: argument checks, issue-only runs, the combined-pem install and chained reload command, stopping on a failed issue, a missing token on closed stdin, `--pihole` refusing to run without root or without `pihole-FTL`, and as root pointing Pi-hole at the pem with a chown and restart on renewal; paths with spaces, `;`, and `$(...)` stay quoted when the saved reload command runs
-- Verifies non-root self-elevation behavior for `ph-update`, `ph-test`, and `ph-backup`, and that `ph-update -r` does not restart after a failed update
-- Runs `ph-backup` against mocked Pi-hole, Unbound, and Tailscale and inspects the resulting tar.gz
-- Runs `os-doctor` and `ph-sec-audit` against mocked system tools
-- Runs `ts-test` in a fully mocked sandbox
-- Runs `sshkey` help, local key creation, and cleanup flows inside an isolated home directory; `delete` only once confirmed, `--dry-run` refused outside `cleanup` (it would skip the confirmation), the protected `id_rsa` never deleted, recreated, or touched by `cleanup` unless `SSHKEY_PROTECTED_LOCAL_KEY_NAME=''`, and an orphaned private key removed
-- Runs `df-link`, `df-rm`, `df-mv`, and `df-doctor` through a stow-style link into a fake repo: arguments pass through (`df-rm` as `link.sh rm`, `df-mv` as `link.sh mv`, `df-doctor` to `doctor.sh`), and a wrapper outside a repo fails clearly
-- Runs `df-deploy` with a stub `ssh` that runs the remote command against a scratch clone: pull and relink, every named or `DF_DEPLOY_HOSTS` host, a non-fast-forward pull failing that host before linking, a failed host not stopping the rest, dry runs, a missing host, and the unpushed-commit warning
-
-[`brew_add.bats`](brew_add.bats)
-
-- Runs `scripts/brew-add.sh` in a fake repo with scratch Brewfiles and a stub `brew`: sorted insertion into the chosen section with formulae before casks, cask detection and the formula preference, a Brewfile with one section or none, skipping names already listed (tap-qualified too), no entry after a failed install, skipping an installed package, dry runs, closed stdin needing `--file` and `--section`, and rejected names, files, and sections
-- Runs `df-add` through a stow-style link: `brew` reaches `brew-add.sh`, `stow` becomes `link.sh add` with every argument, and a missing or unknown kind fails
-
-[`brew.bats`](brew.bats)
-
-- Checks `homebrew/Brewfile.core` for valid lines, duplicates, and casks kept to macOS
-- Runs [`homebrew/brew.sh`](../homebrew/brew.sh) against a mocked brew: bundling without upgrades, skipping an installed Brewfile, `--verbose`, trusting tap-qualified entries, the macOS picker over pending entries, and the persona's Brewfile selection (`DOTFILES_BREWFILES`, `DOTFILES_BREW_OPTIONAL`) with failure on a missing one
-
-[`common.bats`](common.bats)
-
-- Tests logging helpers in [`scripts/common.sh`](../scripts/common.sh)
-- Verifies `gum` and non-`gum` behavior
-- Tests `require_non_root`, `sudo_cmd`, `spin`, and `tool_installed` (a tool on PATH, in `~/.local/bin`, or under `HOMEBREW_PREFIX`, with Homebrew's usual prefixes as the fallback)
-- Tests what sourcing sets (`XDG_CONFIG_HOME` under `HOME`, only when `HOME` is set), `die` (stderr, exit 1, through gum when styled), the run summary (`add_result` counts, `add_next_step` keeps each step once), `prompt_mode` (`DOTFILES_PROMPT`, plain reads without a terminal), and the plain markers when stdout is captured
-
-[`doctor.bats`](doctor.bats)
-
-- Runs `scripts/doctor.sh` against a scratch home, a fixture repo, and fixture xdg-ninja data, with a new zsh's environment from the home's own `.zshenv`
-- Verifies the Links, Fix, Decide, and Ignore groups, the closing hint, `--all`, `--tsv`, `--explain` with xdg-ninja's full advice, `--days`, option errors, and that a report changes nothing
-- Classifies by xdg-ninja (export-only advice on a `how:` line, no XDG support, a stated move target only for that kind of entry and only once a new shell sets any variable the advice exports, an existing target left for a hand merge), by a new shell's redirect (the old copy, naming the variable whose path matches the entry), and by owner and last change
-- Lists config directly in `~/.config` and commands in `~/.local/bin` that the repo does not manage under Not in the repo (with owner, age, or link target; a stale unowned folder under Decide; the XDG places from a new shell), makes broken links and old zsh completion caches fixes, replaces control characters in names, and reports missing xdg-ninja data and an incomplete check (which offers no fixes)
-- The list of changes: Enter applies the Fix suggestions and skips the rest (`keep` still reads as skip); one line archives, adds (`link.sh add`), and ignores together; delete removes only after a yes and never follows a symlink; missing links get a `relink` row that runs `df-link` (skipped without GNU Stow); an unreadable line, `none`, closed stdin (no question printed), and nothing to fix change nothing; on macOS a test drives the terminal list through `script` with one key per change
-- Never touches managed parents, credentials, private agents, local overrides, or the repo; archives folders and links without following them, once; respects `--destination`; leaves files in a symlinked folder alone; refuses a symlinked archive, a move through a symlinked parent, and a move while a program has the files open
-- The installer's boxed report with closed stdin, its incomplete-check warning, and the unboxed `--fix-only` list after the report
-
-[`githooks.bats`](githooks.bats)
-
-- Runs `.githooks/pre-commit` in a scratch repo against stub `check-drift` scripts: a pass, a failure reported as drift, a crash (killed by a signal) reported as a crash, and a missing agents checkout skipped; a staged script ShellCheck flags fails before check-drift, only staged files are linted (not a tracked script left out, a Python bin script, or a text file), and a staged deletion lints nothing; and runs `sandbox-install.sh` against a stub `docker` whose install fails, checking that only the tail is printed and the full log is kept
-
-[`link.bats`](link.bats)
-
-- Runs the real [`scripts/link.sh`](../scripts/link.sh) and GNU Stow against a scratch home and a local agents repo fixture
-- Verifies linking per platform, shared editor settings, backups of changed copies and foreign links, removal of stale repo links (files that moved, were deleted, or belong to an unused package) while real files and foreign links stay, persona choice (flag, environment, saved state, OS default, unknown or wrong-OS names), personas without agents or editors, idempotency, and dry runs
-- Covers agent links (clone, backup of real agent config, unreachable repo), seed files (the gh login only for personas with the `personal` layer), the `managed` and `status` reports, the installs (`offered` and `installs`: the optional installs read from setup scripts' detect lines, the OS directory first, a role requiring one, `DOTFILES_INSTALLS`, the saved choice, and a persona switch dropping what it does not offer), and the git identity: only `personal` sets `user.email`, `config.local` overrides it, and a missing email or a `[user]` in `~/.gitconfig` is warned about and reported; `status` names real files a layer the persona does not link would own (not shared parents or the empty folders a persona switch leaves) and never moves them
-- Runs `add` against a fixture repo: a file becomes a link with no backup and keeps its executable bit; directories, `--platform`, relative paths, `--seed`, dry runs; refusals of secrets, private keys, `.local` overrides, agent and editor paths, repo files, outside paths, symlinks, banned words (without naming them), a layer the persona does not link, and a missing layer on closed stdin; the layer prompt on a pseudo-terminal describes each layer (paths, personas, platform) and takes a number or a name
-- Runs `rm` against the fixture repo: a link becomes a real file with the same content and mode, gone from the layer (empty folders too) and the index, and left alone by the next link run; a directory removes every managed link in it and keeps its real files and foreign links; real files, seed files, foreign, agent, and editor links, paths outside the destination, and the destination itself are refused with nothing changed; dry runs; `--delete` moves the file to a private `cleanup/<timestamp>.remove/` folder
-- Runs `mv` against the fixture repo: a moved file stays linked (relative, same content and mode) but into the new layer, the old repo file and its empty folders are gone and the index shows a rename, and the next link run keeps it; `--platform`, the platform part kept by default, and `--no-platform`; a directory moves every managed link in it; the layer prompt on a pseudo-terminal and closed stdin needing `--layer`; refusals (what `rm` refuses, a layer this persona does not link, the current layer, a taken destination, contradictory flags) leave the tree unchanged; dry runs; references to the old path listed and left as they are; and the closing note naming the personas that link the new layer
-
-[`install.bats`](install.bats)
-
-- Tests `install.sh` argument parsing, including `--persona`, `--install`, and `--no-install`, the persona picker (number, name, empty answer, EOF), a saved persona confirmed on every terminal run (Enter keeps it) and never asked without a terminal or after `--persona` or `DOTFILES_PERSONA`, rejecting an unknown persona or install before any change, and the closing installs step (the default install applied on a fresh machine, a chosen role, the saved choice, an applied one skipped, a failing script reported)
-- Verifies SSH key helper behavior
-- Tests error handling when `HOME` is unset
-- Runs an isolated integration test for [`install.sh`](../install.sh) with sandboxed home and mocked external commands
-
-[`ph.bats`](ph.bats)
-
-- Runs `ph` (in `stow/personal/.local/bin`) against a mocked `curl` that records each request and answers from fixtures
-- Verifies the login (password on stdin, never in argv; the saved password file; a wrong or missing password) and the logout on exit, blocking on and off with and without a timer (a bad duration fails before any request), allow and deny adds with comments and regexes, URL-encoded removals, API errors, the list, `check`, the blocked domains grouped one line each, newest first, over `--since` (a bad duration fails before any request), and the query log by client IP or name with control characters stripped, `--json`, and `api`
-
-[`zsh.bats`](zsh.bats)
-
-- Checks the zsh startup files for the XDG layout and the Homebrew bootstrap, and runs the `na` alias helper and `lg` (following lazygit to the directory it left in)
-- Runs the bash startup files with a scratch home and checks the history path
-
-[`repo_config.bats`](repo_config.bats)
-
-- Checks the shipped personas and roles: only settings `link.sh` knows, with valid values; their layers, Brewfiles, roles, setup scripts, and `requires` exist; every persona for this OS loads in `link.sh` without writing anything; every stow package and Brewfile is used; every detect command parses; a role's setup script has no detect line of its own
-- Parses every tracked JSON, TOML (examples too), YAML, and `.itermcolors` file, the zsh and bash startup files, and the zsh plugin list, skipping a check whose parser is missing
-- Runs Vim with the shipped vimrc: Vim's defaults still load, and history and netrw's bookmarks go under `XDG_STATE_HOME` (or `~/.local/state`) in a private `vim` folder
-
-[`runner.bats`](runner.bats)
-
-- Checks the runner itself: a failing `[[ ]]` before a test's last line fails the test, and on macOS a script under test still runs on `/bin/bash`
-
-[`deps.bats`](deps.bats)
-
-- Runs `deps.sh` in-process against a scratch cache with a stub `curl` serving fixture tarballs: a fresh cache fetches the four tools and links them, a rerun is silent and fetches nothing, a checksum mismatch or failed download fails naming the URL and hashes and leaves nothing in the cache, leftovers of a killed run go first, a bash new enough is used without a fetch while an old one has bash fetched, built (the build stubbed), and picked from the cache, a failed build leaves nothing, `uv` gives a `python3` link (installing a Python once when none is there) and its absence none, the cache directory follows `DOTFILES_TEST_DEPS` then `XDG_CACHE_HOME`, and `deps_sha256` matches the published digest
-- Runs `run_tests.sh` against stubs: a missing `shellcheck` or `stow` fails with the install hint before anything is fetched, and `--lint-only` leaves the cache alone
-
-[`test_helper.bash`](test_helper.bash)
-
-- Shared Bats setup helpers
-- Sets `PROJECT_ROOT`
-- Creates and cleans temporary directories for each test
-
-[`deps.sh`](deps.sh)
-
-- The pinned versions and sha256 of the suite's tools, and the functions that fetch, verify, and link them into the cache (see Runner); sourced by `run_tests.sh`, or run on its own to warm the cache, as CI does
-
-[`run_tests.sh`](run_tests.sh)
-
-- Requires `shellcheck` (unless `--no-lint`) and `stow`, fills the cache through `deps.sh`, and on macOS runs Bats on the cache's bash through the `bash` shim
-- Runs Bats with `--jobs` across every core, on the cache's GNU `parallel`
-- Exports `BATS_LIB_PATH`
-- Runs all `*.bats` files in this directory, only the test files or directories named on the command line, or only ShellCheck with `--lint-only` (limited to the files named after it, of those it would lint anyway), or only Bats with `--no-lint`; other arguments go to Bats (`./tests/run_tests.sh tests/link.bats --filter add`)
+- `ai_doctor.bats`: `ai-doctor` against fixture Claude Code, Codex, and Cursor config: every finding, `--fix`, and that nothing changes without it.
+- `bin_scripts.bats`: the scripts in `stow/*/.local/bin` other than `ai-doctor` and `ph`, with their external commands mocked.
+- `bootstrap.bats`: `apt-packages.txt`, the Linux and macOS bootstrap scripts, the optional installs, `pihole.sh` (`PIHOLE_ROOT`), `harden.sh` dry runs (`HARDEN_ROOT`), `iterm2.sh`, `bootstrap.sh`, and script conventions (shebang, strict mode, `common.sh`).
+- `brew_add.bats`: `brew-add.sh` and `df-add` against scratch Brewfiles and a stub `brew`.
+- `brew.bats`: the Brewfiles' shape and `brew.sh` against a mocked brew.
+- `common.bats`: the helpers in `scripts/common.sh`.
+- `deps.bats`: `deps.sh` against a scratch cache with a stub `curl`, and `run_tests.sh`'s tool checks.
+- `doctor.bats`: `doctor.sh` against a scratch home, a fixture repo, and fixture xdg-ninja data: every group, the list of changes, and what it never touches.
+- `githooks.bats`: `pre-commit` and `sandbox-install.sh` against stubs.
+- `harden_test.bats`: `harden-test.sh` against a scratch root (`HARDEN_ROOT`) with mocked system tools.
+- `install.bats`: `install.sh`'s arguments, prompts, SSH key step, and an isolated integration run with mocked commands.
+- `link.bats`: the real `link.sh` and GNU Stow against a scratch home: linking, stale links, backups, personas, agent links, seed files, `status`, `managed`, the installs, git identity, `add`, `rm`, and `mv`.
+- `ph.bats`: `ph` against a mocked `curl` answering from fixtures.
+- `repo_config.bats`: the shipped personas and roles, every tracked JSON, TOML, YAML, and `.itermcolors` file, the shell startup files, and the vimrc.
+- `runner.bats`: the runner itself: a failing `[[ ]]` before a test's last line fails the test, and a script under test still runs on `/bin/bash`.
+- `zsh.bats`: the zsh and bash startup files.
+- `test_helper.bash`: shared setup: `PROJECT_ROOT`, a temporary directory per test, fixture personas.
 
 ## Writing tests
 
-- Use the temporary-directory helpers in `tests/test_helper.bash` and isolate destination paths and external commands. Tests must not install software, change services, or modify the real home directory as part of exercising the code under test.
-- Run Bats through `run_tests.sh`. A plain `bats` on macOS runs on `/bin/bash` 3.2, where a failing `[[ ]]` or `(( ))` fails a test only as its last command, so a test can pass for the wrong reason; `runner.bats` fails there to flag it. Prefer bats-assert forms (`assert test -f ...`, `refute test -e ...`, `assert_equal`) for checks that name what failed.
-- The ShellCheck runner selects tracked shell files and managed bin scripts. Explicitly lint newly created, untracked shell files and changed shell entrypoints outside that selection, such as `.githooks/pre-push`; a passing runner does not cover them automatically.
+- Use the temporary-directory helpers in `test_helper.bash` and isolate destination paths and external commands. Tests must not install software, change services, or modify the real home directory.
+- Run Bats through `run_tests.sh`, never plain `bats`: on macOS that runs on `/bin/bash` 3.2, where a failing `[[ ]]` or `(( ))` fails a test only as its last command, so a test can pass for the wrong reason; `runner.bats` fails there to flag it. Prefer bats-assert forms (`assert test -f ...`, `refute test -e ...`, `assert_equal`) for checks that name what failed.
+- The ShellCheck runner selects tracked `*.sh` and `*.bash` files and `stow/*/.local/bin/*` scripts with a sh or bash shebang. Lint anything outside that selection by hand, such as `.githooks/pre-push`; a passing runner does not cover it.

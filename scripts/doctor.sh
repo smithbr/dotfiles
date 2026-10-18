@@ -1,26 +1,6 @@
 #!/usr/bin/env bash
-#
-# doctor.sh — check this machine against the dotfiles repo (df-doctor runs it).
-#
-# One pass collects findings: each unmanaged dotfile in the home, each file
-# next to managed files, and each repo link that is off. A finding is in one
-# group, with a suggested action where df-doctor can carry one out:
-#
-#   links   repo links to repair by hand (link.sh status), then df-link
-#   fix     a change df-doctor suggests: archive junk and old copies a tool
-#           no longer reads, or move a file where xdg-ninja's advice says
-#   decide  needs a person: no owner found, XDG advice to follow by hand, an
-#           unmanaged file next to managed ones, or a file of a layer this
-#           persona does not link
-#   unmanaged  config directly in ~/.config and commands in ~/.local/bin that
-#           the repo does not manage (made outside it)
-#   ignore  left alone: in use, local state, made by the OS (normal or
-#           critical), a tool without XDG support, or marked to ignore on this machine (--ignore, or ignore when asked)
-#
-# On a terminal the report is followed by one list of everything df-doctor
-# can change, where each item gets skip, archive, delete, ignore, add, or move
-# and all are applied at once. The report, the list, --explain, and --tsv all
-# read the same findings.
+# doctor.sh — check this machine against the dotfiles repo (df-doctor runs
+# it). Groups, keys and the fix list: usage() and scripts/README.md.
 
 set -euo pipefail
 
@@ -52,14 +32,13 @@ BIN_HOME=""
 IGNORE_FILE=""
 IGNORED_PATHS=""
 declare -a extra_roots=() ignore_add=() ignore_remove=()
-# Where the system paths that show an OS file's owner is installed are looked
-# up; tests point it at a fake root.
+# Root for the OS-owner evidence paths; tests point it at a fake root.
 OS_ROOT="${DF_DOCTOR_ROOT:-}"
 
-# The findings, one index per path. action is what df-doctor suggests (archive,
-# move, keep); target is where a move goes; how is advice to follow by hand;
-# kind sorts the ignored ones (use, command, state, system, noxdg); fixable is 0 when
-# df-doctor must not touch the path (inside a symlinked folder, say).
+# The findings, one index per path. action is the suggestion (archive, move,
+# keep) or, for links, the link.sh state; target is where a move goes; how is
+# advice to follow by hand; kind sorts the ignored ones (use, state, system,
+# noxdg, marked); fixable is 0 when df-doctor must not touch the path.
 declare -a f_path=() f_group=() f_action=() f_target=() f_reason=() f_how=() f_kind=() f_fixable=() f_size=()
 
 usage() {
@@ -262,9 +241,8 @@ is_local_state() {
 
 # --- Paths marked to ignore ---------------------------------------------------
 
-# The ignore list holds ~/-relative paths, one per line, so it reads the same
-# for any destination; blank lines and # comments are skipped. It lives in this
-# machine's state, since what is local state differs from machine to machine.
+# The ignore list holds ~/-relative paths, one per line; blank lines and
+# # comments are skipped.
 load_ignored() {
     local line
 
@@ -704,7 +682,6 @@ classify_home() {
     local var value redirected="" target ready owner age
     local -a var_list=()
 
-    # Finder rewrites .DS_Store at once, so archiving it achieves nothing.
     if is_local_state "${path}"; then
         add_finding ignore "${path}" keep "" "local state" "" state
         return
@@ -730,9 +707,8 @@ classify_home() {
     IFS=',' read -r -a var_list <<< "${vars}"
 
     if [[ "${movable}" == true ]]; then
-        # Follow xdg-ninja's advice where it names one place to move this file
-        # or directory to. Advice that also exports variables waits until a new
-        # shell sets them all (less before 598 needs LESSHISTFILE first).
+        # Move where xdg-ninja names one target, once a new shell sets every
+        # variable the advice exports.
         if [[ -n "${stated}" && ! -L "${path}" ]]; then
             ready=1
             for var in ${var_list[@]+"${var_list[@]}"}; do
@@ -824,8 +800,8 @@ list_unmanaged() {
     done
 }
 
-# The folders that hold managed files, outside the broad ones (the home,
-# ~/.config, ~/.local), plus any the caller named, nested ones dropped.
+# The folders that hold managed files, minus the broad and protected ones,
+# plus any the caller named; nested ones dropped.
 neighbor_roots() {
     local managed parent last=""
 
@@ -915,10 +891,8 @@ classify_config_entry() {
     fi
 }
 
-# Everything directly in the XDG config and bin folders (a new shell's
-# XDG_CONFIG_HOME and XDG_BIN_HOME, or ~/.config and ~/.local/bin) that the repo
-# does not manage, so config and commands made outside the repo show up. A
-# folder that holds managed files is looked into by collect_neighbors instead.
+# Unmanaged entries directly in the XDG config and bin folders; a folder with
+# managed files is collect_neighbors' job.
 collect_xdg_places() {
     local config path
 
@@ -1225,11 +1199,8 @@ in_use() {
     fi
 }
 
-# Moves each path where xdg-ninja's advice says. The move is a rename on one
-# filesystem, so nothing is copied or deleted; it refuses an existing target,
-# a symlink, a symlinked parent on either side, a target outside the
-# destination, and a path a running program has open. Each move is logged
-# with its undo.
+# Rename each path to its xdg-ninja target, refusing unsafe moves; each is
+# logged with its undo.
 move_paths() {
     local path="" target="" parent="" i log="${DEST_DIR}/.local/state/dotfiles/moves.tsv" failed=0
 
@@ -1532,12 +1503,8 @@ pick_by_line() {
     row_actions=(${picked[@]+"${picked[@]}"})
 }
 
-# Lists everything df-doctor can change, one row per item, each set to its
-# suggestion: Fix items to theirs, missing or stale repo links to relink, the
-# rest to skip. The person sets each row to skip, archive, delete, ignore,
-# add (to the repo), or move, all in one list, and every row is applied at
-# once. Deleting asks once more. Nothing changes when the list is cancelled
-# or stdin is closed.
+# Build the change list (Fix rows preset, links to relink, the rest skip),
+# ask once, apply. Deleting asks again; a cancelled list changes nothing.
 fix_flow() {
     local i r group relink=0 failed=0 answer summary="" relink_paths=""
     local -a row_ids=() row_actions=() row_texts=() to_archive=() to_delete=() to_move=() to_manage=() to_ignore=()

@@ -1,13 +1,6 @@
 #!/usr/bin/env bash
-# Install Homebrew if needed, then the persona's Brewfiles: those in
-# DOTFILES_BREWFILES in full, and on macOS a picker over the entries of
-# DOTFILES_BREW_OPTIONAL not yet installed. install.sh sets both from the
-# persona and asks the picker's question itself up front (--pending lists the
-# entries, DOTFILES_BREW_PICKS answers it); run on its own this installs core
-# and offers macos. Brewfiles are plain `brew bundle` files: an entry that only
-# applies to macOS says so with `if OS.mac?`. It also writes Homebrew's global
-# npmrc so npm never caches in ~/.npm. Nothing is upgraded here; os-doctor
-# does that.
+# Install Homebrew and the persona's Brewfiles; on macOS offer the optional
+# ones. See homebrew/README.md.
 
 set -euo pipefail
 
@@ -125,10 +118,7 @@ pending_entries() {
     done < "${brewfile}"
 }
 
-# macOS only: the entries of an optional Brewfile not yet installed, chosen on
-# a terminal (closed stdin chooses none), bundled from a temporary Brewfile.
-# When DOTFILES_BREW_PICKS is set (install.sh asked already), its lines are
-# the choice and nothing is asked here.
+# macOS: install the chosen not-yet-installed entries of an optional Brewfile.
 offer_brewfile() {
     local name="$1" brewfile="${BASEDIR}/homebrew/Brewfile.$1" entry tmp count=0
     local -a pending=()
@@ -170,11 +160,8 @@ chosen_entries() {
     choose_many "Optional Homebrew packages (${name})" "$@"
 }
 
-# npm started outside a shell (Claude's MCP servers through npx, GUI apps)
-# never sees .zshenv's NPM_CONFIG_CACHE and caches in ~/.npm. Homebrew's npm
-# reads its global npmrc whatever started it, so that file points the cache at
-# the same place; the shell's variable still wins where it is set. A global
-# npmrc the repo did not write is left alone.
+# Point Homebrew's global npmrc at the shell's npm cache for npm started
+# outside zsh; a foreign npmrc is left alone.
 NPMRC_MARKER="# Managed by dotfiles homebrew/brew.sh"
 
 write_global_npmrc() {

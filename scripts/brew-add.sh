@@ -1,10 +1,5 @@
 #!/usr/bin/env bash
-# Install Homebrew packages and record them in one of the repo's Brewfiles.
-#
-# Each name goes into the chosen Brewfile and section in sorted order among
-# entries of its kind (brew or cask). A name already listed in any Brewfile is
-# skipped. The package is installed before it is recorded, so a failed install
-# leaves the Brewfile unchanged.
+# Install Homebrew packages and record each, sorted, in a Brewfile section.
 
 set -euo pipefail
 

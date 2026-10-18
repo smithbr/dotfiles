@@ -2,11 +2,8 @@
 
 set -euo pipefail
 
-# Homebrew resolves its trust store from XDG_CONFIG_HOME, falling back to
-# ~/.homebrew when unset. The bootstrap runs before link.sh deploys ~/.zshenv,
-# which is what normally exports it, so without this default `brew trust` grants
-# made during install land somewhere the finished shell never reads. Guarded on
-# HOME so callers that deliberately unset it still hit their own error path.
+# Default XDG_CONFIG_HOME so brew trust grants made before ~/.zshenv is linked
+# land where the shell reads them. Guarded on HOME for callers that unset it.
 if [[ -z "${XDG_CONFIG_HOME:-}" && -n "${HOME:-}" ]]; then
     export XDG_CONFIG_HOME="${HOME}/.config"
 fi
@@ -47,9 +44,8 @@ log_error() {
     fi
 }
 
-# Styled output on a terminal with gum, plain text otherwise. Decided when
-# sourced, so a step whose output is captured keeps the style it started with;
-# a script that resets PATH calls detect_gum again.
+# HAS_GUM: gum installed and stdout a terminal, decided when sourced; call
+# again after changing PATH.
 detect_gum() {
     HAS_GUM=false
     command -v gum >/dev/null 2>&1 && [[ -t 1 ]] && HAS_GUM=true
@@ -225,9 +221,8 @@ spin() {
         return 0
     fi
 
-    # The spinner only draws on a terminal: captured into a box or piped
-    # through install.sh, gum spin leaves cursor escapes in the output, so
-    # the title is logged and the command prints as it goes.
+    # Spinner only on a terminal and for an external command; else log the
+    # title and stream.
     if command -v gum >/dev/null 2>&1 && [[ -t 1 && "$(type -t "$1" 2>/dev/null)" != "function" ]]; then
         if ! gum spin --spinner dot --title "${title}" --padding="0 1" -- "$@"; then
             log_error "${title} failed"
@@ -322,8 +317,8 @@ choose_one() {
 # all, or Enter for none), printed one per line. An ITEM may be
 # LABEL<tab>VALUE: the label is shown, the value printed. Esc, end of input,
 # or an invalid number picks none and returns 1. With --selected, those
-# values start selected (ticked in gum, [x] in the list) and Enter keeps
-# them; "none" then picks none.
+# values start selected and Enter or end of input keeps them (returning 0);
+# "none" then picks none.
 #   choose_many [--selected "VALUE..."] HEADER ITEM...
 choose_many() {
     local header selected="" item reply="" token index=1 height mark

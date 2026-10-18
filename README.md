@@ -1,29 +1,31 @@
 # My dotfiles
 
-macOS and Debian dotfiles linked into place with [GNU Stow](https://www.gnu.org/software/stow/).
-Every managed file in `~` is a symlink into this repo, so edit it in place and commit; the few files under `seed/` are copied once instead.
+macOS and Debian dotfiles linked into place with [GNU Stow](https://www.gnu.org/software/stow/). Every managed file in `~` is a symlink into this repo, so edit it in place and commit. The files under `seed/` are copied once instead.
 
 ```bash
 git clone https://github.com/smithbr/dotfiles.git ~/.dotfiles
 ~/.dotfiles/install.sh
 ```
-On a machine with nothing yet, one line does the clone and the install (as root on a new VPS, `--user NAME` first creates and hardens for that admin user):
+
+On a machine with nothing yet, one line clones and installs. As root on a new VPS, `--user NAME` first creates and hardens for that admin user:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/smithbr/dotfiles/main/bootstrap.sh) --persona vps
 ```
 
-The install asks what the machine is up front (persona, installs, optional packages), remembers the answers and preselects them next time (the persona and the installs are asked on every run from a terminal, so Enter keeps them), and then only changes what differs, so it is safe to run on a machine already set up. `--persona NAME`, `--install NAME`, and `--no-install NAME` answer without a terminal, and `-n` prints what would change. On a Linux `server` or `vps` that is not yet hardened, the install first offers to harden it (key-only SSH over Tailscale, firewall, unattended upgrades; `scripts/bootstrap/linux/harden-test.sh` is the check, and runs on its own against any Linux box). Installs are applied last: Docker and Tailscale (Linux) and Claude Code (both), which every persona offers pre-checked and skips when the tool is already there through Homebrew or natively, and the persona's roles, such as a Pi-hole with Unbound as its upstream (`--install pihole` on a `server`).
+The install asks what the machine is up front, remembers the answers, and changes only what differs, so it is safe to run again. `--persona NAME`, `--install NAME`, and `--no-install NAME` answer without a terminal; `-n` prints what would change. `install.sh --help` lists the rest. On a Linux `server` or `vps` that is not yet hardened, the install first offers to harden it.
 
 ## Personas and roles
-Pick the persona that fits the machine, then the installs it should have: Docker, Tailscale, and Claude Code are offered to every persona, pre-checked, and a role is what the machine is for ([roles/](roles/README.md)):
 
-- `home` (everything),
-- `work` (scoped config),
-- `server` (a headless box at home, macOS or Linux; offers the Pi-hole role),
-- `vps` (a Linux box on the public internet; hardened first when it is not).
+A persona says whose machine it is; a role says what it is for ([roles/](roles/README.md)). Docker and Tailscale on Linux and Claude Code on both OSes are offered to every persona, on by default.
+
+- `home`: everything.
+- `work`: scoped config.
+- `server`: a headless box at home, macOS or Linux; offers the Pi-hole role.
+- `vps`: a Linux box on the public internet; hardened first when it is not.
 
 ## Managing files
+
 ```bash
 df-add stow ~/.config/tool/config  # adds file and symlinks it
 df-add brew llmfit                 # installs it and adds it to a Brewfile
@@ -35,4 +37,4 @@ df-link                            # After adding a file under `stow/`
 df-deploy pihole                   # After pushing: pull and relink on other machines
 ```
 
-See [AGENTS.md](AGENTS.md) for maintenance and quality rules. Each part of the repo has its own README: [scripts](scripts/README.md) (linking, file review), [bootstrap](scripts/bootstrap/README.md) (OS setup, `harden.sh` and its check), [roles](roles/README.md) (what a machine is for), [stow](stow/README.md) (layers), [homebrew](homebrew/README.md) (where packages go), and [tests](tests/README.md).
+See [AGENTS.md](AGENTS.md) for repo-wide rules. Each directory has its own README: [scripts](scripts/README.md), [bootstrap](scripts/bootstrap/README.md), [roles](roles/README.md), [stow](stow/README.md), [homebrew](homebrew/README.md), [seed](seed/README.md), [editors](editors/README.md), and [tests](tests/README.md).

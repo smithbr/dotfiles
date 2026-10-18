@@ -1,8 +1,30 @@
 # roles/
 
-What a machine is for, beside the persona that says whose it is. A role (`roles/<name>`, plain `key=value` lines parsed like a persona, never sourced) names `os` (allowed platforms), `layers` (linked like the persona's own), `brew` (Brewfiles installed in full), `requires` (installs applied first, chosen or not; a role or an optional install), `detect` (a command that succeeds once the role is applied, run with `bash -c` with `scripts/common.sh` sourced), and `setup` (the script `install.sh` runs when detect fails: `scripts/bootstrap/<os>/<setup>.sh` or `scripts/bootstrap/<setup>.sh`, the role's own name when left out). A persona lists roles in `roles` (on by default) and `roles_optional` (offered). On a terminal, `install.sh` asks for them in their own question, "What is this machine for?", before the optional installs, with the saved roles and any already applied ticked.
+What a machine is for, beside the persona that says whose it is. A role is `roles/<name>`: plain `key=value` lines, parsed like a persona and never sourced. Its keys:
 
-- Beside the roles stand the optional installs, which no persona lists: a setup script in `scripts/bootstrap/<os>/` or `scripts/bootstrap/` with a `# detect: COMMAND` line is offered to every persona on its OS, on by default unless the script also says `# default: off`, which offers it unticked so it only installs when picked. Today `linux/docker.sh`, `linux/tailscale.sh`, `claude-code.sh` (both OSes), and `macos/holeberry.sh`, off by default; the command-line tools detect with `tool_installed NAME` from `scripts/common.sh`, which looks on PATH, in `~/.local/bin`, and in Homebrew's bin (`HOMEBREW_PREFIX`, else its usual prefixes), so a tool installed through Homebrew is not installed natively as well, and the other way round. A role's setup script declares no detect line: the role file does.
-- `install.sh` asks which installs a machine gets on every run from a terminal, like the persona, with the saved choice and the installs already applied preselected so Enter keeps them, and remembers the answer in `~/.local/state/dotfiles/installs`; `--install NAME`, `--no-install NAME`, and `DOTFILES_INSTALLS` answer without a terminal, and closed stdin keeps the saved choice (a fresh machine gets the optional installs and the persona's default roles). Installs run last, in `requires` order, each skipped when its detect command succeeds and recorded either way, so the next run retries a failed one. A setup script's output streams as it happens, indented under the step (a vendor installer may take minutes or print a login URL); `install.sh --verbose` shows it raw. An install must be safe to run again.
-- `pihole` brings the `pihole` layer (the `ph-*` tools) and sets up Pi-hole with Unbound as its upstream (`scripts/bootstrap/linux/pihole.sh`: Unbound from apt on `127.0.0.1#5335` with the guide's config, Pi-hole unattended through its official installer, pointed at Unbound with its own DNSSEC off; `PIHOLE_UPSTREAMS` overrides the upstreams); every run warns when Pi-hole has no web password (`sudo pihole setpassword` sets one). The role counts as applied once both are installed and Unbound has its Pi-hole config, and a rerun brings Pi-hole's upstreams and DNSSEC setting back in line. It requires `tailscale`, which joins even when unticked. `harden.sh` recognises the Pi-hole and keeps 53, 80, and 443 (plus DHCP and NTP when FTL serves them) open to the LAN, and `harden-test.sh` fails when ufw blocks the LAN's DNS.
-- A new role is a file here plus a setup script in `scripts/bootstrap/`; add it to the personas that should offer it. A new optional install is only the setup script, with its detect line. `scripts/link.sh offered` lists what a persona is offered on this OS and `scripts/link.sh installs` the chosen installs in run order.
+- `os`: allowed platforms.
+- `layers`: linked like the persona's own.
+- `brew`: Brewfiles installed in full, joining the persona's.
+- `requires`: installs applied first, chosen or not; a role or an optional install.
+- `detect`: a command that succeeds once the role is applied, run with `bash -c` with `scripts/common.sh` sourced.
+- `setup`: the script `install.sh` runs when detect fails, `scripts/bootstrap/<os>/<setup>.sh` or `scripts/bootstrap/<setup>.sh`; the role's own name when left out.
+
+A persona lists roles in `roles` (on by default) and `roles_optional` (offered).
+
+## Optional installs
+
+Beside the roles stand the optional installs, which no persona lists. A setup script in `scripts/bootstrap/<os>/` or `scripts/bootstrap/` with a `# detect: COMMAND` line is offered to every persona on its OS, on by default unless it also says `# default: off`. A role's setup script declares no detect line; the role file does. A command-line tool detects with `tool_installed NAME` from `scripts/common.sh`, which looks on PATH, in `~/.local/bin`, and in Homebrew's bin, so a tool installed through one manager is not installed again through the other.
+
+## How install.sh applies them
+
+- On a terminal, `install.sh` asks on every run, like the persona: first the roles ("What is this machine for?"), then the optional installs, with the saved choice and the installs already applied preselected so Enter keeps them. The answer is saved in `~/.local/state/dotfiles/installs`. `--install NAME`, `--no-install NAME`, and `DOTFILES_INSTALLS` answer without a terminal. Closed stdin keeps the saved choice; a fresh machine gets the installs on by default and the persona's `roles`, and nothing off by default or only offered.
+- Installs run last, in `requires` order, each skipped when its detect command succeeds. A failed one stays chosen, so the next run retries it. A setup script's output streams under its step; `install.sh --verbose` shows it raw.
+- `scripts/link.sh offered` lists what this persona is offered on this OS, with each detect command; `scripts/link.sh installs` lists the chosen installs in run order.
+
+## pihole
+
+The `pihole` role brings the `pihole` layer (the `ph-*` tools) and sets up Pi-hole with Unbound as its upstream through `scripts/bootstrap/linux/pihole.sh` ([`scripts/bootstrap/README.md`](../scripts/bootstrap/README.md)). It requires `tailscale`, which joins even when unticked. It counts as applied once both are installed and Unbound has its Pi-hole config.
+
+## Adding one
+
+A new role is a file here plus a setup script in `scripts/bootstrap/`; add it to the personas that should offer it. A new optional install is only the setup script, with its detect line. Either must be safe to run again.
