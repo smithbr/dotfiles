@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Before every commit: ShellCheck on the staged shell scripts, then the agents
-# repo's check-drift, which scans this repo for retired terms and checks
-# link.sh's AGENT_LINKS against ~/.config/agents.
+# Before every commit: ShellCheck on the staged shell scripts and the docs
+# lint (tests/lint-docs.sh), then the agents repo's check-drift, which scans
+# this repo for retired terms and checks link.sh's AGENT_LINKS against
+# ~/.config/agents.
 # Bypass once: git commit --no-verify
 
 set -euo pipefail

@@ -13,7 +13,7 @@ setup() {
     REPO="${TEST_TMPDIR}/repo"
     mkdir -p "${REPO}/.githooks" "${REPO}/tests" "${REPO}/stow/tools/.local/bin"
     cp "${PROJECT_ROOT}/.githooks/pre-commit" "${REPO}/.githooks/"
-    cp "${PROJECT_ROOT}/tests/run_tests.sh" "${REPO}/tests/"
+    cp "${PROJECT_ROOT}/tests/run_tests.sh" "${PROJECT_ROOT}/tests/lint-docs.sh" "${REPO}/tests/"
     git -C "${REPO}" init -q
 }
 

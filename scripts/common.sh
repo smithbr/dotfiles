@@ -314,11 +314,10 @@ choose_one() {
 }
 
 # Any number of the ITEMs, by gum multi-select or numbers on stdin ("1 3",
-# all, or Enter for none), printed one per line. An ITEM may be
-# LABEL<tab>VALUE: the label is shown, the value printed. Esc, end of input,
-# or an invalid number picks none and returns 1. With --selected, those
-# values start selected and Enter or end of input keeps them (returning 0);
-# "none" then picks none.
+# all, or Enter for none), one per line. An ITEM may be LABEL<tab>VALUE: the
+# label is shown, the value printed. Esc, end of input, or an invalid number
+# picks none and returns 1. With --selected, those values start selected and
+# Enter or end of input keeps them, returning 0; "none" then picks none.
 #   choose_many [--selected "VALUE..."] HEADER ITEM...
 choose_many() {
     local header selected="" item reply="" token index=1 height mark

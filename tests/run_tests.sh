@@ -84,9 +84,11 @@ if [[ "${NO_LINT}" -eq 0 ]]; then
     require_tool shellcheck 'install it with brew install shellcheck (apt install shellcheck on Debian)'
     if [[ "${LINT_ONLY}" -eq 1 ]]; then
         run_shellcheck "$@"
+        bash "${TESTS_DIR}/lint-docs.sh"
         exit 0
     fi
     run_shellcheck
+    bash "${TESTS_DIR}/lint-docs.sh"
 fi
 
 # The link suite drives the real GNU Stow against scratch directories.

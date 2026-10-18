@@ -2,8 +2,8 @@
 # Installs Holeberry, a Pi-hole menu bar app with no Homebrew cask, from its
 # latest release DMG once codesign and spctl accept it. An installed copy
 # updates itself and is left alone. HOLEBERRY_APPS_DIR overrides the
-# destination.
-# https://github.com/pedrovieira/Holeberry
+# destination. https://github.com/pedrovieira/Holeberry
+#
 # detect: [[ -d "${HOLEBERRY_APPS_DIR:-/Applications}/Holeberry.app" ]]
 # default: off
 

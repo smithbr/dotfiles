@@ -4,11 +4,15 @@ The Bats suite for the repo. Run it with `./tests/run_tests.sh`; the [root `AGEN
 
 ## Runner
 
-- `run_tests.sh` lints the repo's shell scripts with ShellCheck first, then runs Bats with `--jobs` set to the core count. `--lint-only` stops after the lint (named files limit it to those it would lint anyway) and touches neither the network nor the cache; `--no-lint` skips the lint and does not need `shellcheck`. Test files or directories named on the command line replace the default of every suite; other arguments go to Bats (`./tests/run_tests.sh tests/link.bats --filter add`).
+- `run_tests.sh` lints the repo's shell scripts with ShellCheck and the docs with `lint-docs.sh` first, then runs Bats with `--jobs` set to the core count. `--lint-only` stops after the lint (named files limit it to those it would lint anyway) and touches neither the network nor the cache; `--no-lint` skips the lint and does not need `shellcheck`. Test files or directories named on the command line replace the default of every suite; other arguments go to Bats (`./tests/run_tests.sh tests/link.bats --filter add`).
 - The suite's own tools live in `~/.cache/dotfiles/tests` (`XDG_CACHE_HOME` or `DOTFILES_TEST_DEPS` move it), which `deps.sh` fills on the first run: `bats-core`, `bats-support`, `bats-assert`, GNU `parallel`, a `python3` link to a uv-managed Python 3.11+ (without `uv`, the tests that need it skip), and on macOS a `bash` 5 built from source. Each download is checked against the sha256 pinned in `deps.sh`; a rerun with everything present is offline and silent; `rm -rf ~/.cache/dotfiles/tests` starts over. Nothing is installed through Homebrew for the tests. The machine's own `shellcheck` and `stow` are required, not installed (`Brewfile.core`, apt), and on Debian `bzip2`.
 - Bats runs on the cache's bash through a `bash` shim first on `PATH` that sends only Bats' own programs there: `bash -c`, `run bash script`, and `#!/usr/bin/env bash` scripts under test still run on `/bin/bash`, as on a fresh Mac. Code a test sources in-process runs on the new bash. The cache's `python3` comes first on `PATH`, its `bats` and `parallel` last.
 - Bumping a pin: set the version and the tarball's sha256 in `deps.sh` (cross-check with the GNU `.sig` or `brew info --json=v2 NAME`), then delete the cache directory. CI's cache key is the file's hash.
 - CI ([`ci.yml`](../.github/workflows/ci.yml)) runs on every push as four parallel macOS jobs: one `--lint-only` and three `--no-lint` Bats shards: `link.bats`; `doctor.bats` with `install.bats`; and every other `*.bats` file by glob, so a new file runs there without a workflow change. Move a file between shards (and in `NAMED`) when one shard grows well past the others.
+
+## Docs lint
+
+`lint-docs.sh` keeps the docs short and true, in the lint half that the pre-commit hook and CI run. Drift: a backticked repo path, flag, or upper-case name in a Markdown file must exist in a tracked file. Verbosity: a Markdown file stays under 1500 words and 20 parentheticals per 1000, and a comment paragraph in a shell script runs at most 6 lines. A failure names the file, the line, and what to cut; `LINT_DOCS_MAX_WORDS`, `LINT_DOCS_MAX_PARENS`, and `LINT_DOCS_MAX_COMMENT_RUN` change the limits for a run.
 
 ## Git hooks
 
@@ -36,6 +40,7 @@ Tests run against scratch homes, overridden `PATH`, and stub executables: proces
 - `deps.bats`: `deps.sh` against a scratch cache with a stub `curl`, and `run_tests.sh`'s tool checks.
 - `doctor.bats`: `doctor.sh` against a scratch home, a fixture repo, and fixture xdg-ninja data: every group, the list of changes, and what it never touches.
 - `githooks.bats`: `pre-commit` and `sandbox-install.sh` against stubs.
+- `lint_docs.bats`: `lint-docs.sh` against scratch repos with one fault each.
 - `harden_test.bats`: `harden-test.sh` against a scratch root (`HARDEN_ROOT`) with mocked system tools.
 - `install.bats`: `install.sh`'s arguments, prompts, SSH key step, and an isolated integration run with mocked commands.
 - `link.bats`: the real `link.sh` and GNU Stow against a scratch home: linking, stale links, backups, personas, agent links, seed files, `status`, `managed`, the installs, git identity, `add`, `rm`, and `mv`.
