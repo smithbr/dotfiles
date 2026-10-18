@@ -236,10 +236,8 @@ hosts_of() {
     done
 }
 
-# Lays out tab-separated rows as columns sized to fit, the first row a
-# heading (bold on a terminal). Lines without a tab pass through: those before
-# the table print first, those after it last. RIGHT lists the 1-based columns
-# to right-align, e.g. "2".
+# Tab-separated rows as fitted columns, the first row a bold heading; lines
+# without a tab pass through. RIGHT lists the 1-based columns to right-align.
 table() {
     local bold="" reset=""
     if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
@@ -384,9 +382,8 @@ cmd_queries() {
     fi
 }
 
-# One line per blocked domain over the --since window, newest first: when it
-# was last blocked, how often, why, and (without a CLIENT) by whom. Scans up to
-# PH_SCAN blocked queries, the newest first.
+# One line per blocked domain in the --since window, newest first: last
+# blocked, how often, why, and without a CLIENT by whom. Scans PH_SCAN queries.
 cmd_blocked() {
     [[ $# -le 1 ]] || die "blocked takes at most one client"
     local client="${1:-}" from="" scan="${PH_SCAN:-10000}" label="in the last ${SINCE}"

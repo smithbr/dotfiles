@@ -1,25 +1,9 @@
 #!/usr/bin/env bash
-# Pi-hole v6 with Unbound as its upstream: a recursive, DNSSEC-validating
-# resolver on 127.0.0.1#5335, set up as the Pi-hole guide describes and
-# ph-test checks (https://docs.pi-hole.net/guides/dns/unbound/).
-#
-# Unbound comes from apt with the guide's pi-hole.conf (plus hide-identity
-# and hide-version, which ph-test wants); Debian's unbound-resolvconf hook,
-# which would point the box itself at Unbound, is disabled, and the kernel
-# receive buffer so-rcvbuf asks for is raised. Pi-hole comes from its
-# official installer, unattended: the installer only skips its dialogs when
-# /etc/pihole/pihole.toml exists, so a minimal one is written first
-# (upstreams from PIHOLE_UPSTREAMS, default Unbound; DNSSEC off in Pi-hole,
-# since Unbound validates). An installed Pi-hole is left to `pihole -up`,
-# but its upstreams and DNSSEC setting are brought in line through
-# pihole-FTL --config. Every run checks that a web password is set
-# (webserver.api.pwhash) and warns when it is not, since without one anyone
-# who reaches the web UI or API can change Pi-hole.
-#
-# Needs root, like the installer; re-runs itself through sudo. Safe to run
-# again: each part is skipped, or rewritten, only when it differs. PIHOLE_ROOT
-# prefixes every system path so tests can run against a scratch tree, with
-# the commands mocked on PATH and no root.
+# Pi-hole v6 with Unbound as its upstream on 127.0.0.1#5335, as the Pi-hole
+# guide describes and ph-test checks. Needs root and re-runs itself through
+# sudo. PIHOLE_UPSTREAMS overrides the upstreams; PIHOLE_ROOT prefixes every
+# system path for the tests. The rest: scripts/bootstrap/README.md.
+# Guide: https://docs.pi-hole.net/guides/dns/unbound/
 
 set -euo pipefail
 
@@ -211,9 +195,8 @@ ensure_pihole() {
     log_info "Pi-hole installed"
 }
 
-# Pi-hole's live settings, as the installer or the web UI may have left
-# them: upstreams are Unbound (or PIHOLE_UPSTREAMS) and DNSSEC stays off in
-# Pi-hole, since Unbound validates and FTL would only double the work.
+# Bring Pi-hole's live upstreams and DNSSEC setting back in line; Unbound
+# validates, so FTL's own DNSSEC stays off.
 configure_pihole() {
     local wanted current
     pihole_installed || return 0

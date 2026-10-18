@@ -1,28 +1,13 @@
 #!/usr/bin/env bash
-# Harden a Debian server or VPS before install.sh runs on it:
-#   - an admin user with sudo and the SSH keys you logged in with
-#   - key-only SSH, root login off, only that user allowed
-#   - Tailscale, so SSH can live on the tailnet
-#   - ufw: everything inbound closed except the tailnet, the ports you name
-#     (--allow, to the internet, optionally only from Cloudflare; --lan, to
-#     this box's own network only) and, on a Pi-hole, its DNS, admin page,
-#     and DHCP and NTP when they are on, to the LAN; public SSH closes only
-#     when this very session came in over Tailscale, which proves that door
-#     works, or from the console; one whose origin cannot be told keeps it
-#   - unattended security upgrades
-# Run as root on a new machine with only a root login, it needs nothing else
-# from this repo:
+# Harden a Debian server or VPS before install.sh runs on it: an admin user
+# with sudo and the SSH keys you logged in with, key-only SSH for that user
+# alone, Tailscale, ufw closed to all but the tailnet and the ports you name,
+# unattended upgrades. Piped over ssh as root it needs nothing else from the
+# repo:
 #   ssh root@HOST 'bash -s -- --user NAME --allow 80 --allow 443' < scripts/bootstrap/linux/harden.sh
-# Run from the repo as the admin user (install.sh offers it first, before
-# anything is installed, on a server or VPS a basic check finds unhardened),
-# it re-runs itself through sudo for that user. Set TS_AUTHKEY to join the
-# tailnet unattended; otherwise `tailscale up` prints a login URL and waits
-# (skipped without a terminal). Everything that can stop it (no key to give
-# the user, no LAN to find, Cloudflare's ranges unreachable) is checked
-# before the first change. Safe to run again: it rewrites only what differs,
-# though a port an earlier run opened stays open until `ufw delete` closes
-# it. It is never run unasked: on a server already in use it closes every
-# port but the tailnet's and the LAN ones above, and allows only one SSH user.
+#
+# Options: --help. When public SSH closes, what is checked before the first
+# change, and rerunning: scripts/bootstrap/README.md.
 
 set -euo pipefail
 
@@ -94,9 +79,9 @@ run() {
     "$@"
 }
 
-# write_file PATH MODE CONTENT [VALIDATOR...]: replaces PATH only when its
-# content differs; a validator runs against the new file before it moves in.
-# The temporary name holds a dot, which sudoers.d ignores and *.conf misses.
+# write_file PATH MODE CONTENT [VALIDATOR...]: replace PATH when CONTENT differs,
+# once VALIDATOR accepts the new file. Its temp name holds a dot, which
+# sudoers.d ignores and *.conf misses.
 write_file() {
     local path="$1"
     local mode="$2"
@@ -237,9 +222,8 @@ usable_keys() {
     grep -Ev '^[[:space:]]*(#|$)' "$1" 2>/dev/null | grep -v 'command=' || true
 }
 
-# The admin user gets the keys of whoever logged in: root's, or the cloud
-# image's default user when this runs under sudo. Checked before anything
-# changes: with no key to give the user, key-only SSH would lock you out.
+# The admin user gets the keys of whoever logged in. With none to give, key-only
+# SSH would lock you out, so this runs before anything changes.
 plan_admin_user() {
     SOURCE_USER="${SUDO_USER:-root}"
     USER_HOME="$(home_of "${ADMIN_USER}" || true)"
@@ -276,10 +260,8 @@ lan_subnets_on() {
     ip -o -6 route show dev "$1" 2>/dev/null | awk '$1 ~ /\// { print $1 }'
 }
 
-# What the LAN rules are for and where the LAN is. On a Pi-hole, DNS and the
-# admin page, plus DHCP and NTP when FTL serves them, go to the LAN without
-# asking: the deny-all default would otherwise cut every client's DNS. Found
-# before anything changes, so an unknown LAN stops the run clean.
+# The LAN ports and the LAN itself, found before anything changes. A Pi-hole's
+# DNS, admin page, and DHCP and NTP when FTL serves them stay open to the LAN.
 plan_lan() {
     local iface subnet found where=""
 
@@ -424,9 +406,8 @@ ssh_port() {
     printf '%s\n' "${port:-22}"
 }
 
-# sshd keeps the first value it reads for each setting, and Debian
-# reads sshd_config.d before the rest, so a 00- file beats cloud-init's
-# 50-cloud-init.conf (which turns password logins back on).
+# A 00- drop-in wins: sshd keeps the first value it reads, and Debian reads
+# sshd_config.d before the rest, so it beats cloud-init's 50-cloud-init.conf.
 harden_ssh() {
     local config_dir="${ROOT_PREFIX}/etc/ssh/sshd_config.d"
     local dropin="${config_dir}/00-harden.conf"
@@ -502,11 +483,8 @@ on_pseudo_terminal() {
     [[ "${tty}" == pts* || "${tty}" == ttys* ]]
 }
 
-# Whether this run may close public SSH: only when the tailnet door is
-# proven to work, by this session having come through it, or when no SSH
-# session is at stake. "tailscale ip" says Tailscale is up, not that its ACLs
-# let you in, and a session whose origin cannot be told is not proof either.
-# Sets SSH_MODE (its logging shares stdout, so it returns nothing).
+# Public SSH may close only when this session came in over Tailscale, which
+# proves that door works, or when no SSH session is at stake. Sets SSH_MODE.
 decide_ssh_mode() {
     local client=""
 

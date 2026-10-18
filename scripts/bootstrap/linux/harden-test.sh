@@ -1,19 +1,10 @@
 #!/usr/bin/env bash
-# Check whether a Debian box is hardened the way harden.sh leaves it,
-# changing nothing: key-only SSH with no root login and one allowed user, an
-# admin user with sudo and keys, Tailscale connected, ufw denying all inbound
-# but the tailnet (ports open to this box's own network are listed apart
-# from those open to the internet, and a Pi-hole must have DNS open to the
-# LAN), unattended upgrades, and what is pending (upgrades, a reboot, Docker
-# ports published around ufw). Run it ad hoc on any Linux box;
-# it needs nothing else from this repo:
-#   ssh HOST 'bash -s' < scripts/bootstrap/linux/harden-test.sh
+# Check whether a Debian box is hardened the way harden.sh leaves it, changing
+# nothing: SSH, the admin user, Tailscale, ufw, unattended upgrades, and what
+# is pending. Needs nothing else from the repo:
 #   ssh HOST 'sudo bash -s -- --user NAME' < scripts/bootstrap/linux/harden-test.sh
-# As root it reads sshd's effective config (sshd -T) and ufw's rules; as a
-# user it reads the config files instead and says what it could not see.
-# Exits 0 when every check passes and 1 when any fails. install.sh runs it
-# with --brief before an install on a server or VPS and offers harden.sh when
-# it fails.
+# Without root it reads the config files and says what needs sudo. Exits 0
+# when every check passes, 1 when any fails; install.sh runs it with --brief.
 
 set -euo pipefail
 
@@ -118,10 +109,8 @@ home_of() {
     getent passwd "$1" 2>/dev/null | cut -d: -f6
 }
 
-# sshd's effective config when sshd -T works (root), else the config files
-# the way sshd reads them: Debian includes sshd_config.d/ before
-# the rest, and sshd keeps the first value it reads for each setting. Either
-# way one "key value" line per setting, keys lowercased.
+# sshd -T as root, else the config files as sshd reads them: sshd_config.d
+# first, first value wins. One "key value" line per setting, keys lowercased.
 load_sshd_config() {
     local sshd=""
 
@@ -209,9 +198,8 @@ check_ssh() {
     fi
 }
 
-# A sudo grant may sit in a file only root can read: /etc/sudoers itself, or
-# a 0440 file under sudoers.d, whose directory is usually listable. Seen as a
-# user, such a file means the check cannot tell, not that sudo is missing.
+# A sudo grant may sit in a file only root can read; seen as a user, that
+# means the check cannot tell, not that sudo is missing.
 sudoers_unreadable() {
     local file
 
@@ -287,9 +275,8 @@ pihole_here() {
     [[ -x "${ROOT_PREFIX}/usr/bin/pihole-FTL" ]]
 }
 
-# ufw's live rules when ufw status works (root); else the files that say
-# whether it is enabled and what it denies by default, and the rules are
-# skipped.
+# ufw's live rules as root; else only whether it is enabled and its default
+# policy, read from the files, and the rules are skipped.
 check_firewall() {
     local status="" line to action from open="" lan="" lan_dns=0 tailnet=0
 

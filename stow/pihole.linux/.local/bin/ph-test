@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# ============================================================
-#  ph-test — Quick diagnostics for Pi-hole + Unbound DNS
-# ============================================================
+# ph-test: diagnostics for Pi-hole with Unbound.
 
 set -euo pipefail
 
@@ -18,8 +16,7 @@ append_path_dir() {
     fi
 }
 
-# Add standard admin binary locations so Debian/Raspberry Pi installs remain
-# discoverable even when the invoking user's PATH omits sbin directories.
+# Debian's sbin directories, which a user's PATH may lack.
 IFS=':' read -r -a supplemental_path_dirs <<< "${PH_TEST_SBIN_PATHS:-/usr/local/sbin:/usr/sbin:/sbin}"
 for dir in "${supplemental_path_dirs[@]}"; do
     append_path_dir "${dir}"
@@ -352,8 +349,8 @@ test_dnssec() {
         fix "After changes: sudo systemctl restart unbound"
     fi
 
-    # A signed domain should carry the AD (Authenticated Data) flag
-    # Pi-hole (dnsmasq/FTL) strips the AD flag, so query Unbound directly when possible.
+    # A signed domain should carry the AD flag; Pi-hole strips it, so query
+    # Unbound directly when possible.
     local ad_target="${DNS_SERVER}" ad_port="" unbound_interface="" unbound_port="" ad_probe_hint=""
     local -a ad_port_args=() dig_args=()
     if has_pihole; then

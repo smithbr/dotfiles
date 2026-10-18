@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Check this machine against the dotfiles repo: repo links that are off, then
-# what to fix, what to decide, and what to ignore. On a terminal a list
-# follows where each item gets keep, archive, delete, ignore, add to the repo,
-# or move, all applied at once; --help explains the rest. Every argument goes
-# to scripts/doctor.sh as it is.
+# Check this machine against the dotfiles repo and offer fixes; every argument
+# goes to scripts/doctor.sh as it is.
 
 set -euo pipefail
 

@@ -37,9 +37,8 @@ set_default EnableAPIServer -bool true 1
 set_default shortLivedSessionDuration -float 0 0
 set_default "Default Bookmark Guid" -string "${PROFILE_GUID}" "${PROFILE_GUID}"
 
-# The Catppuccin presets show in Color Presets once they are in "Custom Color
-# Presets". Read from the repo so this works before linking; other presets are
-# left alone, and a preset is written only when missing or different.
+# The repo's .itermcolors files as Custom Color Presets, read from the repo so
+# this works before linking; other presets are left alone.
 for preset in "${BASEDIR}/stow/desktop/.config/iterm2/"*.itermcolors; do
     name="$(basename "${preset}" .itermcolors)"
     want="$(plutil -convert xml1 -o - "${preset}")"

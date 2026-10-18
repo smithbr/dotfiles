@@ -11,7 +11,7 @@ DRY_RUN=0
 
 log_info "Starting macOS bootstrap"
 
-# Ensure Xcode Command Line Tools are installed (required for git, compilers, Homebrew)
+# Xcode Command Line Tools: git, compilers and Homebrew need them.
 if xcode-select -p &>/dev/null; then
     log_info "Xcode Command Line Tools already installed"
 elif [[ "${DRY_RUN}" -eq 1 ]]; then
@@ -33,7 +33,7 @@ else
     log_info "Xcode Command Line Tools installed"
 fi
 
-# Accept Xcode license if needed (only when full Xcode.app is installed)
+# The Xcode license, when the full Xcode.app is installed.
 if [[ -d "/Applications/Xcode.app" ]] && ! xcodebuild -license check &>/dev/null; then
     if [[ "${DRY_RUN}" -eq 1 ]]; then
         log_info "Would accept the Xcode license"

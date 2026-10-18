@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# ============================================================
-#  ph-backup — Snapshot Pi-hole, Unbound, and Tailscale config
-# ============================================================
+# ph-backup: snapshot Pi-hole, Unbound, and Tailscale config into one archive.
 
 set -euo pipefail
 
@@ -18,8 +16,7 @@ append_path_dir() {
     fi
 }
 
-# Add standard admin binary locations so Debian/Raspberry Pi installs remain
-# discoverable even when the invoking user's PATH omits sbin directories.
+# Debian's sbin directories, which a user's PATH may lack.
 IFS=':' read -r -a supplemental_path_dirs <<< "${PH_BACKUP_SBIN_PATHS:-/usr/local/sbin:/usr/sbin:/sbin}"
 for dir in "${supplemental_path_dirs[@]}"; do
     append_path_dir "${dir}"
@@ -290,9 +287,8 @@ backup_unbound() {
     return 0
 }
 
-# Mullvad's shared exit nodes appear as hundreds of peers and can outweigh the
-# rest of the file many times over. They belong to Mullvad, not this tailnet,
-# so drop them and record how many went.
+# Mullvad's shared exit nodes show as hundreds of peers that are not this
+# tailnet's; drop them and record how many went.
 drop_shared_exit_nodes() {
     local path="$1"
     local filtered="${path}.filtered"
@@ -377,9 +373,8 @@ ts_value() {
     printf '%s' "${value:-unknown}"
 }
 
-# Read from the gravity database. Pi-hole v6 embeds an sqlite3 shell inside
-# pihole-FTL, so a standalone sqlite3 package is not required. Callers must
-# confirm the database exists first: both shells create an empty one otherwise.
+# Query gravity.db through pihole-FTL's built-in sqlite3 shell, or sqlite3. The
+# caller checks the database exists: both shells create an empty one otherwise.
 gravity_query() {
     local sql="$1"
     local db="${PIHOLE_DIR}/gravity.db"
@@ -504,9 +499,8 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     fi
 }
 
-# Condense a list of archive paths, read from stdin, into the distinct
-# directories they restore into. Used for the at-a-glance Contents table;
-# the restore map below carries the per-file detail.
+# The distinct directories the archive paths on stdin restore into, for the
+# Contents table; the restore map carries the per-file detail.
 destination_summary() {
     local entry=""
     local dir=""
@@ -532,10 +526,8 @@ destination_summary() {
         [[ -n "${dir}" ]] && seen+=("${dir}")
     done
 
-    # Collapse children into their parent, so Unbound reads as /etc/unbound
-    # rather than /etc/unbound plus /etc/unbound/unbound.conf.d. A top-level
-    # directory is too broad to absorb anything: /etc would say nothing useful
-    # about a Teleporter export that lands in /etc/pihole.
+    # Collapse children into a parent at least two levels deep, so /etc/unbound
+    # absorbs its conf.d but /etc absorbs nothing.
     local keep=0
     local slashes=""
     for dir in "${seen[@]+"${seen[@]}"}"; do
@@ -553,9 +545,8 @@ destination_summary() {
     printf '%s' "${out%, }"
 }
 
-# Spell out the destination of every path in the archive, so a restore never
-# has to guess. Teleporter entries are stored rooted at /, and the Unbound
-# tarball unpacks into the parent of the directory it was taken from.
+# The destination of every path in the archive. Teleporter entries are rooted
+# at /; the Unbound tarball unpacks into the parent of its directory.
 restore_map() {
     local entry=""
 
@@ -770,9 +761,8 @@ is_shared_writable() {
     [[ -n "$(find "${1}" -maxdepth 0 \( -perm -020 -o -perm -002 \) -print 2>/dev/null)" ]]
 }
 
-# Run a command as the backup owner. Every write outside STAGE_DIR goes through
-# here, so a symlink the owner plants can only reach files the owner could
-# already write, never root's.
+# Run a command as the backup owner; every write outside STAGE_DIR goes through
+# here, so a planted symlink can only reach what the owner could already write.
 as_owner() {
     if [[ -n "${BACKUP_OWNER}" ]]; then
         sudo -u "${BACKUP_OWNER}" "$@"
@@ -805,9 +795,8 @@ check_root_writable_dir() {
     fi
 }
 
-# Stream the staged archive into DIR as the owner: create DIR owner-only when
-# missing, write a fresh temporary file, and rename it onto a name that must
-# not exist yet.
+# Stream the staged archive into DIR as the owner: DIR owner-only when missing,
+# a fresh temp file, then a rename onto a name that must not exist yet.
 publish_archive() {
     local dir="${1}"
     local dest="${dir}/${STAGED_ARCHIVE##*/}"
@@ -846,10 +835,8 @@ create_archive() {
     ARCHIVE_PATH="${PUBLISHED_PATH}"
 }
 
-# A backup that only exists on the machine it came from is not a backup. The
-# destination is either a path (mount, USB, NAS) or an scp target. Both run as
-# the owner, so remote copies use that user's SSH keys and agent rather than
-# root's, which usually has neither.
+# Copy to a path or an scp target, as the owner so remote copies use that
+# user's SSH keys and agent, which root usually lacks.
 copy_offbox() {
     [[ -n "${STAGED_ARCHIVE}" && -s "${STAGED_ARCHIVE}" && -n "${ARCHIVE_PATH}" ]] || return 1
 

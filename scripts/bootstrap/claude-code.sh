@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Claude Code native installation, an optional install on both OSes.
-# Preferred over the Homebrew cask because the native build updates itself
-# in the background; the cask only moves on `brew upgrade`. brew.sh leaves
-# the cask alone.
+# Claude Code native installation, an optional install on both OSes; the
+# native build updates itself, the Homebrew cask only on `brew upgrade`.
 # https://code.claude.com/docs/en/setup
 # detect: tool_installed claude
 
@@ -25,9 +23,8 @@ elif tool_installed claude; then
     log_info "Claude Code already installed outside ${LAUNCHER}; leaving it to its own updates"
     exit 0
 else
-    # The installer keeps earlier downloads under ~/.local/share/claude, so
-    # when the desktop app already fetched this version it only adds the
-    # launcher.
+    # The installer reuses downloads under ~/.local/share/claude, so a version
+    # the desktop app already fetched only gets the launcher.
     spin "Installing Claude Code..." bash -c 'set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash'
     if [[ -x "${LAUNCHER}" ]]; then
         log_info "Claude Code $(claude_version) installed at ${LAUNCHER}"

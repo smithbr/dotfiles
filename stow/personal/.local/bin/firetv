@@ -40,26 +40,18 @@ EOF
 )"
 GROUPS_ALL="telemetry ads bloat"
 
-# Hosts the TV needs: connectivity check, remote config, home screen, store,
-# images, sign-in, updates. ktpx.amazon.com is the home screen's live
-# services endpoint: denied on the Pi-hole, Home shows "Home is Currently
-# Unavailable". doctor fails when the deny list holds one, and never offers to
-# block them or the patterns in HOST_KEEP; they turn up in many packages' code.
+# Hosts the TV needs; doctor fails when the deny list holds one and never
+# offers to block them or the HOST_KEEP patterns. Without ktpx.amazon.com Home
+# shows "Home is Currently Unavailable".
 NEEDED_HOSTS="firetvcaptiveportal.com arcus-uswest.amazon.com dp-gw-na.amazon.com device-messaging-na.amazon.com appstore-tv-prod-na.amazon.com ktpx.amazon.com m.media-amazon.com api.amazon.com softwareupdates.amazon.com www.amazon.com"
 HOST_KEEP="${NEEDED_HOSTS// /|}"
 HOST_KEEP="^(${HOST_KEEP//./\\.}|"'cognito-(identity|idp)\.[a-z0-9-]+\.amazonaws\.com|[a-z0-9-]+\.cloudfront\.net)$'
 
-# Packages the TV needs; doctor fails if any of these is disabled, and
-# disable refuses them. Beyond the launcher, settings, store, OTA, sign-in, and
-# screensaver:
-# - com.amazon.media.recommendations runs a service the home screen starts:
-#   disabled, Home shows "Home is Currently Unavailable".
-# - com.amazon.dp.logger: Prime Video needs it (niftiest's Firestick cleaner).
-# - com.amazon.client.metrics.api: many Amazon apps need it to start (niftiest).
-# - com.amazon.tcomm, com.amazon.aria: suspects when a Fire OS 8 TV stuck at
-#   the boot logo with ADB dead (XDA thread 4634089).
-# - com.amazon.imp, com.amazon.tv.oobe: sign-in and setup.
-# - com.amazon.tv.livetv, com.amazon.tv.channelscan: TV inputs and the tuner.
+# Packages the TV needs; doctor fails if any is disabled, and disable refuses
+# them. Beyond the launcher, settings, store, OTA, sign-in and screensaver:
+# Home starts media.recommendations, most Amazon apps need client.metrics.api,
+# Prime Video needs dp.logger, tcomm and aria are boot-logo suspects, imp and
+# tv.oobe sign in, tv.livetv and tv.channelscan are the tuner.
 CORE_PACKAGES="com.amazon.tv.launcher com.amazon.firehomestarter com.amazon.tv.settings.v2 com.amazon.venezia com.amazon.device.software.ota com.amazon.identity.auth.device.authorization com.amazon.ftv.screensaver com.amazon.media.recommendations com.amazon.dp.logger com.amazon.client.metrics.api com.amazon.tcomm com.amazon.aria com.amazon.imp com.amazon.tv.oobe com.amazon.tv.livetv com.amazon.tv.channelscan"
 
 # Your own tweaks, same format as TWEAKS; firetv settings-diff prints lines for it.
@@ -175,9 +167,8 @@ parse_args() {
     [[ "${FIRETV_HOST}" == *:* ]] || FIRETV_HOST="${FIRETV_HOST}:5555"
 }
 
-# Print the packages of the named groups and package names, one
-# "group<TAB>package<TAB>about" line each, each package once. A package off
-# the debloat list comes out under "other".
+# "group<TAB>package<TAB>about" for the named groups and packages, each once;
+# a package off the debloat list comes out under "other".
 select_packages() {
     local target group
     local -a wanted=() names=()
@@ -670,10 +661,8 @@ cmd_doctor() {
 }
 
 # Hostnames in a package's code: its APKs' dex files and the odex and vdex
-# files compiled beside them; none when the TV cannot read them. Only hosts in URLs or under the services the TV
-# is known to call count, since a looser match takes in Java names
-# (androidx.compose) and stray bytes; AWS endpoints outside US regions are SDK
-# tables, not calls.
+# beside them. Only hosts in URLs or under known services count; a looser
+# match takes in Java names, stray bytes and SDK tables.
 HOST_SERVICES='amazon|amazonaws|a2z|amazon-adsystem|amazonvideo|media-amazon|cloudfront|crashlytics|appsflyer|scorecardresearch|newrelic|nr-data|firebaseio|doubleclick|googleapis|branch'
 
 code_hostnames() {
@@ -774,9 +763,8 @@ recent_lookups() {
         || true
 }
 
-# "DOMAIN<TAB>VERDICT" from ph check, four domains at a time. Each job prints
-# one short line, so parallel output never interleaves. Every ph run logs in,
-# and the Pi-hole rate-limits logins, so a failed check waits and retries.
+# "DOMAIN<TAB>VERDICT" from ph check, four at a time, one short line per job so
+# output never interleaves. The Pi-hole rate-limits logins, so failures retry.
 pihole_verdicts() {
     local check
     # $0 is ph, $1 jq's filter, $2 the domain.
@@ -1083,9 +1071,8 @@ cmd_clean() {
     _check "App caches trimmed: $(((after - before) / 1024)) MB freed, $((after / 1024)) MB free"
 }
 
-# Apps installed after the factory image, "PACKAGE<TAB>VERSIONCODE". Amazon's
-# resource overlays (*.overlay.*, version 0) count as installed but belong to
-# the system, so they are left out.
+# Apps installed after the factory image, "PACKAGE<TAB>VERSIONCODE", minus
+# Amazon's resource overlays (*.overlay.*, version 0), which are the system's.
 user_apps() {
     adb_tv shell pm list packages -3 --show-versioncode | tr -d '\r' \
         | sed -n 's/^package:\([^ ]*\) versionCode:\([0-9]*\)$/\1	\2/p' \

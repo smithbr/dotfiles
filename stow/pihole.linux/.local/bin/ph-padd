@@ -136,13 +136,12 @@ padd_logo_3="${bold_text}${green_text}|   ${red_text}/${yellow_text}-${green_tex
 
 ############################################# FTL ##################################################
 
-# jq definition that removes control characters (C0, DEL, C1) from strings, so
-# API data cannot inject terminal escape sequences or extra key=value lines
+# jq definition that strips control characters from strings, so API data cannot
+# inject terminal escapes or extra key=value lines
 jq_clean='def clean: if type == "string" then gsub("\\p{Cc}"; "") else . end;'
 
-# Prints $1 as a non-negative decimal integer, or 0 when it is not one.
-# API values must pass through this before they reach $(( )): bash running as
-# sh evaluates array subscripts such as a[$(cmd)] inside arithmetic.
+# Prints $1 as a non-negative decimal integer, or 0 when it is not one. API
+# values pass through this before $(( )), which evaluates subscripts like a[$(cmd)].
 toInteger() {
     local value
     value="${1%%.*}"
@@ -190,9 +189,8 @@ isLoopbackHost() {
     return 1
 }
 
-# Rebuilds a URL discovered through CHAOS TXT so it points at host $2. The TXT
-# reply is unauthenticated, so its host is always discarded and its scheme,
-# port, and path are kept only when they look valid.
+# Rebuilds a URL discovered through CHAOS TXT so it points at host $2; the
+# reply is unauthenticated, so only a valid-looking scheme, port and path stay.
 NormalizeDiscoveredAPIURL() {
     local scheme rest hostport port path host
     host="$2"
@@ -232,9 +230,8 @@ NormalizeDiscoveredAPIURL() {
     printf '%s://%s%s%s\n' "${scheme}" "${host}" "${port:+:${port}}" "${path}"
 }
 
-# Chooses how curl checks the certificate of API URL $1 and fails for plain
-# http:// to anything but loopback. Loopback skips verification because
-# Pi-hole's default certificate is self-signed for pi.hole.
+# How curl checks the certificate of API URL $1; plain http:// fails except to
+# loopback, which also skips verification (Pi-hole's default cert is self-signed).
 SetCurlTLSMode() {
     local host
     host="$(apiURLHost "$1")"
@@ -260,9 +257,8 @@ SetCurlTLSMode() {
     fi
 }
 
-# Runs curl against the Pi-hole API with the TLS settings from SetCurlTLSMode.
-# Secrets never go in the arguments: callers send the session header as curl
-# config (-K -) or the login body (--data @-) on stdin.
+# curl against the Pi-hole API with SetCurlTLSMode's settings. Secrets arrive
+# on stdin, as curl config (-K -) or the login body (--data @-), never in argv.
 CurlAPI() {
     case "${curl_tls_mode}" in
         insecure) set -- --insecure "$@" ;;
@@ -291,9 +287,7 @@ TestAPIAvailability() {
             exit 1
         fi
     else
-        # Query the API URLs from FTL using CHAOS TXT
-        # The result is a space-separated enumeration of full URLs
-        # e.g., "http://localhost:80/api" or "https://domain.com:443/api"
+        # Ask FTL for its API URLs over CHAOS TXT: a space-separated list
         if [ -z "${SERVER}" ] || [ "${SERVER}" = "localhost" ] || [ "${SERVER}" = "127.0.0.1" ]; then
             # --server was not set or set to local, assuming we're running locally
             if ! chaos_api_list="$(dig +time=2 +tries=1 +short chaos txt local.api.ftl @localhost 2>&1)"; then
@@ -336,14 +330,9 @@ TestAPIAvailability() {
             fi
         fi
 
-        # Test if the API is available at this URL, include delimiter for ease in splitting payload
+        # Probe the API at this URL; >> separates the body from the http_code
         authResponse=$(CurlAPI -sS -w ">>%{http_code}" "${API_URL}auth")
-
-        # authStatus is the response http_code, eg. 200, 401.
-        # Shell parameter expansion, remove everything up to and including the >> delim
         authStatus=${authResponse#*>>}
-        # data is everything from response
-        # Shell parameter expansion, remove the >> delim and everything after
         authData=${authResponse%>>*}
 
         # Test if http status code was 200 (OK) or 401 (authentication required)
@@ -443,10 +432,8 @@ LoginAPI() {
 }
 
 DeleteSession() {
-    # if a valid Session exists (no password required or successful authenthication) and
-    # SID is not null (successful authenthication only), delete the session
+    # Only a session that was logged in has an SID to delete
     if [ "${validSession}" = true ] && [ "${SID}" != null ]; then
-        # Try to delete the session. Omit the output, but get the http status code
         # The session ID goes to curl as config on stdin so it stays out of argv
         deleteResponse=$(sessionConfig | CurlAPI -K - -sS -o /dev/null -w "%{http_code}" -X DELETE "${API_URL}auth" -H "Accept: application/json")
 
@@ -489,15 +476,10 @@ GetFTLData() {
     local data
     local status
 
-    # get the data from querying the API as well as the http status code, include delimiter for ease in splitting payload
-    # The session ID goes to curl as config on stdin so it stays out of argv
+    # The session ID goes to curl as config on stdin so it stays out of argv;
+    # >> separates the body from the http_code
     response=$(sessionConfig | CurlAPI -K - -s -w ">>%{http_code}" -X GET "${API_URL}$1$2" -H "Accept: application/json")
-
-    # status is the response http_code, eg. 200, 401.
-    # Shell parameter expansion, remove everything up to and including the >> delim
     status=${response#*>>}
-    # data is everything from response
-    # Shell parameter expansion, remove the >> delim and everything after
     data=${response%>>*}
 
     if [ "${status}" = 200 ]; then
@@ -525,23 +507,14 @@ GetPADDData() {
         # unauthorized
         padd_data="401"
     else
-        # Iterate over all the leaf paths in the JSON object and creates key-value
-        # pairs in the format "key=value". Nested objects are flattened using the dot
-        # notation, e.g., { "a": { "b": 1 } } becomes "a.b=1".
-        # We cannot use leaf_paths here as it was deprecated in jq 1.6 and removed in
-        # current master
-        # Using "paths(scalars | true)" will return null and false values.
-        # We also check if the value is exactly `null` and, in this case, return the
-        # string "null", as jq would return an empty string for nulls.
-        # Control characters are removed from keys and string values so API data
-        # cannot add lines or send terminal escape sequences.
+        # Flatten the JSON into "a.b=1" lines, null as the string "null", with
+        # control characters stripped so API data cannot add lines or escapes
         padd_data=$(printf '%s\n' "${response}" | jq -r "${jq_clean}"' paths(scalars | true) as $p | [$p | join(".") | clean] + [getpath($p) | if . == null then "null" else clean end] | join("=")' 2>/dev/null)
     fi
 }
 
 GetPADDValue() {
-    # Also strip control characters here (except newline) as a second line of
-    # defense for everything read from padd_data
+    # Strip control characters again for everything read from padd_data
     printf '%s\n' "${padd_data}" | sed -n "s/^$1=//p" 2>/dev/null | tr -d '\000-\011\013-\037\177'
 }
 
@@ -1017,10 +990,7 @@ GetNetworkInformation() {
     rx_bytes_unit="$(GetPADDValue iface.v4.rx_bytes.unit)"
     rx_bytes=$(printf "%.1f %s" "${rx_bytes}" "${rx_bytes_unit}")
 
-    # If IPv4 and IPv6 interfaces are not the same, add a "*" to the interface
-    # name to highlight that there are two different interfaces and the
-    # displayed statistics are only for the IPv4 interface, while the IPv6
-    # address correctly corresponds to the default IPv6 interface
+    # A "*" marks a different IPv6 interface: the statistics are IPv4's only
     if [ "${gateway_v4_iface}" != "${gateway_v6_iface}" ]; then
         iface_name="${iface_name}*"
     fi
@@ -1096,9 +1066,8 @@ GetVersionInformation() {
         docker_version_converted="$(VersionConverter "${DOCKER_VERSION}")"
         docker_version_latest_converted="$(VersionConverter "${GITHUB_DOCKER_VERSION}")"
 
-    # Note: the version comparison will fail for any Docker tag not following a 'YYYY.MM.VV' scheme
-    #       e.g. 'nightly', 'beta', 'v6-pre-alpha' and might set a false out_of_date_flag
-    #       As those versions are not meant to be used in production, we ignore this small bug
+    # A Docker tag outside the YYYY.MM.VV scheme (nightly, beta) may compare as
+    # out of date; those are not production tags
         if [ "${docker_version_converted}" -lt "${docker_version_latest_converted}" ]; then
             out_of_date_flag="true"
             docker_version_heatmap=${red_text}
@@ -1329,17 +1298,8 @@ GenerateSizeDependendOutput() {
 }
 
 SetStatusMessage() {
-    # depending on which flags are set, the "message field" shows a different output
-    # 7 messages are possible (from highest to lowest priority):
-
-    #   - System is hot
-    #   - FTLDNS service is not running
-    #   - Pi-hole's DNS server is off (FTL running, but not providing DNS)
-    #   - Unable to determine Pi-hole blocking status
-    #   - Pi-hole blocking disabled
-    #   - Updates are available
-    #   - Everything is fine
-
+    # The status message, highest priority first: hot, FTL down, DNS off,
+    # blocking status unknown, blocking disabled, updates available, fine
 
     if [ "${hot_flag}" = true ]; then
         # Check if CPU temperature is high
@@ -1598,27 +1558,21 @@ PrintDashboard() {
         moveXOffset; printf " %-10s${temp_heatmap}%-""${temp_padding}""s${reset_text} %-10s${cpu_load_1_heatmap}%-4s${reset_text}, ${cpu_load_5_heatmap}%-4s${reset_text}, ${cpu_load_15_heatmap}%-7s${reset_text} %-10s[${memory_heatmap}%-10s${reset_text}] %-6s${clear_line}" "CPU Temp:" "${temperature}" "CPU Load:" "${cpu_load_1}" "${cpu_load_5}" "${cpu_load_15}" "CPU Load:" "${cpu_bar}" "${cpu_percent}%"
     fi
 
-    # Clear to end of screen (below the drawn dashboard)
-    # https://vt100.net/docs/vt510-rm/ED.html
+    # Clear below the drawn dashboard
     printf '\e[0J'
 }
 
 ############################################# HELPERS ##############################################
 
-# Provides a color based on a provided percentage
-# takes in one or two parameters
+# A color for a percentage, given as one number or as a value and its maximum
 HeatmapGenerator () {
-    # if one number is provided, just use that percentage to figure out the colors
     if [ -z "${2}" ]; then
         load=$(printf "%.0f" "${1}")
-    # if two numbers are provided, do some math to make a percentage to figure out the colors
     else
         load=$(printf "%.0f" "$(printf '%s %s\n' "$1" "$2" | awk '{print ($1 / $2) * 100}')")
     fi
 
-    # Color logic
-    #  |<-                 green                  ->| yellow |  red ->
-    #  0  5 10 15 20 25 30 35 40 45 50 55 60 65 70 75 80 85 90 95 100
+    # Green below 75, yellow below 90, red above
     if [ "${load}" -lt 75 ]; then
         out=${green_text}
     elif [ "${load}" -lt 90 ]; then
@@ -1630,33 +1584,22 @@ HeatmapGenerator () {
     echo "${out}"
 }
 
-# Provides a "bar graph"
-# takes in two or three parameters
-# $1: percentage filled
-# $2: max length of the bar
-# $3: colored flag, if "color" backfill with color
+# A bar graph: $1 the percentage filled, $2 its length, $3 "color" to backfill
+# in color
 BarGenerator() {
-    # number of filled in cells in the bar
     barNumber=$(toInteger "$(printf %.f "$(printf '%s %s\n' "$1" "$2" | awk '{print ($1 / 100) * $2}')")")
     frontFill=$(for i in $(seq "${barNumber}"); do printf "%b" "■"; done)
 
-    # remaining "unfilled" cells in the bar
     backfillNumber=$(($2-barNumber))
 
-    # if the filled in cells is less than the max length of the bar, fill it
     if [ "${barNumber}" -lt "${2}" ]; then
-        # if the bar should be colored
         if [ "$3" = "color" ]; then
-        # fill the rest in color
         backFill=$(for i in $(seq ${backfillNumber}); do printf "%b" "■"; done)
         out="${red_text}${frontFill}${green_text}${backFill}${reset_text}"
-        # else, it shouldn't be colored in
         else
-        # fill the rest with "space"
         backFill=$(for i in $(seq ${backfillNumber}); do printf "%b" "·"; done)
         out="${frontFill}${reset_text}${backFill}"
         fi
-    # else, fill it all the way
     else
         out=$(for i in $(seq "${2}"); do printf "%b" "■"; done)
     fi
@@ -1664,12 +1607,9 @@ BarGenerator() {
     echo "${out}"
 }
 
-# Checks the size of the screen and sets the value of ${padd_data}_size
+# Sets padd_size from the terminal size
 SizeChecker(){
-    # adding a tiny delay here to to give the kernel a bit time to
-    # report new sizes correctly after a terminal resize
-    # this reduces "flickering" of GenerateSizeDependendOutput() items
-    # after a terminal re-size
+    # A short pause lets the kernel report the new size after a resize
     sleep 0.1
     console_width=$(tput cols)
     console_height=$(tput lines)
@@ -1744,57 +1684,39 @@ SizeChecker(){
     fi
 }
 
-# converts a given version string e.g. v3.7.1 to 3007001000 to allow for easier comparison of multi digit version numbers
-# credits https://apple.stackexchange.com/a/123408
+# Converts a version such as v3.7.1 to 3007001000 so versions compare as integers
 VersionConverter() {
     printf '%s\n' "$*" | tr -d '[:alpha:]' | awk -F. '{ printf("%d%03d%03d%03d\n", $1,$2,$3,$4); }';
 }
 
+# Move the cursor yOffset lines down; an amount of 0 would be read as 1
 moveYOffset(){
-    # moves the cursor yOffset-times down
-    # https://vt100.net/docs/vt510-rm/CUD.html
-    # this needs to be guarded, because if the amount is 0, it is adjusted to 1
-    # https://terminalguide.namepad.de/seq/csi_cb/
-
     if [ "${yOffset}" -gt 0 ]; then
         printf '\e[%sB' "${yOffset}"
     fi
 }
 
+# Move the cursor xOffset columns right; an amount of 0 would be read as 1
 moveXOffset(){
-    # moves the cursor xOffset-times to the right
-    # https://vt100.net/docs/vt510-rm/CUF.html
-    # this needs to be guarded, because if the amount is 0, it is adjusted to 1
-    # https://terminalguide.namepad.de/seq/csi_cb/
-
     if [ "${xOffset}" -gt 0 ]; then
         printf '\e[%sC' "${xOffset}"
     fi
 }
 
-# Remove undesired strings from sys_model variable - used in GetSystemInformation() function
+# Drops OEM placeholder strings from the device model
 filterModel() {
     FILTERLIST="To be filled by O.E.M.|Not Applicable|System Product Name|System Version|Undefined|Default string|Not Specified|Type1ProductConfigId|INVALID|All Series|�"
 
-    # Description:
-    #    `-v`      : set $FILTERLIST into a variable called `list`
-    #    `gsub()`  : replace all list items (ignoring case) with an empty string, deleting them
-    #    `{$1=$1}1`: remove all extra spaces. The last "1" evaluates as true, printing the result
     printf '%s\n' "$1" | awk -v list="${FILTERLIST}" '{IGNORECASE=1; gsub(list,"")}; {$1=$1}1'
 }
 
-# Truncates a given string and appends three '...'
-# takes two parameters
-# $1: string to truncate
-# $2: max length of the string
+# Truncates $1 to $2 characters, the last three of them dots
 truncateString() {
     local truncatedString length shorted
 
     length=${#1}
-    shorted=$(($2-3)) # shorten max allowed length by 3 to make room for the dots
+    shorted=$(($2-3))
     if [ "${length}" -gt "${2}" ]; then
-        # if length of the string is larger then the specified max length
-        # cut every char from the string exceeding length $shorted and add three dots
         truncatedString=$(printf '%s\n' "$1" | cut -c1-${shorted})"..."
         printf '%s\n' "${truncatedString}"
     else
@@ -1803,7 +1725,6 @@ truncateString() {
 }
 
 # Converts seconds to days, hours, minutes
-# https://unix.stackexchange.com/a/338844
 convertUptime() {
     local seconds D H M
 
@@ -1816,23 +1737,10 @@ convertUptime() {
     printf "%d days, %02d hours, %02d minutes" "${D}" "${H}" "${M}"
 }
 
+# Reads a password, echoing * for each character: POSIX read has no -s or -n,
+# so the terminal's echo is turned off and restored afterwards
 secretRead() {
-
-    # POSIX compliant function to read user-input and
-    # mask every character entered by (*)
-    #
-    # This is challenging, because in POSIX, `read` does not support
-    # `-s` option (suppressing the input) or
-    # `-n` option (reading n chars)
-
-
-    # This workaround changes the terminal characteristics to not echo input and later resets this option
-    # credits https://stackoverflow.com/a/4316765
-    # showing asterisk instead of password
-    # https://stackoverflow.com/a/24600839
-    # https://unix.stackexchange.com/a/464963
-
-    stty -echo # do not echo user input
+    stty -echo
     stty -icanon min 1 time 0 # disable canonical mode https://man7.org/linux/man-pages/man3/termios.3.html
 
     unset password
@@ -1915,11 +1823,7 @@ StartupRoutine(){
         exit 1
     fi
 
-    # Clear the screen and move cursor to (0,0).
-    # This mimics the 'clear' command.
-    # https://vt100.net/docs/vt510-rm/ED.html
-    # https://vt100.net/docs/vt510-rm/CUP.html
-    # E3 extension `\e[3J` to clear the scrollback buffer see 'man clear'
+    # Clear the screen and the scrollback, as 'clear' does
     printf '\e[H\e[2J\e[3J'
 
     # adds the y-offset
@@ -2077,13 +1981,7 @@ NormalPADD() {
         break
     fi
 
-    # Sleep for 5 seconds
-    # sending sleep in the background and wait for it
-    # this way the TerminalResize trap can kill the sleep
-    # and force a instant re-draw of the dashboard
-    # https://stackoverflow.com/questions/32041674/linux-how-to-kill-sleep
-    #
-    # saving the PID of the background sleep process to kill it on exit and resize
+    # Sleep in the background so TerminalResize can kill it and redraw at once
     sleep 5 &
     sleepPID=$!
     wait $!
@@ -2091,9 +1989,7 @@ NormalPADD() {
     # Start getting our information for next round
     now=$(date +%s)
 
-    # check if a new authentication is required (e.g. after connection to FTL has re-established)
-    # GetFTLData() will return a 401 if a 401 http status code is returned
-    # as $password should be set already, PADD should automatically re-authenticate
+    # Re-authenticate when the session lapsed, such as after FTL came back
     authenthication_required=$(GetFTLData "info/ftl")
     if [ "${authenthication_required}" = 401 ]; then
       Authenticate
@@ -2178,8 +2074,7 @@ sig_cleanup() {
     # save error code (130 for SIGINT, 143 for SIGTERM, 131 for SIGQUIT)
     err=$?
 
-    # some shells will call EXIT after the INT signal
-    # causing EXIT trap to be executed, so we trap EXIT after INT
+    # Some shells run the EXIT trap after INT too
     trap '' EXIT
 
     (exit ${err}) # execute in a subshell just to pass $? to CleanExit()
@@ -2200,11 +2095,8 @@ CleanExit() {
     fi
 
     # Show the cursor
-    # https://vt100.net/docs/vt510-rm/DECTCEM.html
     printf '\e[?25h'
 
-    # if background sleep is running, kill it
-    # http://mywiki.wooledge.org/SignalTrap#When_is_the_signal_handled.3F
     kill "${sleepPID}" > /dev/null 2>&1
 
     #  Delete session from FTL server
@@ -2213,17 +2105,9 @@ CleanExit() {
 }
 
 TerminalResize(){
-    # if a terminal resize is trapped, check the new terminal size and
-    # kill the sleep function within NormalPADD() to trigger redrawing
-    # of the Dashboard
+    # Take the new size, clear the screen and the scrollback, and end the sleep
+    # in NormalPADD() so the dashboard redraws
     SizeChecker
-
-    # Clear the screen and move cursor to (0,0).
-    # This mimics the 'clear' command.
-    # https://vt100.net/docs/vt510-rm/ED.html
-    # https://vt100.net/docs/vt510-rm/CUP.html
-    # E3 extension `\e[3J` to clear the scrollback buffer (see 'man clear')
-
     printf '\e[H\e[2J\e[3J'
 
     kill "${sleepPID}" > /dev/null 2>&1
@@ -2233,12 +2117,9 @@ main(){
 
     check_dependencies
 
-    # Hiding the cursor.
-    # https://vt100.net/docs/vt510-rm/DECTCEM.html
+    # Hide the cursor
     printf '\e[?25l'
 
-    # Traps for graceful shutdown
-    # https://unix.stackexchange.com/a/681201
     trap CleanExit EXIT
     trap sig_cleanup INT QUIT TERM
 

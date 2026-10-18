@@ -160,8 +160,7 @@ run_brew_updates() {
 }
 
 # `brew missing` prints "formula: dep dep" for each installed formula whose
-# dependencies are gone (a dependency uninstalled by hand, say) and exits 1
-# when it finds any.
+# dependencies are gone, and exits 1 when it finds any.
 install_missing_brew_deps() {
     local missing=""
     local -a deps=()
@@ -204,9 +203,8 @@ run_tool_cache_cleanup() {
     add_result "PASS" "Tool caches cleaned"
 }
 
-# antidote is a zsh function, so load it in a bare zsh with the ANTIDOTE_HOME
-# the .zshrc uses; the static bundle points at the plugin folders and needs no
-# rebuild.
+# antidote is a zsh function: load it in a bare zsh with the .zshrc's
+# ANTIDOTE_HOME. The static bundle needs no rebuild.
 run_antidote_updates() {
     local antidote_zsh="${ANTIDOTE_ZSH}"
     local brew_prefix=""

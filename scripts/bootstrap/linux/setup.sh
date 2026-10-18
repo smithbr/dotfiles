@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# Linux bootstrap: the base apt packages. harden.sh beside this one runs
-# first, when install.sh offers it on an unhardened server; the other setup
-# scripts here are the installs it offers at the end.
+# Linux bootstrap: the base apt packages from apt-packages.txt.
 # -n/--dry-run names the missing packages without installing them.
 
 set -euo pipefail

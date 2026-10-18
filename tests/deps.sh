@@ -1,29 +1,12 @@
 #!/usr/bin/env bash
-# The test suite's own tools, fetched into a per-user cache so nothing is
-# installed through Homebrew for the tests. Sourced by run_tests.sh (deps_ensure)
-# or run on its own (`bash tests/deps.sh`) to warm the cache, as CI does.
+# The test suite's own tools, fetched into a per-user cache; tests/README.md
+# lists them, where the cache is, and how to bump a pin. Sourced by
+# run_tests.sh (deps_ensure) or run on its own to warm the cache, as CI does.
+# Each tool lives in <cache>/<name>-<ver>/, checked against the sha256 pinned
+# below and renamed into place when complete; bin/ and lib/ link to them.
 #
-# Cache: ${DOTFILES_TEST_DEPS:-${XDG_CACHE_HOME:-~/.cache}/dotfiles/tests}
-#   bats-core-<ver>/      Bats itself, run from the extracted tree
-#   bats-support-<ver>/   } bats_load_library finds them through
-#   bats-assert-<ver>/    } BATS_LIB_PATH=<cache>/lib
-#   parallel-<ver>/       the one Perl script GNU parallel is (`bats --jobs`)
-#   bash-<ver>/bin/bash   built from source where /bin/bash is older than 4.1
-#   bin/, lib/            relative links to the versions above
-#   python/python3        link to a uv-managed Python 3.11+ (tomllib) when uv
-#                         is installed; without uv, tests needing it skip
-#   parallel-home/        PARALLEL_HOME, so parallel writes nothing into ~
-# Every download is checked against the sha256 pinned below and installed by
-# renaming a finished temp directory into place, so a present <name>-<ver>/
-# directory is complete and a rerun with everything present touches no network.
-# Delete the cache directory to start over, or after bumping a pin.
-#
-# Bumping a pin: set the version and the tarball's sha256 (cross-check with the
-# GNU .sig or `brew info --json=v2 NAME`). GitHub has no release assets for the
-# bats projects; the tag archives below are the same URLs Homebrew pins.
-#
-# This file runs on /bin/bash 3.2 (run_tests.sh starts there on a Mac), so no
-# bash 4 features: no associative arrays, mapfile, or ${var,,}.
+# Runs on /bin/bash 3.2 (run_tests.sh starts there on a Mac): no associative
+# arrays, mapfile, or ${var,,}.
 
 : "${DEPS_BATS_CORE_VERSION:=1.14.0}"
 : "${DEPS_BATS_CORE_SHA256:=bb537b70b15b732f6d8827dd6578e3d8ce166636ce1f18ea9a074184fcce9177}"
@@ -98,9 +81,8 @@ deps_commit() { # tmp final
     fi
 }
 
-# Fetch a tarball and extract it (its top-level directory stripped) into
-# <cache>/<name>-<version>; a no-op when that directory exists. Extra arguments
-# select members to extract, named as they are in the archive.
+# Fetch a tarball into <cache>/<name>-<version>, top-level directory stripped;
+# a no-op when it exists. Extra arguments pick members by their archive names.
 deps_install_tarball() { # name version url sha [member...]
     local name="$1" version="$2" url="$3" sha="$4" final tmp archive
     shift 4
@@ -182,9 +164,8 @@ deps_ensure_bash() {
     export DEPS_TEST_BASH
 }
 
-# Link <cache>/python/python3 to a uv-managed Python 3.11 or newer (tomllib),
-# installing DEPS_PYTHON_VERSION through uv when there is none. Without uv the
-# link is removed and the tests that need it skip.
+# Link <cache>/python/python3 to a uv-managed Python 3.11 or newer, installing
+# one when there is none; without uv the link is removed.
 deps_ensure_python() {
     local link="${DEPS_DIR}/python/python3" python
     if ! command -v uv >/dev/null 2>&1; then
