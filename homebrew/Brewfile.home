@@ -1,9 +1,0 @@
-# Install all dependencies with: brew bundle
-# Usage: brew bundle [--file=Brewfile.home]
-
-cask "android-platform-tools"
-cask "obsidian"
-brew "bun"
-brew "restic"
-brew "superradcompany/tap/microsandbox"
-brew "vhs"

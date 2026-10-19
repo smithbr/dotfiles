@@ -1,8 +1,0 @@
-os=darwin
-layers=common tools personal desktop
-agents=yes
-agent_apps=claude codex cursor
-skills=core vault personal authoring review shell
-editors=yes
-brew=core home
-brew_optional=macos
