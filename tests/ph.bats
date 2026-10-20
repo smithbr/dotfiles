@@ -261,6 +261,15 @@ JSON
     run bash "${PH}" check 'https:///path'
     assert_failure
     assert_output "ph: no host in https:///path"
+    run bash "${PH}" check <<< '  https://mail.example.test/p?q=1 '
+    assert_success
+    assert_output "mail.example.test: on no list, so not blocked"
+    run bash "${PH}" check < /dev/null
+    assert_failure
+    assert_output "ph: check takes one domain, as an argument or on stdin"
+    run bash "${PH}" check a.test b.test
+    assert_failure
+    assert_output "ph: check takes one domain"
     printf '{"processed":{"success":[{"item":"a.test"},{"item":"b.test"}],"errors":[]}}' > "${FIX}/POST_domains_allow_exact"
     run bash "${PH}" allow 'http://a.test/x?y=z' b.test
     assert_success

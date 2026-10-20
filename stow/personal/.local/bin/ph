@@ -26,7 +26,8 @@ Commands:
   unallow DOMAIN...         Remove from the allow list
   undeny DOMAIN...          Remove from the deny list
   list [allow|deny]         Show the allow and deny lists
-  check DOMAIN              Show which lists and blocklists match DOMAIN
+  check [DOMAIN]            Show which lists and blocklists match DOMAIN
+                            (asked for, or read from stdin, when omitted)
   blocked [CLIENT]          Domains blocked lately, newest first, one line each
                             (optionally from one client; -a for every query)
   queries [CLIENT]          Recent queries, optionally from one client
@@ -218,9 +219,12 @@ urlencode() {
 }
 
 # host_of ARG: the host of a URL (scheme, user info, port, path, query, and
-# fragment dropped); a bare domain comes back as given.
+# fragment dropped, and whitespace around it); a bare domain comes back as
+# given.
 host_of() {
     local h="$1"
+    h="${h#"${h%%[![:space:]]*}"}"
+    h="${h%"${h##*[![:space:]]}"}"
     h="${h#*://}"
     h="${h%%[/?#]*}"
     h="${h##*@}"
@@ -337,10 +341,17 @@ cmd_list() {
 }
 
 cmd_check() {
-    [[ $# -eq 1 ]] || die "check takes one domain"
-    local domain
-    domain="$(host_of "$1")"
-    [[ -n "${domain}" ]] || die "no host in $1"
+    local given domain
+    case $# in
+        1) given="$1" ;;
+        0)  # A URL pasted after Enter lands here instead of on zsh's prompt.
+            [[ ! -t 0 ]] || printf 'Domain or URL: ' >&2
+            IFS= read -r given || [[ -n "${given}" ]] || die "check takes one domain, as an argument or on stdin"
+            ;;
+        *) die "check takes one domain" ;;
+    esac
+    domain="$(host_of "${given}")"
+    [[ -n "${domain}" ]] || die "no host in ${given}"
     api GET "/search/$(urlencode "${domain}")?partial=false&N=20" | if [[ "${JSON}" == true ]]; then cat; else
         jq -r --arg d "${domain}" "${JQ_CLEAN}"'
             .search as $s
