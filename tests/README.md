@@ -31,7 +31,7 @@ chmod +x .githooks/pre-commit .githooks/pre-push
 
 Tests run against scratch homes, overridden `PATH`, and stub executables: process-level isolation, not a container. Each `.bats` file names its cases; this list says only what each is for.
 
-- `ai_doctor.bats`: `ai-doctor` against fixture Claude Code, Codex, and Cursor config: every finding, `--fix`, and that nothing changes without it.
+- `ai_doctor.bats`: `ai-doctor` against fixture Claude Code, Codex, and Cursor config and a fake `claude`: each kind of row, each change and its undo, `--reset`, the menus, and that nothing changes without them.
 - `bin_scripts.bats`: the scripts in `stow/*/.local/bin` other than `ai-doctor` and `ph`, with their external commands mocked.
 - `bootstrap.bats`: `apt-packages.txt`, the Linux and macOS bootstrap scripts, the optional installs, `pihole.sh` (`PIHOLE_ROOT`), `harden.sh` dry runs (`HARDEN_ROOT`), `iterm2.sh`, `bootstrap.sh`, and script conventions (shebang, strict mode, `common.sh`).
 - `brew_add.bats`: `brew-add.sh` and `df-add` against scratch Brewfiles and a stub `brew`.

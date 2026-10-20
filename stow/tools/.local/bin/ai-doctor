@@ -2,41 +2,43 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""List what to fix or trim in Claude Code, Codex, and Cursor, and fix it.
+"""Trim what Claude Code, Codex, and Cursor load, keeping what you use.
 
-  ai-doctor             what needs doing, as a short numbered list; on a
-                        terminal, then a menu of every item, each set to
-                        skip or one of its actions (disable, remove, ...)
-  ai-doctor --fix       that menu without a terminal too, read as one line
-                        (--yes does each [auto] item's first action, asking nothing)
-  ai-doctor -v          also everything checked: instructions, skills per
-                        bundle and per plugin, agents, plugins with their
-                        use, and MCP servers, with token sizes
-  ai-doctor --app NAME  only claude, codex, or cursor (repeatable)
+  ai-doctor                 the summary and one row per source (plugin, skill
+                            bundle, skill, MCP server); on a terminal, then a
+                            menu with each row set to keep or off
+  ai-doctor --fix           that menu without a terminal too, read as one line
+  ai-doctor -y, --yes       apply the preselected rows, asking nothing
+  ai-doctor -n, --dry-run   say what --yes would change, change nothing
+  ai-doctor --reset [WHAT]  undo ai-doctor's changes: plugins, skills, bundles,
+                            servers, or all of them
+  ai-doctor -v              also every row kept, what is already off, and the
+                            instruction files and agents
+  ai-doctor --app NAME      only claude, codex, or cursor (repeatable)
 
-The summary line says where each session's load comes from: skills from the
-persona's bundles and from plugins, agents, MCP servers by state (ready,
-waiting for a sign-in, off, can't start), and the tokens read before you
-type. It then looks for MCP servers that cannot start, secrets written into
-MCP config, broken skill links, skill bundles beyond what the dotfiles
-persona asks for, plugins loaded twice, plugins whose servers wait for a
-sign-in, and plugins Claude Code records no use of. Each item says what to
-do and what every session loses when you do it, so the setup can stay lean
-and a plugin can be turned on only while it is needed. An item marked [auto]
-is one --fix can do: it unlinks skill bundles with skills-add, turns a plugin
-off with claude plugin disable (claude plugin enable turns it back on),
-removes or repairs a server with the app's own command (or edits its config,
-after a backup), and deletes broken links. Plugins already turned off are
-not counted. Backups go to ~/.local/state/ai-doctor/<time>/.
+Each row shows what the source adds to the / menu, the tokens it adds before
+you type, and when you last used it. A row unused for 30 days starts on off;
+one you used starts on keep. Last use comes from Claude Code's transcripts,
+saved in ~/.local/state/ai-doctor/usage.json as they age out, and token
+counts from Claude Code's own `claude -p /context` report (estimated from
+skill descriptions when no claude command is found). Claude's built-in
+skills and tools get no row, only their share in the summary.
 
-Exits 1 while something is broken (not just worth trimming), otherwise 0.
-Connectors kept only on claude.ai, the tools the desktop apps add themselves,
-and Claude Code's built-in skills and agents are not on disk, so they are not
-counted; turn connectors off in the app. Sizes are rough, about 4 characters
-a token, and leave out each MCP tool's name and schema.
+Turning a row off uses the tool's own command where there is one: claude
+plugin disable, skill-drop, claude mcp remove, codex mcp remove. A skill is
+turned off with skillOverrides in ~/.claude/settings.json ("off", or "menu":
+out of context, still typed as /name). Other edits back up the file first.
+Every change is logged in ~/.local/state/ai-doctor/actions.jsonl with its
+undo, and --reset runs those undos one item at a time. Claude.ai connectors
+and the desktop apps' own tools have no local switch and are left alone.
+
+Exits 1 when something is broken (a dead skill link, a server that cannot
+start, a token written into MCP config) or a change failed, 2 for bad usage,
+otherwise 0.
 """
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -56,72 +58,22 @@ except ImportError:  # Python before 3.11
     tomllib = None
 
 APPS = ("claude", "codex", "cursor")
+CATEGORIES = ("plugins", "skills", "bundles", "servers")
+GROUPS = ("claude", "shared", "codex", "cursor", "undo")
 HOME = Path.home()
 CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config")
-STATE_HOME = Path(os.environ.get("XDG_STATE_HOME") or HOME / ".local" / "state")
+STATE_DIR = Path(os.environ.get("XDG_STATE_HOME") or HOME / ".local" / "state") / "ai-doctor"
 AGENTS_DIR = CONFIG_HOME / "agents"
-# The script lives at <repo>/stow/tools/.local/bin/ai-doctor, reached through its stow link.
-DOTFILES_DIR = Path(os.environ.get("DOTFILES_DIR") or Path(__file__).resolve().parents[4])
+SETTINGS = HOME / ".claude" / "settings.json"
+DORMANT_DAYS = 30
+LEDGER_TRUST_DAYS = 90
+NOW = time.time()
 
 SECRET_KEY = re.compile(r"token|secret|password|api[-_]?key|authorization|bearer", re.I)
 SECRET_VALUE = re.compile(r"^(bearer\s+)?(gh[opsur]_|github_pat_|sk-|xox[abp]-|glpat-)", re.I)
 
 
-# Output -------------------------------------------------------------------
-
-
-class Finding:
-    """One thing to do: broken (fix) or worth trimming (trim)."""
-
-    def __init__(self, kind, title, todo, apply=None, effect=None, verb="fix", alts=()):
-        self.kind = kind
-        self.title = title
-        self.todo = todo  # one line: the command or the step
-        self.apply = apply  # callable(backup_dir), when --fix can do it
-        self.effect = effect  # one line: what every session loses or gains
-        # What the list offers for the item: skip, then each (verb, todo, apply) --fix can do.
-        self.choices = [("skip", "leave it", None)]
-        if apply:
-            self.choices.append((verb, todo, apply))
-        self.choices += [alt for alt in alts if alt[2]]
-
-    @property
-    def actions(self):
-        return [verb for verb, _, _ in self.choices]
-
-
-class Report:
-    def __init__(self, color, verbose):
-        self.color = color
-        self.verbose = verbose
-        self.findings = []
-        self.stats = {}
-        self.plugins = {}  # name -> what it adds, filled by check_plugins
-
-    def paint(self, code, text):
-        return f"\033[{code}m{text}\033[0m" if self.color else text
-
-    # Inventory lines show only with -v.
-    def section(self, title):
-        if self.verbose:
-            print()
-            print(self.paint("1", title))
-
-    def line(self, text, indent=2):
-        if self.verbose:
-            print(" " * indent + text)
-
-    def ok(self, text):
-        self.line(f"{self.paint('32', 'ok')}  {text}")
-
-    def note(self, text):
-        self.line(f"{self.paint('2', '--')}  {text}")
-
-    def fix(self, title, todo, apply=None, effect=None, verb="fix", alts=()):
-        self.findings.append(Finding("fix", title, todo, apply, effect, verb, alts))
-
-    def trim(self, title, todo, apply=None, effect=None, verb="fix", alts=()):
-        self.findings.append(Finding("trim", title, todo, apply, effect, verb, alts))
+# Small helpers ------------------------------------------------------------
 
 
 def tilde(path):
@@ -136,12 +88,14 @@ def plural(count, word):
     return f"{count} {word}" if count == 1 else f"{count} {word}s"
 
 
-def waits(count):
-    return "waits" if count == 1 else "wait"
+def tokens_of(chars):
+    return (chars + 2) // 4
 
 
-def tokens(chars):
-    return f"~{(chars + 2) // 4:,} tokens"
+def short_tokens(count):
+    if count is None:
+        return "-"
+    return f"{count / 1000:.1f}k" if count >= 1000 else str(count)
 
 
 def read_text(path):
@@ -161,132 +115,578 @@ def read_json(path):
         return None
 
 
-def others_can_read(path):
-    try:
-        return bool(Path(path).stat().st_mode & (stat.S_IRGRP | stat.S_IROTH))
-    except OSError:
-        return False
-
-
-# Fixes --------------------------------------------------------------------
+def write_json(path, data):
+    path = Path(path).resolve()
+    tmp = path.with_name(path.name + ".ai-doctor")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    if path.exists():
+        os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
+    os.replace(tmp, path)
 
 
 def backup(path, backup_dir):
     """Copy path into backup_dir before changing it; the first copy, the original, is kept."""
     backup_dir.mkdir(parents=True, exist_ok=True)
     target = backup_dir / str(Path(path)).lstrip("/").replace("/", "__")
-    if target.exists():
-        return
-    if Path(path).is_dir():
-        shutil.copytree(path, target, symlinks=True)
-    else:
+    if not target.exists() and Path(path).exists():
         shutil.copy2(path, target)
+    return target
 
 
-def write_json(path, data):
-    path = Path(path)
-    tmp = path.with_name(path.name + ".ai-doctor")
-    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
-    os.replace(tmp, path)
-
-
-def edit_json(path, change):
-    """A fix that backs up a JSON file, then changes it in place."""
-    def apply(backup_dir):
-        data = read_json(path)
-        if data is None:
+def edit_json(path, change, backup_dir, create=False):
+    """Back up a JSON file, then change it in place; create starts a missing file as {}."""
+    data = read_json(path)
+    if data is None:
+        if not create or Path(path).exists():
             raise RuntimeError(f"cannot read {tilde(path)}")
+        data = {}
+    else:
         backup(path, backup_dir)
-        change(data)
-        write_json(path, data)
-    return apply
+    change(data)
+    write_json(path, data)
 
 
-def run(command):
-    """A fix that runs a command."""
-    def apply(_backup_dir):
-        subprocess.run(command, check=True)
-    return apply
+def run(command, cwd=None):
+    result = subprocess.run(command, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        raise RuntimeError(f"{' '.join(command[:4])} exited {result.returncode}"
+                           + (f": {detail[-1]}" if detail else ""))
 
 
-def drop_toml_table(path, name):
-    """A fix that removes [mcp_servers.NAME] and its sub-tables from a TOML file."""
-    def apply(backup_dir):
-        lines = Path(path).read_text(encoding="utf-8").splitlines(keepends=True)
-        header = re.compile(r"\s*\[\s*mcp_servers\.(\"?)" + re.escape(name) + r"\1\s*(\.|\])")
-        kept, skipping = [], False
-        for line in lines:
-            if line.lstrip().startswith("["):
-                skipping = bool(header.match(line))
-            if not skipping:
-                kept.append(line)
-        backup(path, backup_dir)
-        Path(path).write_text("".join(kept), encoding="utf-8")
-    return apply
+def claude_bin():
+    """The claude command: AI_DOCTOR_CLAUDE, PATH, ~/.local/bin, or the desktop app's copy."""
+    if "AI_DOCTOR_CLAUDE" in os.environ:
+        found = os.environ["AI_DOCTOR_CLAUDE"]
+        return found if found and os.access(found, os.X_OK) else None
+    found = shutil.which("claude")
+    if found:
+        return found
+    candidates = [HOME / ".local" / "bin" / "claude", HOME / ".claude" / "local" / "claude"]
+    bundled = HOME / "Library" / "Application Support" / "Claude" / "claude-code"
+    candidates += sorted(bundled.glob("*/*/claude.app/Contents/MacOS/claude"), key=lambda p: p.stat().st_mtime)[-1:]
+    return next((str(p) for p in candidates if os.access(p, os.X_OK)), None)
 
 
-# Instructions -------------------------------------------------------------
+def codex_bin():
+    if "AI_DOCTOR_CODEX" in os.environ:
+        found = os.environ["AI_DOCTOR_CODEX"]
+        return found if found and os.access(found, os.X_OK) else None
+    return shutil.which("codex")
 
 
-def memory_dir(cwd):
-    return HOME / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(cwd)) / "memory"
+def skills_add_bin():
+    found = AGENTS_DIR / "scripts" / "skills-add"
+    return str(found) if found.is_file() else None
 
 
-def check_instructions(report, apps, cwd):
-    report.section("Instructions (read into every session)")
-    files = []
-    if "claude" in apps:
-        files += [("Claude global", HOME / ".claude" / "CLAUDE.md"),
-                  ("Claude memory", memory_dir(cwd) / "MEMORY.md")]
-    if "codex" in apps:
-        files.append(("Codex global", HOME / ".codex" / "AGENTS.md"))
-    for name in ("CLAUDE.md", "AGENTS.md", "CLAUDE.local.md"):
-        files.append(("project", cwd / name))
-    seen = {}
-    total = 0
-    for label, path in files:
-        if not path.is_file():
-            continue
-        real = path.resolve()
-        if real in seen:
-            report.note(f"{label} {tilde(path)}: same file as {seen[real]}")
-            continue
-        seen[real] = label
-        size = len(read_text(path) or "")
-        total += size
-        report.ok(f"{label} {tilde(path)}: {tokens(size)}")
-    report.stats["instruction_chars"] = total
-    rules = AGENTS_DIR / "rules"
-    if rules.is_dir():
-        size = sum(len(read_text(p) or "") for p in sorted(rules.iterdir()) if p.is_file())
-        report.note(f"rules in {tilde(rules)}: {tokens(size)} when the instructions say to read them")
-    if not seen:
-        report.note("no instruction files found")
-    elif total > 40_000:
-        report.trim(f"Instruction files cost {tokens(total)} a session",
-                    "shorten the largest one (ai-doctor -v lists them)")
-
-
-# Skills -------------------------------------------------------------------
-
-
-def frontmatter_text(skill_md):
+def frontmatter(skill_md):
+    """(name, the name and description text a session loads) from a SKILL.md or agent file."""
     text = read_text(skill_md) or ""
     match = re.match(r"---\s*\n(.*?)\n---", text, re.S)
     if not match:
-        return ""
-    kept = []
-    keep = False
+        return None, ""
+    name, kept, keep = None, [], False
     for line in match.group(1).splitlines():
         key = re.match(r"(\w[\w-]*):\s*(.*)", line)
         if key:
             keep = key.group(1) in ("name", "description")
+            value = key.group(2).strip("'\" |>")
+            if key.group(1) == "name":
+                name = value
             if keep:
-                kept.append(key.group(2).strip("'\" |>"))
+                kept.append(value)
         elif keep and line.startswith((" ", "\t")):
             kept.append(line.strip())
-    return " ".join(kept)
+    return name, " ".join(kept)
+
+
+def settings():
+    return read_json(SETTINGS) or {}
+
+
+# What Claude Code reports and remembers -----------------------------------
+
+
+def parse_tokens(text):
+    text = text.strip().lstrip("~").replace(",", "")
+    if text.startswith("<"):
+        return int(float(text[1:].strip() or 0))
+    try:
+        return int(float(text[:-1]) * 1000) if text.endswith("k") else int(float(text))
+    except ValueError:
+        return 0
+
+
+def context_report(claude, cwd):
+    """Claude Code's own `/context` report: {"categories", "skills", "mcp", "agents"}, or None."""
+    if not claude:
+        return None
+    try:
+        result = subprocess.run([claude, "-p", "/context"], cwd=cwd, stdin=subprocess.DEVNULL,
+                                capture_output=True, text=True, timeout=90)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0 or "## Context Usage" not in result.stdout:
+        return None
+    report = {"categories": {}, "skills": [], "mcp": [], "agents": []}
+    section = None
+    for line in result.stdout.splitlines():
+        if line.startswith("###"):
+            title = line.lstrip("# ").lower()
+            section = ("categories" if title.startswith("estimated") else "skills" if title.startswith("skills")
+                       else "mcp" if title.startswith("mcp") else "agents" if title.startswith("custom") else None)
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if section is None or len(cells) < 2 or not line.startswith("|") or set(cells[0]) <= {"-"}:
+            continue
+        if cells[0] in ("Category", "Skill", "Tool", "Agent Type"):
+            continue
+        if section == "categories":
+            report["categories"][cells[0]] = parse_tokens(cells[1])
+        elif len(cells) >= 3:
+            report[section].append((cells[0], cells[1], parse_tokens(cells[2])))
+    return report
+
+
+def key_name(text):
+    """A server or skill name the way tool names spell it, for matching."""
+    return re.sub(r"[^a-z0-9_:-]", "_", text.lower())
+
+
+def transcript_uses():
+    """{key: (count, last time)} from Claude Code transcripts: skill:NAME and mcp:SERVER."""
+    found = {}
+    oldest = NOW
+
+    def seen(key, when):
+        count, last = found.get(key, (0, 0.0))
+        found[key] = (count + 1, max(last, when or 0.0))
+
+    for path in (HOME / ".claude" / "projects").rglob("*.jsonl"):
+        try:
+            handle = path.open(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        with handle:
+            for line in handle:
+                if '"Skill"' not in line and "mcp__" not in line and "<command-name>" not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                try:
+                    when = datetime.datetime.fromisoformat(str(record.get("timestamp")).replace("Z", "+00:00")).timestamp()
+                    oldest = min(oldest, when)
+                except ValueError:
+                    when = None
+                content = (record.get("message") or {}).get("content") if isinstance(record.get("message"), dict) else None
+                if isinstance(content, str) and "<command-name>/" in content:
+                    seen("skill:" + key_name(content.split("<command-name>/", 1)[1].split("<", 1)[0].strip()), when)
+                if not isinstance(content, list):
+                    continue
+                for item in content:
+                    if not isinstance(item, dict) or item.get("type") != "tool_use":
+                        continue
+                    name = str(item.get("name", ""))
+                    if name == "Skill":
+                        given = item.get("input") or {}
+                        skill = str(given.get("skill") or given.get("command") or "").lstrip("/")
+                        if skill:
+                            seen("skill:" + key_name(skill), when)
+                    elif name.startswith("mcp__"):
+                        seen("mcp:" + key_name(name[5:].split("__", 1)[0]), when)
+    return found, oldest
+
+
+class Usage:
+    """Last use per key, from the transcripts and from ai-doctor's own ledger, which outlives them."""
+
+    def __init__(self, enabled):
+        self.uses, oldest = transcript_uses() if enabled else ({}, NOW)
+        ledger = read_json(STATE_DIR / "usage.json") or {}
+        self.last = {k: v for k, v in (ledger.get("last") or {}).items() if isinstance(v, (int, float))}
+        for key, (_count, when) in self.uses.items():
+            self.last[key] = max(self.last.get(key, 0), when)
+        self.since = min(ledger.get("since") or NOW, oldest)
+        state = read_json(HOME / ".claude.json") or {}
+        usage = state.get("pluginUsage")
+        self.plugin_lifetime = {}
+        for key, record in (usage.items() if isinstance(usage, dict) else []):
+            if isinstance(record, dict):
+                name = key.split("@")[0]
+                self.plugin_lifetime[name] = max(self.plugin_lifetime.get(name, 0), record.get("usageCount") or 0)
+                last = record.get("lastUsedAt")
+                if isinstance(last, (int, float)) and last and record.get("usageCount"):
+                    self.last[f"plugin:{key_name(name)}"] = max(self.last.get(f"plugin:{key_name(name)}", 0), last / 1000)
+
+    def save(self):
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        write_json(STATE_DIR / "usage.json", {"since": self.since, "last": self.last})
+
+    def lookup(self, keys, prefixes=()):
+        """(uses in the transcripts, last time) over exact keys and key prefixes."""
+        count, last = 0, None
+        for key, (n, _) in self.uses.items():
+            if key in keys or key.startswith(tuple(prefixes)):
+                count += n
+        for key, when in self.last.items():
+            if key in keys or key.startswith(tuple(prefixes)):
+                last = max(last or 0, when)
+        return count, last
+
+    def ledger_trusted(self):
+        return NOW - self.since >= LEDGER_TRUST_DAYS * 86400
+
+
+def dormant(last):
+    return last is None or NOW - last > DORMANT_DAYS * 86400
+
+
+def describe_last(last, uses):
+    if last is None:
+        return "never"
+    days = max(int((NOW - last) // 86400), 0)
+    when = "today" if days == 0 else f"{days}d ago"
+    return f"{when} ({uses})" if uses else when
+
+
+# The log ------------------------------------------------------------------
+
+
+LOG = STATE_DIR / "actions.jsonl"
+
+
+def read_log():
+    entries, undone = [], set()
+    for line in (read_text(LOG) or "").splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("undo_of"):
+            undone.add(entry["undo_of"])
+        elif entry.get("id") and isinstance(entry.get("undo"), dict):
+            entries.append(entry)
+    return [e for e in entries if e["id"] not in undone]
+
+
+def append_log(entry):
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with LOG.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry) + "\n")
+
+
+def stamp():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class Context:
+    """What a change needs: the commands, a backup folder for this run, and a counter for log ids."""
+
+    def __init__(self, claude):
+        self.claude = claude
+        self.codex = codex_bin()
+        self.skills_add = skills_add_bin()
+        self.backup_dir = STATE_DIR / "backups" / time.strftime("%Y%m%d-%H%M%S")
+        self.count = 0
+
+    def log(self, category, item, did, undo):
+        self.count += 1
+        append_log({"id": f"{time.strftime('%Y%m%d%H%M%S')}-{self.count}", "at": stamp(), "category": category,
+                    "item": item, "did": did, "undo": undo})
+
+
+# Changes and their undos --------------------------------------------------
+
+
+def disable_plugin(key):
+    def apply(ctx):
+        if ctx.claude:
+            run([ctx.claude, "plugin", "disable", key])
+        else:
+            edit_json(SETTINGS, lambda d: d.setdefault("enabledPlugins", {}).__setitem__(key, False),
+                      ctx.backup_dir, create=True)
+        ctx.log("plugins", key, f"claude plugin disable {key}", {"kind": "plugin", "key": key})
+    return apply
+
+
+def drop_bundle(bundle):
+    def apply(ctx):
+        if not ctx.skills_add:
+            raise RuntimeError("skills-add is missing from the agents checkout")
+        run([ctx.skills_add, "-D", bundle])
+        ctx.log("bundles", bundle, f"skill-drop {bundle}", {"kind": "bundle", "bundle": bundle})
+    return apply
+
+
+def override_skill(name, value):
+    def apply(ctx):
+        previous = (settings().get("skillOverrides") or {}).get(name)
+        edit_json(SETTINGS, lambda d: d.setdefault("skillOverrides", {}).__setitem__(name, value),
+                  ctx.backup_dir, create=True)
+        ctx.log("skills", name, f'skillOverrides "{name}": "{value}"',
+                {"kind": "override", "name": name, "value": value, "previous": previous})
+    return apply
+
+
+def json_keys(app, scope, cwd):
+    if app == "claude" and scope == "local":
+        return ["projects", str(cwd), "mcpServers"]
+    return ["mcpServers"]
+
+
+def dig(data, keys, create=False):
+    for key in keys:
+        if create:
+            data = data.setdefault(key, {})
+        else:
+            data = data.get(key) or {}
+    return data
+
+
+def toml_table(path, name):
+    """The lines of [mcp_servers.NAME] and its sub-tables, and every other line."""
+    header = re.compile(r"\s*\[\s*mcp_servers\.(\"?)" + re.escape(name) + r"\1\s*(\.|\])")
+    table, rest, inside = [], [], False
+    for line in (read_text(path) or "").splitlines(keepends=True):
+        if line.lstrip().startswith("["):
+            inside = bool(header.match(line))
+        (table if inside else rest).append(line)
+    return "".join(table), "".join(rest)
+
+
+def remove_server(app, file, scope, name, conf, cwd):
+    def apply(ctx):
+        undo = {"kind": "server", "app": app, "file": str(file), "scope": scope, "name": name,
+                "cwd": str(cwd), "config": conf}
+        if app == "claude" and ctx.claude:
+            run([ctx.claude, "mcp", "remove", name, "-s", scope], cwd=cwd)
+            did = f"claude mcp remove {name} -s {scope}"
+        elif app == "codex":
+            text, rest = toml_table(file, name)
+            undo["text"] = text
+            if ctx.codex:
+                run([ctx.codex, "mcp", "remove", name])
+                did = f"codex mcp remove {name}"
+            else:
+                backup(file, ctx.backup_dir)
+                Path(file).write_text(rest, encoding="utf-8")
+                did = f"deleted [mcp_servers.{name}] from {tilde(file)}"
+        else:
+            edit_json(file, lambda d: dig(d, json_keys(app, scope, cwd)).pop(name, None), ctx.backup_dir)
+            did = f"deleted \"{name}\" from {tilde(file)}"
+        ctx.log("servers", f"{app}:{name}", did, undo)
+    return apply
+
+
+def archive_skill(folder, app):
+    """For a tool with no per-skill switch: move the skill folder into ai-doctor's archive."""
+    def apply(ctx):
+        target = STATE_DIR / "archive" / time.strftime("%Y%m%d-%H%M%S") / app / Path(folder).name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(folder), str(target))
+        ctx.log("skills", f"{app}:{Path(folder).name}", f"moved {tilde(folder)} to {tilde(target)}",
+                {"kind": "move", "path": str(folder), "archived": str(target)})
+    return apply
+
+
+def delete_link(link):
+    def apply(ctx):
+        target = os.readlink(link)
+        Path(link).unlink()
+        ctx.log("skills", str(link), f"rm {tilde(link)}", {"kind": "link", "path": str(link), "target": target})
+    return apply
+
+
+def undo(entry, ctx):
+    """Run one logged undo; returns what it did, or None when the item is already back."""
+    u = entry["undo"]
+    kind = u.get("kind")
+    if kind == "plugin":
+        if (settings().get("enabledPlugins") or {}).get(u["key"]) is not False:
+            return None
+        if ctx.claude:
+            run([ctx.claude, "plugin", "enable", u["key"]])
+        else:
+            edit_json(SETTINGS, lambda d: d.get("enabledPlugins", {}).pop(u["key"], None), ctx.backup_dir)
+        return f"claude plugin enable {u['key']}"
+    if kind == "bundle":
+        if not ctx.skills_add:
+            raise RuntimeError("skills-add is missing from the agents checkout")
+        run([ctx.skills_add, u["bundle"]])
+        return f"skills-add {u['bundle']}"
+    if kind == "override":
+        if (settings().get("skillOverrides") or {}).get(u["name"]) != u["value"]:
+            return None
+
+        def change(data):
+            overrides = data.setdefault("skillOverrides", {})
+            if u.get("previous") is None:
+                overrides.pop(u["name"], None)
+            else:
+                overrides[u["name"]] = u["previous"]
+            if not overrides:
+                data.pop("skillOverrides")
+        edit_json(SETTINGS, change, ctx.backup_dir)
+        return f"skillOverrides \"{u['name']}\" removed" if u.get("previous") is None else \
+            f"skillOverrides \"{u['name']}\": \"{u['previous']}\""
+    if kind == "server":
+        app, file, name = u["app"], Path(u["file"]), u["name"]
+        if app == "codex":
+            if toml_table(file, name)[0]:
+                return None
+            backup(file, ctx.backup_dir)
+            text = read_text(file) or ""
+            Path(file).write_text(text + ("" if not text or text.endswith("\n") else "\n") + u["text"], encoding="utf-8")
+            return f"put [mcp_servers.{name}] back in {tilde(file)}"
+        keys = json_keys(app, u["scope"], u["cwd"])
+        if name in dig(read_json(file) or {}, keys):
+            return None
+        if app == "claude" and ctx.claude:
+            run([ctx.claude, "mcp", "add-json", name, json.dumps(u["config"]), "-s", u["scope"]], cwd=u["cwd"])
+            return f"claude mcp add-json {name} -s {u['scope']}"
+        edit_json(file, lambda d: dig(d, keys, create=True).__setitem__(name, u["config"]), ctx.backup_dir)
+        return f"put \"{name}\" back in {tilde(file)}"
+    if kind == "move":
+        if os.path.lexists(u["path"]) or not os.path.lexists(u["archived"]):
+            return None
+        shutil.move(u["archived"], u["path"])
+        return f"moved {tilde(u['path'])} back"
+    if kind == "link":
+        if os.path.lexists(u["path"]):
+            return None
+        os.symlink(u["target"], u["path"])
+        return f"relinked {tilde(u['path'])}"
+    raise RuntimeError(f"unknown undo {kind!r}")
+
+
+# Rows ---------------------------------------------------------------------
+
+
+class Row:
+    """One source: what it adds, when it was used, and what the menu can do with it."""
+
+    def __init__(self, title, slash=0, tokens=None, last=None, uses=0, note="", dated=True):
+        self.title = title
+        self.slash = slash
+        self.tokens = tokens
+        self.last = last
+        self.uses = uses
+        self.dated = dated
+        self.note = note  # one line under the menu: what turning it off changes
+        self.choices = [("keep", "leave it", None)]
+        self.default = 0
+        self.children = []
+        self.broken = False
+        self.parent = None
+        self.group = "claude"
+
+    def offer(self, verb, todo, apply):
+        self.choices.append((verb, todo, apply))
+
+    def start_off(self):
+        if len(self.choices) > 1:
+            self.default = 1
+
+    @property
+    def verbs(self):
+        return [verb for verb, _, _ in self.choices]
+
+    def when(self):
+        return describe_last(self.last, self.uses) if self.dated else "-"
+
+
+class Inventory:
+    def __init__(self):
+        self.rows = []
+        self.off = []  # (what, how to turn it back on), for -v
+        self.health = []
+        self.verbose = []  # (section, line), for -v
+        self.headings = {"claude": "Claude Code: the terminal and the desktop app's Code tab", "codex": "Codex",
+                         "cursor": "Cursor", "undo": "Undo ai-doctor's changes"}
+        self.slash = 0
+        self.est_chars = 0
+
+
+def plugin_contents(root):
+    root = Path(root)
+    skill_files = [f for p in ("SKILL.md", "skills/*/SKILL.md", "commands/*.md") for f in root.glob(p)]
+    servers = (read_json(root / ".mcp.json") or {}).get("mcpServers", {})
+    agents = list((root / "agents").glob("*.md"))
+    return skill_files, servers if isinstance(servers, dict) else {}, agents
+
+
+def plugin_name(root):
+    meta = read_json(Path(root) / ".claude-plugin" / "plugin.json") or {}
+    return meta.get("name") or Path(root).name
+
+
+def claude_plugins():
+    """(name, source, root, plugin id) for every installed and synced Claude Code plugin."""
+    found = []
+    installed = read_json(HOME / ".claude" / "plugins" / "installed_plugins.json") or {}
+    for key, entries in (installed.get("plugins") or {}).items():
+        entries = [e for e in (entries if isinstance(entries, list) else [entries])
+                   if isinstance(e, dict) and e.get("installPath") and Path(e["installPath"]).is_dir()]
+        if entries:
+            found.append((key.split("@")[0], "installed", Path(entries[-1]["installPath"]), key))
+    synced = {}
+    for root in (HOME / ".claude" / "plugins" / "synced").glob("*/*/.claude-plugin"):
+        name = plugin_name(root.parent)
+        generation = re.search(r"~g(\d+)$", root.parent.name)
+        rank = (int(generation.group(1)) if generation else 1, root.parent.stat().st_mtime)
+        if name not in synced or rank > synced[name][0]:
+            synced[name] = (rank, root.parent)
+    for name, (_rank, root) in sorted(synced.items()):
+        found.append((name, "claude.ai", root, f"{name}@synced"))
+    return found
+
+
+def add_plugins(inv, usage, report, needs_auth):
+    enabled = settings().get("enabledPlugins") or {}
+    plugins = claude_plugins()
+    names = {}
+    for name, source, _root, _key in plugins:
+        names.setdefault(name, set()).add(source)
+    measured = {}
+    for skill, source, count in (report or {}).get("skills", []):
+        match = re.match(r"Plugin \((.+)\)", source)
+        if match:
+            measured[match.group(1)] = measured.get(match.group(1), 0) + count
+    for name, source, root, key in plugins:
+        if enabled.get(key) is False:
+            inv.off.append((f"plugin {name} ({source})", f"claude plugin enable {key}"))
+            continue
+        skill_files, servers, agents = plugin_contents(root)
+        chars = sum(len(frontmatter(f)[1]) for f in skill_files)
+        inv.est_chars += chars
+        k = key_name(name)
+        uses, last = usage.lookup({f"plugin:{k}"}, (f"skill:{k}:", f"mcp:plugin_{k}_"))
+        waiting = [s for s in servers if f"plugin:{name}:{s}" in needs_auth]
+        parts = [plural(len(skill_files), "skill")]
+        if servers:
+            parts.append(plural(len(servers), "MCP server") + (f", {len(waiting)} waiting for a sign-in" if waiting else ""))
+        if agents:
+            parts.append(plural(len(agents), "agent"))
+        origin = "from claude.ai" if source == "claude.ai" else "installed"
+        row = Row(f"plugin {name} ({origin}): {', '.join(parts)}", len(skill_files),
+                  measured.get(name, tokens_of(chars) if report is None else 0), last, uses,
+                  f"claude plugin enable {key} turns it back on")
+        row.offer("off", f"claude plugin disable {key}", disable_plugin(key))
+        duplicate = source == "installed" and "claude.ai" in names[name]
+        if duplicate:
+            row.title += "; also synced from claude.ai, so it loads twice"
+        protected = usage.plugin_lifetime.get(name) and not usage.ledger_trusted()
+        if duplicate or (dormant(last) and not protected):
+            row.start_off()
+        inv.slash += len(skill_files)
+        inv.rows.append(row)
 
 
 def bundle_of(path):
@@ -299,285 +699,138 @@ def bundle_of(path):
     return parts[0] if len(parts) > 1 else "local"
 
 
-def persona_bundles():
-    """Skill bundles the dotfiles persona asks for, or None without a persona."""
-    name = os.environ.get("DOTFILES_PERSONA") or (read_text(STATE_HOME / "dotfiles" / "persona") or "").strip()
-    text = read_text(DOTFILES_DIR / "personas" / name) if name else None
-    if text is None:
-        return None, None
-    for line in text.splitlines():
-        if line.startswith("skills="):
-            return name, line.split("=", 1)[1].split()
-    return name, ["core"]
+def skill_row(name, label, chars, usage, measured, report, keys, others=""):
+    overrides = settings().get("skillOverrides") or {}
+    current = overrides.get(name)
+    uses, last = usage.lookup(keys)
+    tokens = measured.get(name, 0 if report else tokens_of(chars))
+    if current == "user-invocable-only":
+        tokens = 0
+    row = Row(f"{label} {name}" + (" (menu only)" if current == "user-invocable-only" else ""), 1, tokens, last,
+              uses, "remove its skillOverrides entry to turn it back on (ai-doctor --reset skills)")
+    scope = f"; Claude Code only, {others} still {'load' if ' and ' in others else 'loads'} it" if others else ""
+    row.offer("off", f'skillOverrides "{name}": "off"{scope}', override_skill(name, "off"))
+    if current != "user-invocable-only":
+        row.offer("menu", f'skillOverrides "{name}": "user-invocable-only": out of context, still /{name}{scope}',
+                  override_skill(name, "user-invocable-only"))
+    if dormant(last):
+        row.start_off()
+    return row
 
 
-def check_skills(report, apps):
-    report.section("Skills (each name and description is in every session)")
-    dirs = []
+def add_skills(inv, apps, usage, report):
+    overrides = settings().get("skillOverrides") or {}
+    measured = {}
+    for skill, source, count in (report or {}).get("skills", []):
+        if source in ("User", "claude.ai sync", "Project"):
+            measured[skill] = count
+    folders = []
     if "claude" in apps:
-        dirs.append(HOME / ".claude" / "skills")
+        folders.append(HOME / ".claude" / "skills")
     if "codex" in apps:
-        dirs += [HOME / ".codex" / "skills", HOME / ".agents" / "skills"]
+        folders += [HOME / ".codex" / "skills", HOME / ".agents" / "skills"]
     if "cursor" in apps:
-        dirs.append(HOME / ".cursor" / "skills")
-    seen = {}
-    shared = (HOME / ".agents" / "skills").resolve()
-    for folder in dirs:
-        if not folder.is_dir():
+        folders.append(HOME / ".cursor" / "skills")
+    claude_real = (HOME / ".claude" / "skills").resolve() if "claude" in apps else None
+    seen = set()
+    bundles = {}
+    for folder in folders:
+        if not folder.is_dir() or folder.resolve() in seen:
             continue
         real = folder.resolve()
-        if real in seen:
-            report.note(f"{tilde(folder)}: same folder as {tilde(seen[real])}")
+        seen.add(real)
+        if real != claude_real and folder.name == "skills" and folder.parent.name in (".codex", ".cursor"):
+            app_skills(inv, folder.parent.name[1:], real)
             continue
-        seen[real] = folder
-        bundles = {}
-        chars = 0
-        for entry in sorted(folder.iterdir()):
-            if entry.name.startswith("."):
-                continue
+        loaders = [app for app, path in (("claude", HOME / ".claude" / "skills"), ("codex", HOME / ".agents" / "skills"),
+                                         ("cursor", HOME / ".cursor" / "skills"))
+                   if app in apps and path.is_dir() and path.resolve() == real]
+        names = {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor"}
+        group = "shared" if len(loaders) > 1 else (loaders or ["claude"])[0]
+        others = " and ".join(names[a] for a in loaders if a != "claude") if "claude" in loaders else ""
+        everyone = ", ".join(names[a] for a in loaders[:-1]) + (" and " if len(loaders) > 1 else "") + names[loaders[-1]] \
+            if loaders else "Claude Code"
+        if group == "shared":
+            inv.headings["shared"] = f"Skills folder {tilde(real)}, loaded by {everyone}"
+        entries = sorted(e for e in real.iterdir() if not e.name.startswith("."))
+        synced = real / "synced"
+        for entry in entries:
             if entry.is_symlink() and not entry.exists():
-                link = real / entry.name
-                report.fix(f"Skill link {tilde(link)} is broken",
-                           f"rm {tilde(link)}", lambda _b, link=link: link.unlink(), verb="delete")
+                row = Row(f"broken skill link {tilde(entry)}", note="the link points nowhere")
+                row.broken = True
+                row.group = group
+                row.offer("off", f"rm {tilde(entry)}", delete_link(entry))
+                row.start_off()
+                inv.rows.append(row)
                 continue
             skill_md = entry / "SKILL.md"
-            if not skill_md.is_file():
+            if entry == synced or not skill_md.is_file():
                 continue
-            size = len(frontmatter_text(skill_md))
-            chars += size
-            bundles.setdefault(bundle_of(entry), []).append((entry.name, size))
-        count = sum(len(v) for v in bundles.values())
-        report.stats["skills"] = report.stats.get("skills", 0) + count
-        report.stats["skill_chars"] = report.stats.get("skill_chars", 0) + chars
-        where = f" -> {tilde(real)}" if real != folder.absolute() else ""
-        report.ok(f"{tilde(folder)}{where}: {count} skills, {tokens(chars)}")
-        for bundle, skills in sorted(bundles.items(), key=lambda kv: (-len(kv[1]), kv[0])):
-            report.line(f"{bundle:<18} {len(skills):>3} skills  {tokens(sum(s for _, s in skills))}", 6)
-        if real == shared:
-            report.stats["bundles"] = len(set(bundles) - {"local", "linked elsewhere"})
-            report.stats["bundle_skills"] = count
-            if (AGENTS_DIR / "skills").is_dir():
-                compare_persona(report, bundles)
+            name, text = frontmatter(skill_md)
+            name = name or entry.name
+            inv.est_chars += len(text)
+            if overrides.get(name) == "off":
+                inv.off.append((f"skill {name}", "ai-doctor --reset skills, or remove its skillOverrides entry"))
+                continue
+            where = bundle_of(entry)
+            if where in ("local", "linked elsewhere"):
+                row = skill_row(name, "skill", len(text), usage, measured, report, {f"skill:{key_name(name)}"}, others)
+                row.group = group
+                inv.slash += 1
+                inv.rows.append(row)
+            else:
+                bundles.setdefault(where, []).append((name, len(text)))
+        for skill_md in sorted(synced.glob("*/*/SKILL.md")):
+            name, text = frontmatter(skill_md)
+            name = name or skill_md.parent.name
+            inv.est_chars += len(text)
+            if overrides.get(name) == "off":
+                inv.off.append((f"claude.ai skill {name}", "ai-doctor --reset skills, or remove its skillOverrides entry"))
+                continue
+            keys = {f"skill:{key_name(name)}", f"skill:anthropic-skills:{key_name(name)}"}
+            inv.slash += 1
+            inv.rows.append(skill_row(name, "skill", len(text), usage, measured, report, keys))
+            inv.rows[-1].title += " (from claude.ai)"
+        for bundle, skills in sorted(bundles.items()):
+            add_bundle(inv, bundle, skills, usage, measured, report, group, others, everyone)
+        bundles.clear()
 
 
-def compare_persona(report, bundles):
-    persona, wanted = persona_bundles()
-    if persona is None:
-        return
-    linked = set(bundles) - {"local", "linked elsewhere"}
-    extra = sorted(linked - set(wanted))
-    missing = sorted(set(wanted) - linked)
-    skills_add = AGENTS_DIR / "scripts" / "skills-add"
-    if extra:
-        count = sum(len(bundles[b]) for b in extra)
-        chars = sum(s for b in extra for _, s in bundles[b])
-        report.trim(
-            f"{plural(len(extra), 'skill bundle')} beyond the {persona} persona cost {tokens(chars)} a session",
-            f"skill-drop {' '.join(extra)}",
-            run([str(skills_add), "-D", *extra]) if skills_add.is_file() else None,
-            f"every session drops {plural(count, 'skill')} ({tokens(chars)}); skills-add brings a bundle back",
-            verb="unlink")
-    if missing:
-        report.fix(f"{plural(len(missing), 'skill bundle')} the {persona} persona asks for are not linked",
-                   f"skills-add {' '.join(missing)}",
-                   run([str(skills_add), *missing]) if skills_add.is_file() else None, verb="link")
-    if not extra and not missing:
-        report.ok(f"linked bundles match the {persona} persona")
+def add_bundle(inv, bundle, skills, usage, measured, report, group, others, everyone):
+    """A bundle row with a row per skill beneath it; a dormant bundle drops whole, so its skills start on keep."""
+    children = [skill_row(name, "skill", chars, usage, measured, report, {f"skill:{key_name(name)}"}, others)
+                for name, chars in skills]
+    last = max((c.last for c in children if c.last), default=None)
+    row = Row(f"bundle {bundle}: {plural(len(children), 'skill')}", len(children),
+              sum(c.tokens or 0 for c in children), last, sum(c.uses for c in children),
+              f"skills-add {bundle} turns it back on")
+    row.offer("off", f"skill-drop {bundle}: unlinks it for {everyone}", drop_bundle(bundle))
+    row.group = group
+    if dormant(last):
+        row.start_off()
+        for child in children:
+            child.default = 0
+    for child in children:
+        child.parent = row
+        child.group = group
+    row.children = children
+    inv.slash += len(children)
+    inv.rows.append(row)
 
 
-# Plugins ------------------------------------------------------------------
-
-
-def agent_files(folder):
-    """(name, description size) for each agent definition in a folder."""
-    folder = Path(folder)
-    if not folder.is_dir():
-        return []
-    return [(p.stem, len(frontmatter_text(p))) for p in sorted(folder.glob("*.md")) if p.is_file()]
-
-
-def check_agents(report, apps, plugins):
-    """Agents under ~/.claude/agents and in plugins; Claude Code's own are not on disk."""
-    if "claude" not in apps:
-        return
-    report.section("Agents (each name and description is in every session)")
-    folder = HOME / ".claude" / "agents"
-    own = agent_files(folder)
-    if own:
-        real = folder.resolve()
-        where = f" -> {tilde(real)}" if real != folder.absolute() else ""
-        report.ok(f"{tilde(folder)}{where}: {plural(len(own), 'agent')}, {tokens(sum(s for _, s in own))}")
-        report.line(", ".join(n for n, _ in own), 6)
-    from_plugins = [(name, agent_files(Path(root) / "agents")) for name, _s, root, _k in plugins]
-    from_plugins = [(name, agents) for name, agents in from_plugins if agents]
-    for name, agents in from_plugins:
-        report.ok(f"plugin {name}: {plural(len(agents), 'agent')}, {tokens(sum(s for _, s in agents))}")
-    if not own and not from_plugins:
-        report.note("none on disk; Claude Code's built-in agents are not counted")
-    report.stats["agents"] = len(own) + sum(len(a) for _, a in from_plugins)
-    report.stats["agent_chars"] = sum(s for _, s in own) + sum(s for _, a in from_plugins for _, s in a)
-
-
-def plugin_contents(root):
-    """What a plugin adds to every session: skill count and size, MCP servers, agents."""
-    root = Path(root)
-    skill_files = [f for p in ("SKILL.md", "skills/*/SKILL.md", "commands/*.md") for f in root.glob(p)]
-    servers = (read_json(root / ".mcp.json") or {}).get("mcpServers", {})
-    return {
-        "skills": len(skill_files),
-        "skill_chars": sum(len(frontmatter_text(f)) for f in skill_files),
-        "servers": servers if isinstance(servers, dict) else {},
-        "agents": len(agent_files(root / "agents")),
-    }
-
-
-def plugin_usage():
-    """Plugin name -> (uses, days since last use, startups since) from Claude Code's own record,
-    or None when it keeps none."""
-    state = read_json(HOME / ".claude.json") or {}
-    usage = state.get("pluginUsage")
-    if not isinstance(usage, dict):
-        return None
-    startups = state.get("numStartups") or 0
-    found = {}
-    for key, record in usage.items():
-        if not isinstance(record, dict):
+def app_skills(inv, app, real):
+    """Skills only Codex or Cursor loads: no date yet, and off moves the folder to the archive."""
+    for entry in sorted(e for e in real.iterdir() if not e.name.startswith(".")):
+        skill_md = entry / "SKILL.md"
+        if entry.is_symlink() or not skill_md.is_file():
             continue
-        name = key.split("@")[0]
-        uses = record.get("usageCount") or 0
-        last = record.get("lastUsedAt")
-        days = int((time.time() - last / 1000) // 86400) if isinstance(last, (int, float)) and last else None
-        since = startups - (record.get("lastUsedNumStartups") or 0)
-        if name not in found or uses > found[name][0]:
-            found[name] = (uses, days, since)
-    return found
-
-
-def describe_usage(usage):
-    if usage is None:
-        return "use not recorded"
-    uses, days, since = usage
-    if not uses:
-        return "no recorded use"
-    when = f"{days} days ago" if days else "today"
-    return f"used {plural(uses, 'time')}, last {when}"
-
-
-def plugin_effect(info, keep=None):
-    """What every session saves once the plugin is off, how to turn it back on, and how to keep it."""
-    parts = [f"{plural(info['skills'], 'skill')} ({tokens(info['skill_chars'])})"]
-    if info["servers"]:
-        parts.append(plural(len(info["servers"]), "MCP server"))
-    if info["agents"]:
-        parts.append(plural(info["agents"], "agent"))
-    effect = f"saves {' + '.join(parts)} per session; claude plugin enable {info['key']} turns it back on"
-    return f"{effect}; to keep it, {keep}" if keep else effect
-
-
-def uninstall_alt(info):
-    """The list's second choice for a plugin installed here: uninstall it, not just turn it off."""
-    if info["source"] != "installed":
-        return ()
-    return [("uninstall", f"claude plugin uninstall {info['key']}", uninstall_plugin(info["key"], info["root"]))]
-
-
-def disable_plugin(key):
-    """Turn a plugin off the way `claude plugin disable` does: false in enabledPlugins."""
-    def apply(backup_dir):
-        if shutil.which("claude"):
-            subprocess.run(["claude", "plugin", "disable", key], check=True)
-            return
-        settings = HOME / ".claude" / "settings.json"
-        if not settings.exists():
-            settings.write_text("{}\n", encoding="utf-8")
-        edit_json(settings, lambda data: data.setdefault("enabledPlugins", {}).__setitem__(key, False))(backup_dir)
-    return apply
-
-
-def plugin_name(root):
-    meta = read_json(Path(root) / ".claude-plugin" / "plugin.json") or {}
-    return meta.get("name") or Path(root).name
-
-
-def claude_plugins():
-    """(name, source, root, plugin id) for every installed and synced Claude Code plugin,
-    as two lists: those on, and those turned off in enabledPlugins (claude plugin disable)."""
-    found = []
-    installed = read_json(HOME / ".claude" / "plugins" / "installed_plugins.json") or {}
-    for key, entries in (installed.get("plugins") or {}).items():
-        entries = [e for e in (entries if isinstance(entries, list) else [entries])
-                   if isinstance(e, dict) and e.get("installPath") and Path(e["installPath"]).is_dir()]
-        if entries:
-            found.append((key.split("@")[0], "installed", Path(entries[-1]["installPath"]), key))
-    for root in sorted((HOME / ".claude" / "plugins" / "synced").glob("*/*/.claude-plugin")):
-        name = plugin_name(root.parent)
-        found.append((name, "claude.ai", root.parent, f"{name}@synced"))
-    enabled = (read_json(HOME / ".claude" / "settings.json") or {}).get("enabledPlugins") or {}
-    off = [p for p in found if enabled.get(p[3]) is False]
-    return [p for p in found if p not in off], off
-
-
-def uninstall_plugin(key, root):
-    """Remove a locally installed plugin: its entry and its cached copy."""
-    index = HOME / ".claude" / "plugins" / "installed_plugins.json"
-    cache = HOME / ".claude" / "plugins" / "cache"
-
-    def apply(backup_dir):
-        if shutil.which("claude"):
-            subprocess.run(["claude", "plugin", "uninstall", key], check=True)
-            return
-        edit_json(index, lambda data: data.get("plugins", {}).pop(key, None))(backup_dir)
-        folder = Path(root)
-        while folder.parent != cache and cache in folder.parents:
-            folder = folder.parent
-        if cache in folder.parents:
-            shutil.move(str(folder), str(backup_dir / f"plugin-cache-{folder.name}"))
-    return apply
-
-
-def check_plugins(report, plugins, off):
-    report.section("Claude Code plugins")
-    report.stats["plugins"] = len(plugins)
-    report.stats["plugins_off"] = len(off)
-    for name, source, _root, key in off:
-        report.note(f"{name} ({source}): turned off; claude plugin enable {key} turns it back on")
-    if not plugins:
-        report.note("none on" if off else "none installed")
-        return
-    usage = plugin_usage()
-    sources = {}
-    report.plugins = {}
-    for name, source, root, key in plugins:
-        contents = plugin_contents(root)
-        used = (usage or {}).get(name) if usage is not None else None
-        report.plugins[name] = {"source": source, "key": key, "root": root, "usage": used, **contents}
-        report.stats["plugin_skills"] = report.stats.get("plugin_skills", 0) + contents["skills"]
-        report.stats["plugin_skill_chars"] = report.stats.get("plugin_skill_chars", 0) + contents["skill_chars"]
-        extra = f", {plural(len(contents['servers']), 'MCP server')}" if contents["servers"] else ""
-        extra += f", {plural(contents['agents'], 'agent')}" if contents["agents"] else ""
-        report.ok(f"{name} ({source}): {plural(contents['skills'], 'skill')} ({tokens(contents['skill_chars'])})"
-                  f"{extra}; {describe_usage(used if usage is not None else None)}")
-        sources.setdefault(name, {})[source] = (key, root)
-    for name, found in sorted(sources.items()):
-        if "installed" in found and "claude.ai" in found:
-            key, root = found["installed"]
-            contents = plugin_contents(root)
-            report.trim(f"Plugin {name} loads twice: installed here and synced from claude.ai",
-                        f"claude plugin uninstall {key}", uninstall_plugin(key, root),
-                        f"every session drops the duplicate's {plural(contents['skills'], 'skill')} "
-                        f"({tokens(contents['skill_chars'])}); the claude.ai copy stays", verb="uninstall")
-
-
-def unused_plugins(report, flagged):
-    """Plugins Claude Code records no use of, beyond those already flagged."""
-    for name, info in sorted(report.plugins.items()):
-        if name in flagged or info["usage"] is None or info["usage"][0]:
-            continue
-        report.trim(f"Plugin {name} has no recorded use", f"claude plugin disable {info['key']}",
-                    disable_plugin(info["key"]), plugin_effect(info), "disable", uninstall_alt(info))
-
-
-# MCP servers --------------------------------------------------------------
+        name, text = frontmatter(skill_md)
+        inv.est_chars += len(text)
+        row = Row(f"skill {name or entry.name}", 1, tokens_of(len(text)), dated=False,
+                  note=f"ai-doctor --reset skills moves it back into {tilde(real)}")
+        row.group = app
+        row.offer("off", f"move {tilde(entry)} to ai-doctor's archive", archive_skill(entry, app))
+        inv.rows.append(row)
 
 
 def toml_servers(path):
@@ -592,36 +845,6 @@ def toml_servers(path):
         return {}
 
 
-def collect_servers(apps, cwd, plugins):
-    """(app, file, scope, name, config) for every MCP server the apps would start."""
-    servers = []
-    if "claude" in apps:
-        state_file = HOME / ".claude.json"
-        state = read_json(state_file) or {}
-        for name, conf in (state.get("mcpServers") or {}).items():
-            servers.append(("claude", state_file, "user", name, conf))
-        project = (state.get("projects") or {}).get(str(cwd)) or {}
-        for name, conf in (project.get("mcpServers") or {}).items():
-            servers.append(("claude", state_file, "local", name, conf))
-        for name, conf in ((read_json(cwd / ".mcp.json") or {}).get("mcpServers") or {}).items():
-            servers.append(("claude", cwd / ".mcp.json", "project", name, conf))
-        for plugin, _source, root, _key in plugins:
-            for name, conf in plugin_contents(root)["servers"].items():
-                servers.append(("claude", root / ".mcp.json", f"plugin {plugin}", f"plugin:{plugin}:{name}", conf))
-    if "codex" in apps:
-        config = HOME / ".codex" / "config.toml"
-        codex = toml_servers(config)
-        if codex is None:
-            servers.append(("codex", config, "user", None, None))
-        for name, conf in (codex or {}).items():
-            servers.append(("codex", config, "user", name, conf))
-    if "cursor" in apps:
-        for path in (HOME / ".cursor" / "mcp.json", cwd / ".cursor" / "mcp.json"):
-            for name, conf in ((read_json(path) or {}).get("mcpServers") or {}).items():
-                servers.append(("cursor", path, "user", name, conf))
-    return servers
-
-
 def literal_secrets(conf):
     """Names of headers and env values that hold a secret written out, not a variable."""
     found = []
@@ -633,7 +856,7 @@ def literal_secrets(conf):
             if not isinstance(value, str) or not value.strip() or "$" in value:
                 continue
             if SECRET_KEY.search(key) or SECRET_VALUE.search(value):
-                found.append((field, key))
+                found.append(key)
     return found
 
 
@@ -642,7 +865,7 @@ def server_problem(conf):
     command = conf.get("command")
     if isinstance(command, str) and command:
         if re.match(r"https?://", command):
-            return "url"
+            return "its URL is in \"command\""
         if "/" in command or command.startswith("~"):
             path = Path(os.path.expanduser(command))
             if not (path.is_file() and os.access(path, os.X_OK)):
@@ -658,197 +881,206 @@ def server_problem(conf):
     return None
 
 
-def json_servers_path(app, scope, cwd):
-    if app == "claude" and scope == "local":
-        return ["projects", str(cwd), "mcpServers"]
-    return ["mcpServers"]
-
-
-def pop_server(keys, name):
-    def change(data):
-        for key in keys:
-            data = data.get(key, {})
-        data.pop(name, None)
-    return change
-
-
-def remove_server(app, file, scope, name, cwd):
-    """(todo, apply) that removes a server from its app's config."""
-    if app == "claude":
-        todo = f"claude mcp remove {name} -s {scope}"
-        if shutil.which("claude"):
-            return todo, run(["claude", "mcp", "remove", name, "-s", scope])
-        return todo, edit_json(file, pop_server(json_servers_path(app, scope, cwd), name))
-    if app == "codex":
-        if shutil.which("codex"):
-            return f"codex mcp remove {name}", run(["codex", "mcp", "remove", name])
-        return f"delete [mcp_servers.{name}] from {tilde(file)}", drop_toml_table(file, name)
-    return f"delete \"{name}\" from {tilde(file)}", edit_json(file, pop_server(["mcpServers"], name))
-
-
-def command_to_url(file, name):
-    def change(data):
-        conf = data["mcpServers"][name]
-        conf["url"] = conf.pop("command")
-        conf.pop("args", None)
-    return edit_json(file, change)
-
-
-def secret_todo(app, file, field, key):
-    var = "MCP_TOKEN" if key.lower() == "authorization" else re.sub(r"[^A-Z0-9]", "_", key.upper())
-    ref = {"claude": f"${{{var}}}", "cursor": f"${{env:{var}}}"}.get(app)
-    if ref is None:
-        return f"rotate it, then name an environment variable instead (bearer_token_env_var = \"{var}\")"
-    prefix = "Bearer " if key.lower() == "authorization" else ""
-    return f"rotate it, set {field}.{key} to \"{prefix}{ref}\", and export {var} from your shell startup"
-
-
-def check_servers(report, apps, cwd, plugins):
-    report.section("MCP servers (each one's tool names are in every session)")
-    needs_auth = read_json(HOME / ".claude" / "mcp-needs-auth-cache.json") or {}
-    waiting = {}
-    seen = set()
-    states = report.stats.setdefault("server_states", {})
-
-    def count(state):
-        states[state] = states.get(state, 0) + 1
-
-    for app, file, scope, name, conf in collect_servers(apps, cwd, plugins):
-        if name is None:
-            report.note(f"{app}: {tilde(file)} needs Python 3.11 to read; skipped")
+def add_servers(inv, apps, cwd, usage, needs_auth, ctx):
+    servers = []
+    if "claude" in apps:
+        state_file = HOME / ".claude.json"
+        state = read_json(state_file) or {}
+        for name, conf in (state.get("mcpServers") or {}).items():
+            servers.append(("claude", state_file, "user", name, conf))
+        project = (state.get("projects") or {}).get(str(cwd)) or {}
+        for name, conf in (project.get("mcpServers") or {}).items():
+            servers.append(("claude", state_file, "local", name, conf))
+    if "codex" in apps:
+        config = HOME / ".codex" / "config.toml"
+        codex = toml_servers(config)
+        if codex is None:
+            inv.health.append(f"{tilde(config)} needs Python 3.11 to read")
+        for name, conf in (codex or {}).items():
+            servers.append(("codex", config, "user", name, conf))
+    if "cursor" in apps:
+        path = HOME / ".cursor" / "mcp.json"
+        for name, conf in ((read_json(path) or {}).get("mcpServers") or {}).items():
+            servers.append(("cursor", path, "user", name, conf))
+    for app, file, scope, name, conf in servers:
+        if not isinstance(conf, dict):
             continue
-        if (app, name) in seen or not isinstance(conf, dict):
-            continue
-        seen.add((app, name))
-        report.stats["servers"] = report.stats.get("servers", 0) + 1
-        label = f"{app}: {name}"
+        for key in literal_secrets(conf):
+            inv.health.append(f"{app.capitalize()}'s {name} MCP server has a token written into {tilde(file)} ({key})")
         if conf.get("enabled") is False or conf.get("disabled") is True:
-            count("disabled")
-            report.note(f"{label}: turned off")
+            inv.off.append((f"{app} MCP server {name}", f"turned off in {tilde(file)}"))
             continue
         if conf.get("type") in ("http", "sse") and not conf.get("url") and not conf.get("command"):
-            count("ready")
-            report.note(f"{label}: a claude.ai connector fills in its url")
-            continue
+            continue  # a claude.ai connector placeholder, filled in by the app
         problem = server_problem(conf)
-        plugin = scope[7:] if scope.startswith("plugin ") else None
-        if problem:
-            count("can't start")
-        elif app == "claude" and name in needs_auth:
-            count("wait for a sign-in")
+        dated = app == "claude"
+        uses, last = usage.lookup({f"mcp:{key_name(name)}"}) if dated else (0, None)
+        state = f": can't start, {problem}" if problem else (": waits for a sign-in" if app == "claude" and name in needs_auth else "")
+        how = "claude mcp add" if app == "claude" else "ai-doctor --reset servers"
+        row = Row(f"MCP server {name}{state}", 0, None, last, uses,
+                  f"its tools load only when used; ai-doctor --reset servers puts it back ({how})", dated)
+        if app == "claude" and ctx.claude:
+            verb = f"claude mcp remove {name} -s {scope}"
+        elif app == "codex" and ctx.codex:
+            verb = f"codex mcp remove {name}"
+        elif app == "codex":
+            verb = f"delete [mcp_servers.{name}] from {tilde(file)}"
         else:
-            count("ready")
-        if problem and plugin:
-            report.note(f"{label}: {problem}; the {plugin} plugin ships it that way")
-        elif problem == "url":
-            report.fix(f"{app.capitalize()}'s {name} MCP server can't start: its URL is in \"command\"",
-                       f"in {tilde(file)}, rename \"command\" to \"url\"",
-                       command_to_url(file, name) if app == "cursor" or file.suffix == ".json" else None)
-        elif problem:
-            todo, apply = remove_server(app, file, scope, name, cwd)
-            report.fix(f"{app.capitalize()}'s {name} MCP server can't start: {problem}", todo, apply, verb="remove")
-        elif app == "claude" and name in needs_auth and plugin:
-            waiting.setdefault(plugin, []).append(name)
-        elif app == "claude" and name in needs_auth:
-            todo, apply = remove_server(app, file, scope, name, cwd)
-            report.note(f"{label} ({scope}): waiting for a sign-in")
-            report.trim(f"Claude's {name} MCP server ({scope}) waits for a sign-in", todo, apply,
-                        "its tool names load in every session until it is signed in or removed; "
-                        "to keep it, sign in with /mcp in a Claude Code session", "remove")
-        else:
-            report.ok(f"{label} ({scope}): {'remote' if conf.get('url') or conf.get('serverUrl') else 'local'}")
-        for field, key in literal_secrets(conf):
-            title = f"{app.capitalize()}'s {name} MCP server has a token written into {tilde(file)}"
-            if others_can_read(file):
-                report.fix(title + ", and other users can read the file", f"chmod 600 {tilde(file)}",
-                           lambda _b, file=file: os.chmod(file, 0o600))
-            report.fix(title, secret_todo(app, tilde(file), field, key))
-    for where, names in waiting.items():
-        short = ", ".join(n.rsplit(":", 1)[-1] for n in names)
-        report.note(f"waiting for sign-in in plugin {where}: {short}")
-        info = report.plugins.get(where)
-        if info is None:
-            report.trim(f"Plugin {where}: {short} {waits(len(names))} for a sign-in",
-                        "sign in with /mcp, or turn the plugin off in Claude's settings",
-                        effect="each one's tool names stay in every session until then")
+            verb = f"delete \"{name}\" from {tilde(file)}"
+        row.offer("off", verb, remove_server(app, file, scope, name, conf, cwd))
+        row.broken = bool(problem)
+        row.group = app
+        if problem or (dated and dormant(last)):
+            row.start_off()
+        inv.rows.append(row)
+
+
+def add_resets(inv, entries):
+    for category in CATEGORIES:
+        mine = [e for e in entries if e.get("category") == category]
+        if not mine:
             continue
-        total = len(info["servers"])
-        count = f"{len(names)} of its {total} MCP servers" if total > 1 else "its MCP server"
-        report.trim(f"Plugin {where}: {count} {waits(len(names))} for a sign-in ({short}); "
-                    f"{describe_usage(info['usage'])}",
-                    f"claude plugin disable {info['key']}", disable_plugin(info["key"]),
-                    plugin_effect(info, f"sign in to {'each' if len(names) > 1 else 'it'} with /mcp "
-                                        "in a Claude Code session"),
-                    "disable", uninstall_alt(info))
-    unused_plugins(report, set(waiting))
+        row = Row(f"reset {category}: undo {plural(len(mine), 'change')} by ai-doctor",
+                  note=", ".join(e.get("item", "?") for e in reversed(mine)), dated=False)
+        row.offer("reset", f"ai-doctor --reset {category}", category)
+        row.reset = category
+        row.group = "undo"
+        inv.rows.append(row)
 
 
-# Settings -----------------------------------------------------------------
+def ordered(rows):
+    """Rows to turn off first, biggest first; kept rows after; resets last. Children follow their parent."""
+    def key(row):
+        return (GROUPS.index(row.group), row.default == 0, -row.slash, -(row.tokens or 0), row.title)
+    flat = []
+    for row in sorted(rows, key=key):
+        flat.append(row)
+        flat += sorted(row.children, key=key)
+    return flat
 
 
-def check_settings(report):
-    report.section("Claude Code settings")
-    settings = read_json(HOME / ".claude" / "settings.json") or {}
-    env = settings.get("env") or {}
-    for flag in sorted(k for k, v in env.items() if "EXPERIMENTAL" in k and str(v) not in ("", "0", "false")):
-        report.note(f"{flag} is on in ~/.claude/settings.json")
-    if settings.get("outputStyle"):
-        report.note(f"output style: {settings['outputStyle']}")
-    if settings.get("agent"):
-        report.note(f"every session starts as the {settings['agent']} agent")
+# Instructions and agents, for the summary and -v ---------------------------
 
 
-# Main ---------------------------------------------------------------------
+def memory_dir(cwd):
+    return HOME / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(cwd)) / "memory"
 
 
-def installed_apps():
-    return [app for app in APPS if (HOME / f".{app}").is_dir()]
+def instructions(inv, apps, cwd):
+    files = []
+    if "claude" in apps:
+        files += [HOME / ".claude" / "CLAUDE.md", memory_dir(cwd) / "MEMORY.md"]
+    if "codex" in apps:
+        files.append(HOME / ".codex" / "AGENTS.md")
+    files += [cwd / name for name in ("CLAUDE.md", "AGENTS.md", "CLAUDE.local.md")]
+    seen, total = set(), 0
+    for path in files:
+        if path.is_file() and path.resolve() not in seen:
+            seen.add(path.resolve())
+            size = len(read_text(path) or "")
+            total += size
+            inv.verbose.append(("Instructions", f"{tilde(path)}: ~{tokens_of(size):,} tokens"))
+    inv.est_chars += total
+    if total > 40_000:
+        inv.health.append(f"instruction files are ~{tokens_of(total):,} tokens; shorten the largest (-v lists them)")
 
 
-def summary(report, apps):
-    """One line: where every session's load comes from and what it costs."""
-    stats = report.stats
+def agents(inv, apps):
+    if "claude" not in apps:
+        return
+    folder = HOME / ".claude" / "agents"
+    found = sorted(folder.glob("*.md")) if folder.is_dir() else []
+    chars = sum(len(frontmatter(p)[1]) for p in found)
+    inv.est_chars += chars
+    if found:
+        inv.verbose.append(("Agents", f"{tilde(folder)}: {plural(len(found), 'agent')}, "
+                                      f"~{tokens_of(chars):,} tokens: {', '.join(p.stem for p in found)}"))
+
+
+# Output -------------------------------------------------------------------
+
+
+class Paint:
+    def __init__(self, color):
+        self.color = color
+
+    def __call__(self, code, text):
+        return f"\033[{code}m{text}\033[0m" if self.color else text
+
+
+def summary(inv, apps, report):
     parts = [", ".join(apps)]
-    if "skills" in stats:
-        skills = f"{stats['skills']} skills"
-        if stats.get("bundles"):
-            local = stats["skills"] - stats["bundle_skills"]
-            skills = f"{stats['bundle_skills']} skills from {plural(stats['bundles'], 'bundle')}"
-            skills += f" + {local} local" if local else ""
-        off = f" ({stats['plugins_off']} off)" if stats.get("plugins_off") else ""
-        if stats.get("plugin_skills"):
-            skills += f" + {stats['plugin_skills']} from {plural(stats['plugins'], 'plugin')}{off}"
-        elif "plugins" in stats:
-            skills += f" · {plural(stats['plugins'], 'plugin')}{off}"
-        parts.append(skills)
-    elif "plugins" in stats:
-        parts.append(plural(stats["plugins"], "plugin") + (f" ({stats['plugins_off']} off)" if stats.get("plugins_off") else ""))
-    if stats.get("agents"):
-        parts.append(plural(stats["agents"], "agent"))
-    if "servers" in stats:
-        states = ", ".join(f"{n} {state}" for state, n in stats.get("server_states", {}).items()
-                           if state != "ready" and n)
-        parts.append(plural(stats["servers"], "MCP server") + (f" ({states})" if states else ""))
-    load = sum(stats.get(k, 0) for k in ("instruction_chars", "skill_chars", "plugin_skill_chars", "agent_chars"))
-    if load:
-        parts.append(f"{tokens(load)} before you type")
+    if report:
+        cats = report["categories"]
+        loaded = sum(v for k, v in cats.items() if "deferred" not in k.lower()
+                     and k not in ("Messages", "Free space", "Autocompact buffer"))
+        builtin = sum(c for _, source, c in report["skills"] if source == "Built-in")
+        defaults = cats.get("System prompt", 0) + cats.get("System tools", 0) + builtin
+        yours = max(loaded - defaults, 0)
+        share = (lambda n: f"{round(100 * n / loaded)}%") if loaded else (lambda n: "-")
+        parts.append(f"before you type ~{short_tokens(loaded)} tokens: yours ~{short_tokens(yours)} ({share(yours)}), "
+                     f"Claude's defaults ~{short_tokens(defaults)} ({share(defaults)})")
+    else:
+        parts.append(f"~{short_tokens(tokens_of(inv.est_chars))} tokens of yours before you type "
+                     "(estimated; no claude command to measure Claude's defaults)")
+    parts.append(f"/ menu: {inv.slash} of yours")
+    if inv.off:
+        parts.append(f"{len(inv.off)} already off")
     return " · ".join(parts)
 
 
-def print_findings(report):
-    findings = sorted(report.findings, key=lambda f: f.kind != "fix")
+def row_line(paint, number, row, verb):
+    indent = "  " if row.parent else ""
+    label = paint("33", f"{verb:<5}") if verb != "keep" else paint("2", f"{verb:<5}")
+    return (f"{number:>3}  {label} {row.slash or '-':>5}  {short_tokens(row.tokens):>6}  "
+            f"{row.when():<13} {indent}{row.title}")
+
+
+def header_line(paint):
+    return paint("2", f"{'':>3}  {'':<5} {'/menu':>5}  {'tokens':>6}  {'last used':<13} source")
+
+
+def layout(rows, indices, headings):
+    """("head", text) before each tool's first row, then ("row", index) for each row."""
+    lines, group = [], None
+    for r in indices:
+        if rows[r].group != group:
+            group = rows[r].group
+            lines.append(("head", headings.get(group, group)))
+        lines.append(("row", r))
+    return lines
+
+
+def print_rows(paint, rows, verbose, headings):
+    wanted = {id(r) for r in rows if verbose or r.default or hasattr(r, "reset")}
+    wanted |= {id(r.parent) for r in rows if id(r) in wanted and r.parent}
+    shown = [i for i, r in enumerate(rows) if id(r) in wanted]
+    kept = len(rows) - len(shown)
     print()
-    if not findings:
-        print(f"  {report.paint('32', 'Nothing to do.')}")
-        return findings
-    for number, finding in enumerate(findings, 1):
-        mark = report.paint("31", "fix ") if finding.kind == "fix" else report.paint("33", "trim")
-        auto = report.paint("2", "  [auto]") if finding.apply else ""
-        print(f"  {number:>2}  {mark}  {finding.title}")
-        print(f"            {report.paint('36', finding.todo)}{auto}")
-        if finding.effect:
-            print(f"            {report.paint('2', finding.effect)}")
-    return findings
+    if not shown:
+        print(f"  {paint('32', 'Nothing to turn off.')}" + (f" {kept} sources in use; -v lists them." if kept else ""))
+        return
+    print(header_line(paint))
+    for kind, value in layout(rows, shown, headings):
+        if kind == "head":
+            print(paint("1", f"\n  {value}"))
+        else:
+            print(row_line(paint, value + 1, rows[value], rows[value].verbs[rows[value].default]))
+    if kept:
+        print(paint("2", f"\n  {kept} more in use, set to keep; -v lists them."))
+
+
+def print_verbose(paint, inv):
+    sections = {}
+    for section, line in inv.verbose:
+        sections.setdefault(section, []).append(line)
+    if inv.off:
+        sections["Already off"] = [f"{what}: {how}" for what, how in inv.off]
+    for section, lines in sections.items():
+        print()
+        print(paint("1", section))
+        for line in lines:
+            print(f"  {line}")
 
 
 def stdin_closed():
@@ -860,29 +1092,23 @@ def stdin_closed():
 
 def tally(rows, picked):
     counts = {}
-    for (_, finding), choice in zip(rows, picked):
+    for row, choice in zip(rows, picked):
         if choice:
-            verb = finding.choices[choice][0]
-            counts[verb] = counts.get(verb, 0) + 1
+            counts[row.verbs[choice]] = counts.get(row.verbs[choice], 0) + 1
     return ", ".join(f"{verb} {n}" for verb, n in counts.items()) or "nothing changes"
 
 
-def row_label(finding, choice):
-    return finding.choices[choice][0] if len(finding.choices) > 1 else "hand"
-
-
-def pick_on_terminal(report, rows, picked):
-    """Every item on the alternate screen, df-doctor's way: the arrows choose a
-    row, space or left and right step through what the row can do, a letter
-    picks it (s skip, d disable, r remove, ...), Enter applies every row, q or
-    Esc cancels. Returns each row's choice, or None when cancelled."""
+def pick_on_terminal(paint, rows, picked, headings):
+    """Every row on the alternate screen, df-doctor's way: the arrows choose a row,
+    space or left and right step through what it can do, a letter picks it (k
+    keep, o off, m menu, r reset), Enter applies every row, q or Esc cancels."""
     fd = sys.stdin.fileno()
     saved = termios.tcgetattr(fd)
     out = sys.stderr
     picked = list(picked)
     cursor = top = 0
     note = ""
-    head = "space or ←→ next action  letter picks it: s skip, d disable, r remove, u uninstall, f fix ...  hand: by hand"
+    head = "space or ←→ next action  letter picks it: k keep, o off, m menu only, r reset"
     keys = "↑↓ PgUp PgDn Home End choose a row  enter apply all  q cancel"
 
     def key():
@@ -892,34 +1118,40 @@ def pick_on_terminal(report, rows, picked):
         return bool(select.select([fd], [], [], 0.1)[0])
 
     def step(by):
-        count = len(rows[cursor][1].choices)
-        picked[cursor] = (picked[cursor] + by) % count
+        picked[cursor] = (picked[cursor] + by) % len(rows[cursor].choices)
+
+    lines = layout(rows, range(len(rows)), headings)
+    line_of = {value: n for n, (kind, value) in enumerate(lines) if kind == "row"}
 
     try:
         tty.setcbreak(fd, termios.TCSANOW)
         out.write("\033[?1049h\033[?25l")
         while True:
-            cols, lines = shutil.get_terminal_size()
+            cols, screen_lines = shutil.get_terminal_size()
             cols = cols if cols >= 20 else 80
-            # Three lines above the rows and four below.
-            height = max(lines - 8, 3)
-            top = min(top, cursor)
-            top = max(top, cursor - height + 1)
-            last = min(top + height, len(rows))
-            screen = ["\033[H\033[2J" + report.paint("1", "Choose what to do with each item") + f" ({len(rows)})",
-                      head[:cols], report.paint("2", keys[:cols])]
-            for r in range(top, last):
-                number, finding = rows[r]
-                text = f"{row_label(finding, picked[r]):<9} {number:>2}  {finding.title}"[:cols - 2]
-                screen.append(report.paint("1", f"> {text}") if r == cursor else f"  {text}")
+            # Four lines above the rows and four below.
+            height = max(screen_lines - 9, 3)
+            here = line_of[cursor]
+            # Keep the cursor's heading in view when it sits just above.
+            top = min(top, here - 1 if here and lines[here - 1][0] == "head" else here)
+            top = max(top, here - height + 1, 0)
+            last = min(top + height, len(lines))
+            screen = ["\033[H\033[2J" + paint("1", "Keep or turn off each source") + f" ({len(rows)})",
+                      head[:cols], paint("2", keys[:cols]), header_line(paint)[:cols]]
+            for kind, value in lines[top:last]:
+                if kind == "head":
+                    screen.append(paint("1", f"  {value}"[:cols]))
+                    continue
+                text = row_line(Paint(False), value + 1, rows[value], rows[value].verbs[picked[value]])[:cols - 2]
+                screen.append(paint("1", f">{text}") if value == cursor else f" {text}")
             screen += [""] * (height - (last - top))
-            foot = report.paint("2", f"{top + 1}-{last} of {len(rows)}") + "  " if len(rows) > height else ""
-            foot += report.paint("33", note) if note else f"Enter: {tally(rows, picked)}"
-            finding = rows[cursor][1]
-            offers = "   ".join(f"{verb[0]} {verb}: {todo}" for verb, todo, _ in finding.choices[1:])
-            screen += [foot, report.paint("1", f"{finding.kind}: {finding.title}"[:cols]),
-                       report.paint("36", (offers or f"by hand: {finding.todo}")[:cols]),
-                       report.paint("2", (finding.effect or "")[:cols])]
+            shown = [v for k, v in lines[top:last] if k == "row"]
+            foot = paint("2", f"{shown[0] + 1}-{shown[-1] + 1} of {len(rows)}") + "  " \
+                if len(lines) > height and shown else ""
+            foot += paint("33", note) if note else f"Enter: {tally(rows, picked)}"
+            row = rows[cursor]
+            offers = "   ".join(f"{verb[0]} {verb}: {todo}" for verb, todo, _ in row.choices[1:])
+            screen += [foot, paint("1", row.title[:cols]), paint("36", offers[:cols]), paint("2", row.note[:cols])]
             out.write("\n".join(screen))
             out.flush()
             note = ""
@@ -939,7 +1171,7 @@ def pick_on_terminal(report, rows, picked):
                 elif rest in (b"[5", b"[6"):
                     if waiting():
                         key()
-                    jump = -height if rest == b"[5" else height
+                    jump = -(height - 2) if rest == b"[5" else height - 2
                     cursor = min(max(cursor + jump, 0), len(rows) - 1)
                 else:
                     return None
@@ -950,12 +1182,12 @@ def pick_on_terminal(report, rows, picked):
             elif pressed in (b"q", b""):
                 return None
             else:
-                letters = [verb[0] for verb in finding.actions]
+                letters = [verb[0] for verb in row.verbs]
                 letter = pressed.decode(errors="replace")
                 if letter in letters:
                     picked[cursor] = letters.index(letter)
                 else:
-                    note = f"this item offers {' / '.join(finding.actions)}"
+                    note = f"this row offers {' / '.join(row.verbs)}"
     except KeyboardInterrupt:
         raise SystemExit(130)
     finally:
@@ -964,16 +1196,19 @@ def pick_on_terminal(report, rows, picked):
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
 
 
-def pick_by_line(rows, picked):
-    """Every item without a terminal (or with DOTFILES_PROMPT=read): the rows,
-    then one line of actions and item numbers, where fix means a row's first
-    action. Returns None on a line it cannot use, changing no row."""
-    numbers = [number for number, _ in rows]
-    print("Choose what to do with each item:", file=sys.stderr)
-    for (number, finding), choice in zip(rows, picked):
-        offers = " / ".join(finding.actions) if len(finding.choices) > 1 else "by hand"
-        print(f"  {number:>2}) {row_label(finding, choice):<9} {finding.title}  [{offers}]", file=sys.stderr)
-    print('Actions then item numbers, like "fix 2 5-7 skip 3" or "disable 4"; none skips everything; '
+def pick_by_line(paint, rows, picked, headings):
+    """The rows without a terminal (or with DOTFILES_PROMPT=read), then one line of
+    actions and row numbers. Returns None on a line it cannot use, changing nothing."""
+    print("Keep or turn off each source:", file=sys.stderr)
+    print(header_line(paint), file=sys.stderr)
+    for kind, value in layout(rows, range(len(rows)), headings):
+        if kind == "head":
+            print(paint("1", f"  {value}"), file=sys.stderr)
+            continue
+        row = rows[value]
+        offers = f"  [{' / '.join(row.verbs)}]" if len(row.choices) > 2 else ""
+        print(row_line(paint, value + 1, row, row.verbs[picked[value]]) + offers, file=sys.stderr)
+    print('Actions then row numbers, like "off 2 5-7 keep 3 menu 4"; none keeps everything; '
           "Enter applies the list as shown: ", end="", file=sys.stderr, flush=True)
     try:
         reply = input()
@@ -981,13 +1216,12 @@ def pick_by_line(rows, picked):
         print(file=sys.stderr)
         return None
     picked = list(picked)
-    verbs = {"fix", "skip", "disable", "uninstall", "remove", "delete", "link", "unlink"}
     action = None
     for token in reply.split():
         if token == "none":
             picked = [0] * len(picked)
             continue
-        if token in verbs:
+        if token in ("keep", "off", "menu", "reset"):
             action = token
             continue
         match = re.fullmatch(r"(\d{1,6})(?:-(\d{1,6}))?", token)
@@ -995,68 +1229,82 @@ def pick_by_line(rows, picked):
             print(f"Not understood: {token}; nothing changed", file=sys.stderr)
             return None
         low, high = int(match[1]), int(match[2] or match[1])
-        hits = [r for r, number in enumerate(numbers) if low <= number <= high]
-        if not hits:
-            print(f"No item {token}; nothing changed", file=sys.stderr)
+        if low < 1 or low > len(rows) or (not match[2] and high > len(rows)):
+            print(f"No row {token}; nothing changed", file=sys.stderr)
             return None
-        for r in hits:
-            actions = rows[r][1].actions
-            if action in actions:
-                picked[r] = actions.index(action)
-            elif action == "fix" and len(actions) > 1:
-                picked[r] = 1
+        high = min(high, len(rows))
+        for r in range(low - 1, high):
+            if action in rows[r].verbs:
+                picked[r] = rows[r].verbs.index(action)
             elif low == high:
-                print(f"Item {numbers[r]} can't {action}; it offers {' / '.join(actions)}; nothing changed",
+                print(f"Row {low} can't {action}; it offers {' / '.join(rows[r].verbs)}; nothing changed",
                       file=sys.stderr)
                 return None
     return picked
 
 
-def apply_findings(report, findings, yes):
-    """One list of every [auto] item, a fix set to fix and a trim to skip; the
-    person changes any row and every row is applied at once. Nothing changes
-    when the list is cancelled or stdin is closed."""
-    rows = list(enumerate(findings, 1))
-    if not any(f.apply for f in findings):
-        print("\n  Nothing here can be fixed automatically; each item above says what to do.")
-        return
-    if yes:
-        picked = [1 if f.apply else 0 for _, f in rows]
-    else:
-        if stdin_closed():
-            print("\n  Nothing changed: ai-doctor asks before changing anything, and stdin is closed.")
-            return
-        picked = [1 if f.kind == "fix" and f.apply else 0 for _, f in rows]
-        print(file=sys.stderr)
-        if os.environ.get("DOTFILES_PROMPT") != "read" and sys.stdin.isatty() and sys.stderr.isatty():
-            picked = pick_on_terminal(report, rows, picked)
-        else:
-            picked = pick_by_line(rows, picked)
-        if picked is None or not any(picked):
-            print("  Nothing changed.")
-            return
-    backup_dir = STATE_HOME / "ai-doctor" / time.strftime("%Y%m%d-%H%M%S")
+# Applying -----------------------------------------------------------------
+
+
+def reset(paint, ctx, category, dry_run):
+    """Undo logged changes in one category (or all), newest first; returns (done, failed)."""
+    entries = [e for e in read_log() if category in (None, "all", e.get("category"))]
     done = failed = 0
-    print()
-    for (number, finding), choice in zip(rows, picked):
-        if not choice:
+    for entry in reversed(entries):
+        if dry_run:
+            print(f"  would undo: {entry.get('did')}")
             continue
-        _verb, todo, apply = finding.choices[choice]
         try:
-            apply(backup_dir)
-        except (OSError, RuntimeError, KeyError, subprocess.CalledProcessError) as error:
-            print(f"  {number:>2}  {todo}: {report.paint('31', 'failed')}: {error}")
+            what = undo(entry, ctx)
+        except (OSError, RuntimeError, KeyError, ValueError) as error:
+            print(f"  {entry.get('did')}: {paint('31', 'undo failed')}: {error}")
             failed += 1
             continue
-        finding.done = True
+        append_log({"undo_of": entry["id"], "at": stamp(), "did": what or "already back"})
+        print(f"  {what or entry.get('item') + ': already back'}: {paint('32', 'done')}")
         done += 1
-        print(f"  {number:>2}  {todo}: {report.paint('32', 'done')}")
-    if backup_dir.exists():
-        print(f"\n  Backups: {tilde(backup_dir)}")
-    if failed:
-        print(f"\n  Done with problems: {done} fixed, {failed} failed.")
-    else:
-        print(f"\n  Done: {done} fixed.")
+    if not entries:
+        print("  Nothing to reset" + (f" in {category}." if category not in (None, "all") else "."))
+    return done, failed
+
+
+def apply_rows(paint, ctx, rows, picked, dry_run):
+    done = failed = 0
+    print()
+    for number, (row, choice) in enumerate(zip(rows, picked), 1):
+        if not choice:
+            continue
+        verb, todo, apply = row.choices[choice]
+        if row.parent and picked[rows.index(row.parent)]:
+            continue  # the whole bundle goes, so its skills need no override
+        if dry_run:
+            print(f"  {number:>3}  would: {todo}")
+            continue
+        if verb == "reset":
+            d, f = reset(paint, ctx, apply, False)
+            done, failed = done + d, failed + f
+            row.done = not f
+            continue
+        try:
+            apply(ctx)
+        except (OSError, RuntimeError, KeyError, ValueError) as error:
+            print(f"  {number:>3}  {todo}: {paint('31', 'failed')}: {error}")
+            failed += 1
+            continue
+        row.done = True
+        done += 1
+        print(f"  {number:>3}  {todo}: {paint('32', 'done')}")
+    return done, failed
+
+
+def finish(paint, ctx, done, failed, dry_run):
+    if dry_run:
+        print("\n  Nothing changed (--dry-run).")
+        return
+    if ctx.backup_dir.exists():
+        print(f"\n  Backups: {tilde(ctx.backup_dir)}")
+    line = f"Done: {done} changed" + (f", {failed} failed" if failed else "") + "."
+    print(f"\n  {line} ai-doctor --reset undoes them." if done else f"\n  {line}")
 
 
 def main(argv=None):
@@ -1066,45 +1314,84 @@ def main(argv=None):
         epilog=__doc__.split("\n", 1)[1],
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--fix", action="store_true", help="choose which [auto] items to do, even without a terminal")
-    parser.add_argument("--yes", action="store_true", help="with --fix, apply them all without asking")
-    parser.add_argument("-v", "--verbose", action="store_true", help="also list everything checked")
+    parser.add_argument("--fix", action="store_true", help="show the menu even without a terminal, read as one line")
+    parser.add_argument("-y", "--yes", action="store_true", help="apply the preselected rows without asking")
+    parser.add_argument("-n", "--dry-run", action="store_true", help="say what would change, change nothing")
+    parser.add_argument("--reset", nargs="?", const="all", choices=(*CATEGORIES, "all"), metavar="WHAT",
+                        help="undo ai-doctor's changes: plugins, skills, bundles, servers, or all")
+    parser.add_argument("-v", "--verbose", action="store_true", help="also every kept row and what is already off")
     parser.add_argument("--app", action="append", choices=APPS, help="check only this app (repeatable)")
     parser.add_argument("--no-color", action="store_true", help="plain output")
     args = parser.parse_args(argv)
 
-    apps = args.app or installed_apps()
+    paint = Paint(sys.stdout.isatty() and not args.no_color and not os.environ.get("NO_COLOR"))
+    apps = args.app or [app for app in APPS if (HOME / f".{app}").is_dir()]
+    claude = claude_bin() if "claude" in apps else None
+    ctx = Context(claude)
+
+    if args.reset:
+        print(paint("1", f"ai-doctor: reset {args.reset}"))
+        done, failed = reset(paint, ctx, args.reset, args.dry_run)
+        if done or failed:
+            finish(paint, ctx, done, failed, args.dry_run)
+        return 1 if failed else 0
+
     if not apps:
         print("ai-doctor: no Claude Code, Codex, or Cursor config in this home directory")
         return 0
-    color = sys.stdout.isatty() and not args.no_color and not os.environ.get("NO_COLOR")
-    report = Report(color, args.verbose)
     cwd = Path.cwd()
-
-    plugins, plugins_off = claude_plugins() if "claude" in apps else ([], [])
-    check_instructions(report, apps, cwd)
-    check_skills(report, apps)
-    check_agents(report, apps, plugins)
+    if claude and sys.stderr.isatty():
+        print(paint("2", "measuring context with claude -p /context ..."), file=sys.stderr, end="\r", flush=True)
+    usage = Usage("claude" in apps)
+    report = context_report(claude, cwd) if claude else None
+    if claude and sys.stderr.isatty():
+        print(" " * 50, file=sys.stderr, end="\r", flush=True)
+    needs_auth = read_json(HOME / ".claude" / "mcp-needs-auth-cache.json") or {}
+    inv = Inventory()
+    instructions(inv, apps, cwd)
+    agents(inv, apps)
     if "claude" in apps:
-        check_plugins(report, plugins, plugins_off)
-    check_servers(report, apps, cwd, plugins)
-    if "claude" in apps:
-        check_settings(report)
+        add_plugins(inv, usage, report, needs_auth)
+    add_skills(inv, apps, usage, report)
+    add_servers(inv, apps, cwd, usage, needs_auth, ctx)
+    add_resets(inv, read_log())
+    if not args.dry_run:
+        usage.save()
 
+    rows = ordered(inv.rows)
+    print(paint("1", f"ai-doctor: {summary(inv, apps, report)}"))
     if args.verbose:
-        print()
-    print(report.paint("1", f"ai-doctor: {summary(report, apps)}"))
-    findings = print_findings(report)
-    # On a terminal the list follows the report, as in df-doctor.
+        print_verbose(paint, inv)
+    print_rows(paint, rows, args.verbose, inv.headings)
+    for line in inv.health:
+        print(paint("31", f"\n  health: {line}"))
+
+    picked = [row.default for row in rows]
     interactive = sys.stdin.isatty() and sys.stdout.isatty()
-    if findings and (args.fix or interactive):
-        apply_findings(report, findings, args.fix and args.yes)
-        return 1 if any(f.kind == "fix" and not getattr(f, "done", False) for f in findings) else 0
-    auto = [str(n) for n, f in enumerate(findings, 1) if f.apply]
-    if auto:
-        print(f"\n  Run {report.paint('1', 'ai-doctor --fix')} to do {', '.join(auto)} (lists them to choose from). "
-              "-v shows everything checked.")
-    return 1 if any(f.kind == "fix" for f in findings) else 0
+    changes = any(len(row.choices) > 1 for row in rows)
+    done = failed = 0
+    if changes and (args.yes or args.dry_run):
+        done, failed = apply_rows(paint, ctx, rows, picked, args.dry_run)
+        finish(paint, ctx, done, failed, args.dry_run)
+    elif changes and (args.fix or interactive):
+        if stdin_closed():
+            print("\n  Nothing changed: ai-doctor asks before changing anything, and stdin is closed.")
+        else:
+            print(file=sys.stderr)
+            if os.environ.get("DOTFILES_PROMPT") != "read" and sys.stdin.isatty() and sys.stderr.isatty():
+                picked = pick_on_terminal(paint, rows, picked, inv.headings)
+            else:
+                picked = pick_by_line(paint, rows, picked, inv.headings)
+            if picked is None or not any(picked):
+                print("  Nothing changed.")
+            else:
+                done, failed = apply_rows(paint, ctx, rows, picked, False)
+                finish(paint, ctx, done, failed, False)
+    elif any(row.default for row in rows):
+        print(f"\n  Run {paint('1', 'ai-doctor --fix')} to choose, or {paint('1', 'ai-doctor --yes')} "
+              "to turn off what is preselected.")
+    broken = any(row.broken and not getattr(row, "done", False) for row in rows)
+    return 1 if failed or broken or inv.health else 0
 
 
 if __name__ == "__main__":
