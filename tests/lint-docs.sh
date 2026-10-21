@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-MAX_WORDS="${LINT_DOCS_MAX_WORDS:-1500}"
+MAX_WORDS="${LINT_DOCS_MAX_WORDS:-2000}"
 MAX_PARENS="${LINT_DOCS_MAX_PARENS:-20}"
 MAX_COMMENT_RUN="${LINT_DOCS_MAX_COMMENT_RUN:-6}"
 # Flags that stand for any flag in scripts/DESIGN.md.

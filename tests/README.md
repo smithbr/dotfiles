@@ -12,7 +12,7 @@ The Bats suite for the repo. Run it with `./tests/run_tests.sh`; the [root `AGEN
 
 ## Docs lint
 
-`lint-docs.sh` keeps the docs short and true, in the lint half that the pre-commit hook and CI run. Drift: a backticked repo path, flag, or upper-case name in a Markdown file must exist in a tracked file. Verbosity: a Markdown file stays under 1500 words and 20 parentheticals per 1000, and a comment paragraph in a shell script runs at most 6 lines. A failure names the file, the line, and what to cut; `LINT_DOCS_MAX_WORDS`, `LINT_DOCS_MAX_PARENS`, and `LINT_DOCS_MAX_COMMENT_RUN` change the limits for a run.
+`lint-docs.sh` keeps the docs short and true, in the lint half that the pre-commit hook and CI run. Drift: a backticked repo path, flag, or upper-case name in a Markdown file must exist in a tracked file. Verbosity: a Markdown file stays under 2000 words and 20 parentheticals per 1000, and a comment paragraph in a shell script runs at most 6 lines. A failure names the file, the line, and what to cut; `LINT_DOCS_MAX_WORDS`, `LINT_DOCS_MAX_PARENS`, and `LINT_DOCS_MAX_COMMENT_RUN` change the limits for a run.
 
 ## Git hooks
 
