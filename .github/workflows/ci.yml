@@ -30,11 +30,11 @@ jobs:
           - shard: link
             files: tests/link.bats
           - shard: doctor-install
-            files: tests/doctor.bats tests/install.bats tests/bootstrap.bats
+            files: tests/doctor.bats tests/install.bats
           - shard: bin
             files: tests/bin_scripts.bats tests/bin_pihole.bats tests/bin_firetv.bats
           - shard: helpers
-            files: tests/common.bats tests/bin_ph_backup.bats tests/brew.bats tests/ai_doctor.bats tests/ph.bats
+            files: tests/bootstrap.bats tests/common.bats tests/bin_ph_backup.bats tests/brew.bats tests/ai_doctor.bats tests/ph.bats
           - shard: lint-others
             files: ''
             lint: true
