@@ -382,7 +382,7 @@ JSON
     run ai_doctor --fix < /dev/null
     assert_output --partial "Nothing changed: ai-doctor asks before changing anything, and stdin is closed."
     run ai_doctor --dry-run
-    assert_output --partial "would: claude plugin disable idle@synced"
+    assert_output --partial "would: [Claude Code] claude plugin disable idle@synced"
     assert_output --partial "Nothing changed (--dry-run)."
     refute test -e "${HOME}/.claude/settings.json"
     refute test -e "${STATE}/actions.jsonl"
@@ -512,4 +512,42 @@ JSON
     run ai_doctor --app claude --app codex
     assert_success
     assert_output --partial "skill commit-work (off in Claude Code; still available in other apps)"
+}
+
+@test "ai-doctor: undo summaries name each affected app, including older records" {
+    mkdir -p "${STATE}" "${HOME}/.codex" "${HOME}/.cursor"
+    cat > "${STATE}/actions.jsonl" <<'JSON'
+{"id":"p","category":"plugins","item":"writing","did":"plugin disabled","undo":{"kind":"plugin","key":"writing@synced"}}
+{"id":"s1","category":"servers","item":"claude:money","did":"removed money","undo":{"kind":"server","app":"claude"}}
+{"id":"s2","category":"servers","item":"codex:node_repl","did":"removed node","undo":{"kind":"server","app":"codex"}}
+{"id":"s3","category":"servers","item":"cursor:GitHub","did":"removed GitHub","undo":{"kind":"server","app":"cursor"}}
+{"id":"k","category":"skills","item":"commit-work","did":"override set","undo":{"kind":"override"}}
+{"id":"b","category":"bundles","item":"core","did":"bundle dropped","undo":{"kind":"bundle"}}
+JSON
+    run ai_doctor
+    assert_success
+    assert_output --partial "by ai-doctor [Claude Code: 1; Codex: 1; Cursor: 1]"
+    assert_output --partial "[Claude Code] writing"
+    assert_output --partial "[Codex] codex:node_repl"
+    assert_output --partial "[Cursor] cursor:GitHub"
+    assert_output --partial "Shared skills (apps not recorded): 1"
+    run ai_doctor --reset servers --dry-run
+    assert_success
+    assert_output --partial "would undo: [Claude Code] removed money"
+    assert_output --partial "would undo: [Codex] removed node"
+    assert_output --partial "would undo: [Cursor] removed GitHub"
+}
+
+@test "ai-doctor: new bundle records preserve the affected apps after links change" {
+    mkdir -p "${HOME}/.codex" "${HOME}/.cursor"
+    ln -s "${HOME}/.agents/skills" "${HOME}/.cursor/skills"
+    run ai_doctor --fix <<< "off 1 keep 2-99"
+    assert_success
+    assert_output --partial "[Claude Code, Codex, Cursor] skill-drop"
+    run python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).readline())["apps"])' "${STATE}/actions.jsonl"
+    assert_output "['claude', 'codex', 'cursor']"
+    rm "${HOME}/.cursor/skills"
+    run ai_doctor
+    assert_success
+    assert_output --partial "[Claude Code, Codex, Cursor]"
 }

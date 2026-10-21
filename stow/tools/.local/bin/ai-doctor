@@ -424,6 +424,30 @@ def stamp():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def change_scope(entry):
+    names = {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor"}
+    apps = entry.get("apps")
+    if isinstance(apps, list) and apps and all(app in names for app in apps):
+        return ", ".join(names[app] for app in apps)
+    saved = entry.get("undo") or {}
+    if saved.get("kind") in ("plugin", "override"):
+        return "Claude Code"
+    if saved.get("app") in names:
+        return names[saved["app"]]
+    if saved.get("kind") == "move":
+        for app in APPS:
+            if str(saved.get("path", "")).startswith(str(HOME / f".{app}") + "/"):
+                return names[app]
+    if saved.get("kind") in ("bundle", "link"):
+        return "Shared skills (apps not recorded)"
+    return "App not recorded"
+
+
+def skill_apps(folder):
+    return [app for app in APPS if (HOME / f".{app}").is_dir()
+            and (HOME / (".agents/skills" if app == "codex" else f".{app}/skills")).resolve() == folder.resolve()]
+
+
 class Context:
     """What a change needs: the commands, a backup folder for this run, and a counter for log ids."""
 
@@ -433,11 +457,12 @@ class Context:
         self.skills_add = skills_add_bin()
         self.backup_dir = STATE_DIR / "backups" / time.strftime("%Y%m%d-%H%M%S")
         self.count = 0
+        self.apps = []
 
     def log(self, category, item, did, undo):
         self.count += 1
         append_log({"id": f"{time.strftime('%Y%m%d%H%M%S')}-{self.count}", "at": stamp(), "category": category,
-                    "item": item, "did": did, "undo": undo})
+                    "item": item, "did": did, "undo": undo, "apps": self.apps})
 
 
 # Changes and their undos --------------------------------------------------
@@ -624,6 +649,7 @@ class Row:
         self.broken = False
         self.parent = None
         self.group = "claude"
+        self.apps = ["claude"]
         self.origin = "Custom setup"
         self.purpose = "Purpose not described by this source."
         self.cost = "Unknown cost: not measured, not zero."
@@ -840,6 +866,7 @@ def add_skills(inv, apps, usage, report):
                 row = Row(f"broken skill link {tilde(entry)}", note="the link points nowhere")
                 row.broken = True
                 row.group = group
+                row.apps = skill_apps(real)
                 row.offer("off", f"rm {tilde(entry)}", delete_link(entry))
                 row.start_off()
                 inv.rows.append(row)
@@ -906,6 +933,7 @@ def add_bundle(inv, bundle, skills, usage, measured, report, group, others, ever
     row.cost += " Bundle total includes its children; do not count both."
     row.offer("off", f"skill-drop {bundle}: unlinks it for {everyone}", drop_bundle(bundle))
     row.group = group
+    row.apps = skill_apps(skills[0][2].parent.parent)
     if dormant(last):
         row.start_off()
         for child in children:
@@ -933,6 +961,7 @@ def app_skills(inv, app, real):
         row = Row(f"skill {name or entry.name}", 1, tokens_of(len(text)), dated=False,
                   note=f"ai-doctor --reset skills moves it back into {tilde(real)}")
         row.group = app
+        row.apps = [app]
         row.cost = skill_cost(row.tokens, len(read_text(skill_md) or ""))
         explain_skill(row, skill_md)
         row.evidence = f"{app.capitalize()} usage history is not read; use is unknown."
@@ -1068,6 +1097,7 @@ def add_servers(inv, apps, cwd, usage, needs_auth, ctx, report=None):
         row.offer("off", verb, remove_server(app, file, scope, name, conf, cwd))
         row.broken = bool(problem)
         row.group = app
+        row.apps = [app]
         if problem or (app == "claude" and dormant(last)):
             row.start_off()
         inv.rows.append(row)
@@ -1078,9 +1108,14 @@ def add_resets(inv, entries):
         mine = [e for e in entries if e.get("category") == category]
         if not mine:
             continue
-        row = Row(f"reset {category}: undo {plural(len(mine), 'change')} by ai-doctor",
-                  note=", ".join(e.get("item", "?") for e in reversed(mine)), dated=False)
-        row.origin = "Recovery action from ai-doctor's change log"
+        scopes = {}
+        for entry in mine:
+            scope = change_scope(entry)
+            scopes[scope] = scopes.get(scope, 0) + 1
+        counts = "; ".join(f"{scope}: {n}" for scope, n in scopes.items())
+        row = Row(f"reset {category}: undo {plural(len(mine), 'change')} by ai-doctor [{counts}]",
+                  note="; ".join(f"[{change_scope(e)}] {e.get('item', '?')}" for e in reversed(mine)), dated=False)
+        row.origin = f"Recovery action from ai-doctor's change log; affected apps: {counts}"
         row.purpose = f"Restore the {category} ai-doctor previously changed."
         row.cost = "No ongoing context cost for this action; restored sources resume their own costs."
         row.evidence = "Saved changes, not app usage."
@@ -1504,16 +1539,17 @@ def reset(paint, ctx, category, dry_run):
     done = failed = 0
     for entry in reversed(entries):
         if dry_run:
-            print(f"  would undo: {entry.get('did')}")
+            print(f"  would undo: [{change_scope(entry)}] {entry.get('did')}")
             continue
         try:
             what = undo(entry, ctx)
         except (OSError, RuntimeError, KeyError, ValueError) as error:
-            print(f"  {entry.get('did')}: {paint('31', 'undo failed')}: {error}")
+            print(f"  [{change_scope(entry)}] {entry.get('did')}: {paint('31', 'undo failed')}: {error}")
             failed += 1
             continue
-        append_log({"undo_of": entry["id"], "at": stamp(), "did": what or "already back"})
-        print(f"  {what or entry.get('item') + ': already back'}: {paint('32', 'done')}")
+        append_log({"undo_of": entry["id"], "at": stamp(), "did": what or "already back",
+                    "app_scope": change_scope(entry)})
+        print(f"  [{change_scope(entry)}] {what or entry.get('item') + ': already back'}: {paint('32', 'done')}")
         done += 1
     if not entries:
         print("  Nothing to reset" + (f" in {category}." if category not in (None, "all") else "."))
@@ -1527,25 +1563,27 @@ def apply_rows(paint, ctx, rows, picked, dry_run):
         if not choice:
             continue
         verb, todo, apply = row.choices[choice]
+        scope = change_scope({"apps": row.apps})
         if row.parent and picked[rows.index(row.parent)]:
             continue  # the whole bundle goes, so its skills need no override
-        if dry_run:
-            print(f"  {number:>3}  would: {todo}")
-            continue
         if verb == "reset":
-            d, f = reset(paint, ctx, apply, False)
+            d, f = reset(paint, ctx, apply, dry_run)
             done, failed = done + d, failed + f
             row.done = not f
             continue
+        if dry_run:
+            print(f"  {number:>3}  would: [{scope}] {todo}")
+            continue
         try:
+            ctx.apps = row.apps
             apply(ctx)
         except (OSError, RuntimeError, KeyError, ValueError) as error:
-            print(f"  {number:>3}  {todo}: {paint('31', 'failed')}: {error}")
+            print(f"  {number:>3}  [{scope}] {todo}: {paint('31', 'failed')}: {error}")
             failed += 1
             continue
         row.done = True
         done += 1
-        print(f"  {number:>3}  {todo}: {paint('32', 'done')}")
+        print(f"  {number:>3}  [{scope}] {todo}: {paint('32', 'done')}")
     return done, failed
 
 
