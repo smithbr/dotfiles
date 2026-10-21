@@ -234,6 +234,9 @@ spin() {
     fi
 }
 
+# The cursor gets its own column and color: gum draws a ticked row in the
+# selected style even under the cursor, so a cursor that shared the tick's
+# column or color would vanish on ticked rows.
 gum_choose_multiselect() {
     local header="$1"
     local height="$2"
@@ -244,12 +247,12 @@ gum_choose_multiselect() {
         --ordered \
         --height="${height}" \
         --header="${header}" \
-        --cursor=" " \
-        --cursor-prefix="> " \
+        --cursor="> " \
+        --cursor-prefix="  " \
         --selected-prefix="* " \
         --unselected-prefix="  " \
         --padding="0 1" \
-        --cursor.foreground="5" \
+        --cursor.foreground="6" \
         --header.foreground="5" \
         --selected.foreground="5" \
         "$@"

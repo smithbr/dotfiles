@@ -153,7 +153,8 @@ MOCK
     '
     assert_success
     assert_output --partial "gum choose --no-limit --ordered --height=4 --header=Pick packages"
-    assert_output --partial "--cursor-prefix=> "
+    assert_output --partial "--cursor=> "
+    assert_output --partial "--cursor.foreground=6"
     assert_output --partial "--selected.foreground=5"
 }
 
