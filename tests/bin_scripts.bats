@@ -3324,13 +3324,6 @@ fake_df_repo() {
     assert_output --partial "/fake repo/scripts/link.sh|add|--layer|tools|a file|"
 }
 
-@test "df-rm runs its repo's link.sh rm with every argument" {
-    fake_df_repo df-rm link.sh
-    run "${TEST_TMPDIR}/home/.local/bin/df-rm" --delete "a file"
-    assert_success
-    assert_output --partial "/fake repo/scripts/link.sh|rm|--delete|a file|"
-}
-
 @test "df-mv runs its repo's link.sh mv with every argument" {
     fake_df_repo df-mv link.sh
     run "${TEST_TMPDIR}/home/.local/bin/df-mv" --layer tools "a file"

@@ -9,7 +9,7 @@ Repository tooling: the linker, the Brewfile helper, the machine check, and `com
 Subcommands:
 
 - `add PATH... [--layer NAME] [--platform] [--seed]` copies files from `~` into a layer (its `<layer>.<os>` part with `--platform`, `seed/` with `--seed`) and links them. Without `--layer` it asks on a terminal, describing each layer (`layer_rule` in `link.sh`), and fails on closed stdin. Before copying anything it refuses paths outside the destination, symlinks, files already in the repo, `.local` overrides, editor settings, private agent paths, and private keys and other secrets.
-- `rm PATH... [--delete]` replaces each link with a real copy of its repo file, keeping its mode, then `git rm`s the repo file and the folders left empty. `--delete` moves the file to `~/.local/state/dotfiles/cleanup/<timestamp>.remove/` instead. A path must be a link into `stow/`, or a directory of them. It refuses real files, seed files, and foreign, agent, and editor links, and leaves the commit to you. Other machines drop the link as stale on their next `df-link` or `df-deploy`, losing the file there unless `df-rm` ran first.
+- `rm PATH... [--delete]` replaces each link with a real copy of its repo file, keeping its mode, then `git rm`s the repo file and the folders left empty. `--delete` moves the file to `~/.local/state/dotfiles/cleanup/<timestamp>.remove/` instead. A path must be a link into `stow/`, or a directory of them. It refuses real files, seed files, and foreign, agent, and editor links, and leaves the commit to you. Other machines drop the link as stale on their next `df-link` or `df-deploy`, losing the file there unless `link.sh rm` ran first.
 - `mv PATH... [--layer NAME] [--platform | --no-platform]` moves linked files to another layer, or renames a repo file to match a file already moved in `~`. The link in `~` is swapped by a rename, so the file never goes missing, and the index shows a `git mv`. It refuses whatever `rm` refuses, a layer this persona does not link, the file's current place, and a destination the layer already has. Afterwards it lists, without editing, the repo lines that still name the old path. A machine whose persona does not link the new layer loses the file.
 - `persona`, `personas`, `offered`, and `installs` print the persona in effect, the ones this OS allows, the installs offered, and the chosen installs in run order ([`roles/README.md`](../roles/README.md)).
 - `status` lists missing, replaced, foreign, broken, and stale links, plus `shadowed` when `~/.gitconfig` sets `[user]`, `unset` when git has no `user.email`, and `unlinked` for a real file where a layer this persona does not link would put one. `managed` prints every path the repo owns.
@@ -23,7 +23,7 @@ Rules:
 
 ## Wrappers
 
-The `tools` layer puts `df-link`, `df-doctor`, `df-rm`, `df-mv`, and `df-add` on the PATH. Each finds the repo through its own stow link and runs the script with its arguments, so the scripts stay in `scripts/`, where bootstrap needs them before anything is linked. `df-add stow PATH...` is `link.sh add`; `df-add brew NAME...` runs `scripts/brew-add.sh`.
+The `tools` layer puts `df-link`, `df-doctor`, `df-mv`, and `df-add` on the PATH. Each finds the repo through its own stow link and runs the script with its arguments, so the scripts stay in `scripts/`, where bootstrap needs them before anything is linked. `df-add stow PATH...` is `link.sh add`; `df-add brew NAME...` runs `scripts/brew-add.sh`.
 
 ## brew-add.sh
 

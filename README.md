@@ -29,7 +29,7 @@ A persona says whose machine it is; a role says what it is for ([roles/](roles/R
 ```bash
 df-add stow ~/.config/tool/config  # adds file and symlinks it
 df-add brew llmfit                 # installs it and adds it to a Brewfile
-df-rm ~/.config/tool/config        # stops managing it and keeps the file
+~/.dotfiles/scripts/link.sh rm ~/.config/tool/config  # stops managing it and keeps the file
 df-mv ~/.config/tool/config        # moves it to another layer
 df-link status                     # shows drift
 df-doctor                          # checks the machine, then lets you choose a change for each item

@@ -1016,7 +1016,7 @@ fixture_untracks() {
     assert_output --partial "Kept ~/.local/bin/tool as a real file"
     assert_output --partial "Removed stow/common/.local/bin/tool from the repo"
     assert_output --partial "/fixture commit"
-    assert_output --partial "run df-rm on it before pulling"
+    assert_output --partial "run link.sh rm on it before pulling"
 
     [ -f "${DEST}/.local/bin/tool" ] && [ ! -L "${DEST}/.local/bin/tool" ]
     [ "$(cat "${DEST}/.local/bin/tool")" = "$(printf '#!/bin/sh\necho tool')" ]
@@ -1025,7 +1025,7 @@ fixture_untracks() {
     [ ! -e "${FIXTURE}/stow/common/.local" ]
     [ -d "${FIXTURE}/stow/common" ]
     fixture_untracks stow/common/.local/bin/tool
-    [ -z "$(find "${DEST}/.local/bin" -name '.df-rm.*')" ]
+    [ -z "$(find "${DEST}/.local/bin" -name '.link-rm.*')" ]
 
     # The next link run leaves the real file alone.
     run_fixture_link

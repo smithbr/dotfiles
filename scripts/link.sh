@@ -1893,7 +1893,7 @@ remove_files() {
             rm -f "${target}"
             printf 'Moved ~/%s to %s\n' "${relative}" "${REMOVE_ARCHIVE}/${relative}"
         else
-            tmp="$(mktemp "$(dirname "${target}")/.df-rm.XXXXXX")"
+            tmp="$(mktemp "$(dirname "${target}")/.link-rm.XXXXXX")"
             if ! cp -p "${REPO}/${source}" "${tmp}" || ! mv -f "${tmp}" "${target}"; then
                 rm -f "${tmp}"
                 log_error "Could not replace the link ~/${relative}; it is left in place"
@@ -1908,7 +1908,7 @@ remove_files() {
     done
 
     printf 'Removed %d file(s) from the repo. Commit with: git -C %s commit\n' "${#entries[@]}" "${REPO}"
-    printf 'Other machines drop these links on their next df-link or df-deploy, and the files go with them; to keep one there, run df-rm on it before pulling.\n'
+    printf 'Other machines drop these links on their next df-link or df-deploy, and the files go with them; to keep one there, run link.sh rm on it before pulling.\n'
 }
 
 # ---------------------------------------------------------------------------
