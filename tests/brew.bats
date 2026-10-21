@@ -178,6 +178,32 @@ MAP
     assert_output "1"
 }
 
+@test "brew.sh installs gum ahead of the Brewfiles, but not when it is there or on a dry run" {
+    run_brew_sh linux-gnu
+    assert_success
+    run grep -n -m1 -E '^brew (install gum|bundle)' "${TEST_LOG}"
+    assert_output "$(grep -n -m1 '^brew install gum$' "${TEST_LOG}")"
+    assert_output --partial "brew install gum"
+
+    : > "${TEST_LOG}"
+    printf '#!/bin/sh\n' > "${TEST_BIN}/gum"
+    chmod +x "${TEST_BIN}/gum"
+    run_brew_sh linux-gnu
+    assert_success
+    run grep -c '^brew install gum$' "${TEST_LOG}"
+    assert_output "0"
+
+    rm "${TEST_BIN}/gum"
+    : > "${TEST_LOG}"
+    write_brew_mock
+    run env PATH="${TEST_BIN}:/usr/bin:/bin" HOME="${TEST_TMPDIR}/home" OSTYPE=linux-gnu \
+        TEST_TMPDIR="${TEST_TMPDIR}" TEST_LOG="${TEST_LOG}" TEST_BUNDLE="${TEST_BUNDLE}" \
+        bash "${PROJECT_ROOT}/homebrew/brew.sh" --dry-run < /dev/null
+    assert_success
+    run grep -c '^brew install gum$' "${TEST_LOG}"
+    assert_output "0"
+}
+
 @test "brew.sh skips a Brewfile whose packages are all installed" {
     run_brew_sh linux-gnu BREW_CHECK_OK=1
     assert_success

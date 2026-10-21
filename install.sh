@@ -296,6 +296,22 @@ ensure_dotfiles_repo_link() {
     spin "Linking dotfiles repo..." ln -sfn "${BASEDIR}" "${HOME}/.dotfiles"
 }
 
+# On a fresh machine gum arrives with Homebrew, whose bin is not on PATH yet.
+# Reach it through a function rather than adding that bin to PATH, which
+# would change which zsh and stow the later steps find.
+use_installed_gum() {
+    local dir
+    command -v gum >/dev/null 2>&1 && return 0
+    while IFS= read -r dir; do
+        if [[ -x "${dir}/gum" ]]; then
+            INSTALLED_GUM="${dir}/gum"
+            gum() { "${INSTALLED_GUM}" "$@"; }
+            detect_gum
+            return 0
+        fi
+    done < <(tool_bin_dirs)
+}
+
 ensure_stow() {
     if command -v stow >/dev/null 2>&1; then
         return 0
@@ -735,6 +751,7 @@ if [[ "${run_brew}" -eq 1 ]]; then
     else
         bash homebrew/brew.sh
         _check "Homebrew packages up to date"
+        use_installed_gum
     fi
 fi
 

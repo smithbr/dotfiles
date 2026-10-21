@@ -40,6 +40,16 @@ brew_bin_dir() {
     esac
 }
 
+# gum draws boxes, help, and pickers: install it ahead of the rest of
+# Brewfile.core, where it stays listed, so the steps after this have them.
+install_gum_first() {
+    [[ " ${DOTFILES_BREWFILES-core} " == *" core "* ]] || return 0
+    command -v gum >/dev/null 2>&1 && return 0
+    [[ "${DRY_RUN}" -eq 0 ]] || return 0
+    spin "Installing gum..." brew install gum
+    detect_gum
+}
+
 # Put Homebrew on PATH when it is installed but not there yet.
 find_brew() {
     local bin_dir
@@ -222,6 +232,7 @@ main() {
         log_info "Would install from Brewfiles: ${DOTFILES_BREWFILES-core}"
         return 0
     fi
+    install_gum_first
     for name in ${DOTFILES_BREWFILES-core}; do
         install_brewfile "${name}"
     done
