@@ -29,6 +29,7 @@ cask "yaak"
 
 # Productivity
 cask "appcleaner"
+cask "markedit"
 cask "utm"
 
 # Security and Networking
