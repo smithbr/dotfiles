@@ -478,7 +478,7 @@ MOCK
 @test "os-doctor displays help" {
     run "${PROJECT_ROOT}/stow/tools/.local/bin/os-doctor" --help
     assert_success
-    assert_output --partial "Usage:"
+    assert_output --partial "## Usage"
     assert_output --partial "os-doctor"
     assert_output --partial "package-manager updates"
 }
@@ -519,6 +519,28 @@ MOCK
     assert_line "brew upgrade --fetch-HEAD"
     assert_output --partial "brew cleanup --prune=all"
     [[ ! -d "${TEST_TMPDIR}/.cache/Homebrew" ]]
+}
+
+@test "os-doctor suggests installing gum only when it is missing" {
+    cat > "${BIN_SANDBOX}/sudo" <<'MOCK'
+#!/usr/bin/env bash
+"$@"
+MOCK
+    printf '#!/bin/sh\n' > "${BIN_SANDBOX}/apt-get"
+    printf '#!/bin/sh\n[ "$1" = --cache ] && echo /nonexistent/Homebrew\nexit 0\n' > "${BIN_SANDBOX}/brew"
+    chmod +x "${BIN_SANDBOX}/sudo" "${BIN_SANDBOX}/apt-get" "${BIN_SANDBOX}/brew"
+
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        "${PROJECT_ROOT}/stow/tools/.local/bin/os-doctor"
+    assert_success
+    assert_output --partial "- brew install gum, for boxes, rendered help, and arrow-key pickers"
+
+    printf '#!/bin/sh\n' > "${BIN_SANDBOX}/gum"
+    chmod +x "${BIN_SANDBOX}/gum"
+    run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
+        "${PROJECT_ROOT}/stow/tools/.local/bin/os-doctor"
+    assert_success
+    refute_output --partial "brew install gum"
 }
 
 @test "os-doctor runs macOS system and Homebrew updates" {
@@ -903,7 +925,7 @@ pihole-FTL --config webserver.tls.cert /etc/pihole/a.test.pem"
 @test "ph-update displays help" {
     run "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-update" --help
     assert_success
-    assert_output --partial "Usage:"
+    assert_output --partial "## Usage"
     assert_output --partial "ph-update"
     assert_output --partial "ph-update -r"
     assert_output --partial "Run os-doctor, refresh Pi-hole, and optionally restart Linux"
@@ -1082,7 +1104,7 @@ MOCK
 @test "ph-test displays help" {
     run "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-test" --help
     assert_success
-    assert_output --partial "Usage:"
+    assert_output --partial "## Usage"
     assert_output --partial "ph-test [dns-server-ip]"
     assert_output --partial "Defaults to 127.0.0.1"
 }
@@ -1500,7 +1522,7 @@ MOCK
     assert_failure
     assert_output --partial "Summary"
     assert_output --partial "Could not retrieve stats"
-    assert_output --partial "Found 1 failing check(s)."
+    assert_output --partial "Failed: 1"
 }
 
 @test "ph-test times out hung stats collection and still prints summary" {
@@ -1683,7 +1705,7 @@ MOCK
     assert_failure
     assert_output --partial "Summary"
     assert_output --partial "Could not retrieve stats (timed out after 1s)"
-    assert_output --partial "Found 1 failing check(s)."
+    assert_output --partial "Failed: 1"
 }
 
 @test "ph-test still prints summary when stats output omits some keys" {
@@ -1899,7 +1921,7 @@ MOCK
 @test "ph-backup displays help" {
     run "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-backup" --help
     assert_success
-    assert_output --partial "Usage:"
+    assert_output --partial "## Usage"
     assert_output --partial "ph-backup [-o|--output DIR]"
     assert_output --partial "~/backups/ph-backup"
 }
@@ -1915,7 +1937,7 @@ MOCK
     run env PATH="${BIN_SANDBOX}:/usr/bin:/bin" OSTYPE="linux-gnu" \
         "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-backup" --bogus
     assert_failure
-    assert_output --partial "Unknown argument: --bogus"
+    assert_output --partial "Unknown option: --bogus (see ph-backup --help)"
     refute_output --partial "sudo "
 }
 
@@ -2435,7 +2457,7 @@ MOCK
 @test "ts-test displays help" {
     run bash "${PROJECT_ROOT}/stow/personal/.local/bin/ts-test" --help
     assert_success
-    assert_output --partial "Usage:"
+    assert_output --partial "## Usage"
     assert_output --partial "ts-test run"
     assert_output --partial "ts-test exit-node"
 }
@@ -2487,7 +2509,7 @@ MOCK
     assert_output --partial "Platform: Linux"
     assert_output --partial "Backend: Running"
     assert_output --partial "Summary"
-    assert_output --partial "All checks passed."
+    assert_output --partial "Warnings: 0  Failed: 0"
 }
 
 @test "ts-test exit-node resolves the exit node from pretty-printed status" {

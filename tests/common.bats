@@ -65,7 +65,7 @@ teardown() {
         log_info "hello world"
     '
     assert_success
-    assert_output "info: hello world"
+    assert_output "INFO hello world"
 }
 
 @test "log_warn outputs to stderr with warning prefix when gum is absent" {
@@ -75,7 +75,7 @@ teardown() {
         log_warn "caution" 2>&1
     '
     assert_success
-    assert_output "warning: caution"
+    assert_output "WARN caution"
 }
 
 @test "log_error outputs to stderr with error prefix when gum is absent" {
@@ -85,55 +85,58 @@ teardown() {
         log_error "something broke" 2>&1
     '
     assert_success
-    assert_output "error: something broke"
+    assert_output "ERROR something broke"
 }
 
-@test "log_info delegates to gum when gum is on PATH" {
-    cat > "${TEST_TMPDIR}/bin/gum" <<'MOCK'
-#!/usr/bin/env bash
-echo "gum $*"
-MOCK
-    chmod +x "${TEST_TMPDIR}/bin/gum"
-
+@test "log_info colors its label in ANSI on a terminal, without gum" {
     run bash -c '
-        export PATH="'"${TEST_TMPDIR}/bin"':${PATH}"
         source "'"${PROJECT_ROOT}"'/scripts/common.sh"
-        log_info "via gum"
+        HAS_COLOR=true
+        log_info "styled"
     '
     assert_success
-    assert_output --partial "gum log --level info via gum"
+    assert_output $'\033[1;38;5;86mINFO\033[0m styled'
 }
 
-@test "log_warn delegates to gum when gum is on PATH" {
-    cat > "${TEST_TMPDIR}/bin/gum" <<'MOCK'
-#!/usr/bin/env bash
-echo "gum $*" >&2
-MOCK
-    chmod +x "${TEST_TMPDIR}/bin/gum"
-
+@test "log_warn colors its label in ANSI on a terminal, without gum" {
     run bash -c '
-        export PATH="'"${TEST_TMPDIR}/bin"':${PATH}"
         source "'"${PROJECT_ROOT}"'/scripts/common.sh"
-        log_warn "warning via gum" 2>&1
+        HAS_COLOR_ERR=true
+        log_warn "styled" 2>&1
     '
     assert_success
-    assert_output --partial "gum log --level warn warning via gum"
+    assert_output $'\033[1;38;5;192mWARN\033[0m styled'
 }
 
-@test "log_error delegates to gum when gum is on PATH" {
-    cat > "${TEST_TMPDIR}/bin/gum" <<'MOCK'
-#!/usr/bin/env bash
-echo "gum $*" >&2
-MOCK
-    chmod +x "${TEST_TMPDIR}/bin/gum"
-
+@test "log_error colors its label in ANSI on a terminal, without gum" {
     run bash -c '
-        export PATH="'"${TEST_TMPDIR}/bin"':${PATH}"
         source "'"${PROJECT_ROOT}"'/scripts/common.sh"
-        log_error "err via gum" 2>&1
+        HAS_COLOR_ERR=true
+        log_error "styled" 2>&1
     '
     assert_success
-    assert_output --partial "gum log --level error err via gum"
+    assert_output $'\033[1;38;5;204mERROR\033[0m styled'
+}
+
+@test "the last line of a run starts with SUCCESS, WARN, or ERROR" {
+    run bash -c '
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        _success "Passed: 3"
+        _warn "Failed: 1" 2>&1
+        die "boom" 2>&1
+    '
+    assert_failure
+    assert_output $'SUCCESS Passed: 3\nWARN Failed: 1\nERROR boom'
+}
+
+@test "the end-of-run label is bold and colored on a terminal" {
+    run bash -c '
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        HAS_COLOR=true
+        _success "Passed: 3"
+    '
+    assert_success
+    assert_output $'\033[1;38;5;84mSUCCESS\033[0m Passed: 3'
 }
 
 @test "gum_choose_multiselect delegates to gum choose with shared styling" {
@@ -151,7 +154,16 @@ MOCK
     assert_success
     assert_output --partial "gum choose --no-limit --ordered --height=4 --header=Pick packages"
     assert_output --partial "--cursor-prefix=> "
-    assert_output --partial "--selected.foreground=213"
+    assert_output --partial "--selected.foreground=5"
+}
+
+@test "sourcing common.sh turns off gum's key help for its child prompts" {
+    run bash -c '
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        env | grep "^GUM_.*_SHOW_HELP=" | sort
+    '
+    assert_success
+    assert_output $'GUM_CHOOSE_SHOW_HELP=false\nGUM_CONFIRM_SHOW_HELP=false\nGUM_FILTER_SHOW_HELP=false\nGUM_INPUT_SHOW_HELP=false'
 }
 
 # ---------------------------------------------------------------------------
@@ -318,7 +330,7 @@ EOF
 
     run_on_tty "${TEST_TMPDIR}/spin.sh"
     assert_success
-    assert_output --partial "gum spin --spinner dot --title Loading... --padding=0 1 -- echo payload"
+    assert_output --partial "gum spin --spinner dot --show-error --title Loading... --padding=0 1 -- echo payload"
 }
 
 @test "spin logs the title and streams output when stdout is not a terminal" {
@@ -421,6 +433,41 @@ run_picker() {
         source "'"${PROJECT_ROOT}"'/scripts/common.sh"
         DOTFILES_PROMPT=read "$@" 2>/dev/null
     ' _ "$@" <<< "${answer}"
+}
+
+@test "confirm is yes only for an answer starting with y" {
+    run_picker y confirm "Delete it?"
+    assert_success
+    run_picker Yes confirm "Delete it?"
+    assert_success
+    run_picker n confirm "Delete it?"
+    assert_failure
+    run_picker "" confirm "Delete it?"
+    assert_failure
+}
+
+@test "confirm asks with [y/N] on stderr and is no at end of input" {
+    run bash -c '
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        DOTFILES_PROMPT=read confirm "Delete it?" 2>&1 < /dev/null
+    '
+    assert_failure
+    assert_output "Delete it? [y/N] "
+}
+
+@test "confirm hands the question to gum confirm in gum mode" {
+    cat > "${TEST_TMPDIR}/bin/gum" <<'MOCK'
+#!/usr/bin/env bash
+echo "gum $*"
+MOCK
+    chmod +x "${TEST_TMPDIR}/bin/gum"
+    run bash -c '
+        export PATH="'"${TEST_TMPDIR}/bin"':${PATH}"
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        DOTFILES_PROMPT=gum confirm "Delete it?"
+    '
+    assert_success
+    assert_output "gum confirm Delete it?"
 }
 
 @test "choose_one takes a number or an item and falls back to the default" {
@@ -528,6 +575,8 @@ Numbers separated by spaces, all, none, or Enter to keep the [x] marks: "
     assert_output "green"
     run grep -x -- "--selected=Green,Blue" "${TEST_TMPDIR}/gum.args"
     assert_success
+    run grep -x -- "x toggles, ctrl+a ticks all, enter applies, esc skips" "${TEST_TMPDIR}/gum.args"
+    assert_success
 }
 
 @test "choose_many takes numbers or all, and none on Enter, end of input, or a bad number" {
@@ -625,23 +674,43 @@ MOCK
     assert_failure 1
     assert_output ""
     run cat "${TEST_TMPDIR}/stderr"
-    assert_output "cannot continue"
+    assert_output "ERROR cannot continue"
 }
 
-@test "die logs through gum as an error when styled output is on" {
-    cat > "${TEST_TMPDIR}/bin/gum" <<'MOCK'
-#!/usr/bin/env bash
-printf 'gum %s\n' "$*" >&2
-MOCK
-    chmod +x "${TEST_TMPDIR}/bin/gum"
+@test "die prints a bold red ERROR label on a terminal" {
     run bash -c '
-        export PATH="'"${TEST_TMPDIR}/bin"':/usr/bin:/bin"
         source "'"${PROJECT_ROOT}"'/scripts/common.sh"
-        HAS_GUM=true
+        HAS_COLOR_ERR=true
         die "cannot continue" 2>&1
     '
     assert_failure 1
-    assert_output "gum log --level error cannot continue"
+    assert_output $'\033[1;38;5;204mERROR\033[0m cannot continue'
+}
+
+@test "row helpers use ANSI colors on a terminal, with no gum installed, and _warn goes to stderr" {
+    run bash -c '
+        export PATH="/usr/bin:/bin"
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        HAS_COLOR=true HAS_COLOR_ERR=true
+        _header "Section"
+        _check "done"
+        _caution "slow"
+        _cross "broke"
+        _warn "Careful" 2>/dev/null
+        _warn "Careful on stderr" 2>&1 >/dev/null
+    '
+    assert_success
+    assert_output $'\033[1;35mSection\033[0m\n\033[32m  ✓ done\033[0m\n\033[33m  ! slow\033[0m\n\033[31m  ✗ broke\033[0m\n\033[1;38;5;192mWARN\033[0m Careful on stderr'
+}
+
+@test "NO_COLOR turns styling off even on a terminal" {
+    run bash -c '
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        NO_COLOR=1 detect_gum
+        printf "%s %s\n" "${HAS_COLOR}" "${HAS_COLOR_ERR}"
+    '
+    assert_success
+    assert_output "false false"
 }
 
 @test "add_result keeps results in order and counts each kind" {
@@ -673,6 +742,54 @@ MOCK
     assert_output "sudo pihole setpassword
 reboot
 sudo pihole"
+}
+
+@test "print_results and print_summary end a run with results, counts, and next steps" {
+    run bash -c '
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        add_result PASS "dns resolves"
+        add_result WARN "cache cold"
+        add_next_step "ph-test --verbose"
+        print_results
+        print_summary
+    '
+    assert_success
+    assert_output "
+Summary
+  PASS  dns resolves
+  WARN  cache cold
+
+SUCCESS Passed: 1  Warnings: 1  Failed: 0
+
+Next steps
+  - ph-test --verbose"
+}
+
+@test "print_summary fails when a result failed, and print_results is quiet with none" {
+    run bash -c '
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        print_results
+        add_result FAIL "blocklist stale"
+        print_summary
+    '
+    assert_failure 1
+    assert_output "
+WARN Passed: 0  Warnings: 0  Failed: 1"
+}
+
+@test "show_help prints the markdown as is off a terminal and through gum format on one" {
+    printf '#!/bin/sh\nprintf "gum %%s\\n" "$*"; cat\n' > "${TEST_TMPDIR}/bin/gum"
+    chmod +x "${TEST_TMPDIR}/bin/gum"
+    run bash -c '
+        source "'"${PROJECT_ROOT}"'/scripts/common.sh"
+        printf "# tool\n" | show_help
+        HAS_GUM=true
+        printf "# tool\n" | show_help
+    '
+    assert_success
+    assert_output "# tool
+gum format
+# tool"
 }
 
 @test "prompt_mode takes DOTFILES_PROMPT, and reads from stdin without a terminal even with gum" {
@@ -712,6 +829,7 @@ MOCK
         _cross "broke"
         _skip "not needed"
         _success "All good"
+        _caution "slow"
         _warn "Careful" 2>/dev/null
         _warn "Careful on stderr" 2>&1 >/dev/null
     '
@@ -722,6 +840,7 @@ Section
   ok: done
   failed: broke
   skipped: not needed
-All good
-Careful on stderr"
+SUCCESS All good
+  warning: slow
+WARN Careful on stderr"
 }

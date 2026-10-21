@@ -25,12 +25,15 @@ source "${DOTFILES_DIR}/scripts/common.sh"
 RESTART_AFTER_UPDATE=0
 
 usage() {
-    local help_text
-
-    help_text="$(cat <<'EOF'
+    show_help <<'EOF'
 # ph-update
 
-Run the Pi-hole maintenance flow for this machine.
+Run os-doctor, refresh Pi-hole, and optionally restart Linux.
+
+## Usage
+
+    ph-update [-r|--restart]
+    ph-update --help
 
 ## Steps
 
@@ -39,27 +42,19 @@ Run the Pi-hole maintenance flow for this machine.
 | `os-doctor` | Run system package updates before privilege escalation |
 | `Pi-hole` | Run `pihole -up` and `pihole -f` |
 
+## Options
+
+| Option | Description |
+|--------|-------------|
+| `-r`, `--restart` | Restart Linux after a successful run |
+| `-h`, `--help` | Show this help |
+
 ## Examples
 
 | Command | Description |
 |---------|-------------|
 | `ph-update` | Run the full maintenance flow |
 | `ph-update -r` | Run the full maintenance flow and restart Linux after success |
-EOF
-)"
-
-    if command -v gum >/dev/null 2>&1 && [[ -t 1 ]]; then
-        printf '%s\n' "${help_text}" | gum format
-        return
-    fi
-
-    cat <<'EOF'
-Usage:
-  ph-update
-  ph-update -r
-  ph-update --help
-
-Run os-doctor, refresh Pi-hole, and optionally restart Linux.
 EOF
 }
 
@@ -169,76 +164,22 @@ update_pihole() {
     pihole -f
 }
 
-print_summary() {
-    local entry=""
-    local kind=""
-    local message=""
-    local summary_body=""
-    local step=""
-    local steps_body=""
-
-    printf '\n'
-    _header "Summary"
-
-    summary_body="passed: ${PASS_COUNT}"$'\n'"warnings: ${WARN_COUNT}"$'\n'"failed: ${FAIL_COUNT}"
-    for entry in "${SUMMARY_RESULTS[@]}"; do
-        kind="${entry%%$'\t'*}"
-        message="${entry#*$'\t'}"
-        summary_body+=$'\n'
-        summary_body+="${kind}  ${message}"
-    done
-
-    _box "${summary_body}"
-    printf '\n'
-
-    if [[ "${FAIL_COUNT}" -eq 0 ]]; then
-        if [[ "${HAS_GUM}" == true ]]; then
-            gum style --foreground 76 --bold "Passed: ${PASS_COUNT}  Warnings: ${WARN_COUNT}  Failed: ${FAIL_COUNT}"
-            gum style --foreground 76 --bold "Update run completed."
-        else
-            printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
-            printf 'Update run completed.\n'
-        fi
-        return 0
-    fi
-
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 76 --bold "Passed: ${PASS_COUNT}"
-        gum style --foreground 214 --bold "Warnings: ${WARN_COUNT}"
-        gum style --foreground 196 --bold "Failed: ${FAIL_COUNT}"
-        gum style --foreground 214 --bold "Found ${FAIL_COUNT} failing check(s)."
-    else
-        printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
-        printf 'Found %s failing check(s).\n' "${FAIL_COUNT}" >&2
-    fi
-
-    for step in "${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}"; do
-        steps_body+="- ${step}"$'\n'
-    done
-    if [[ -n "${steps_body}" ]]; then
-        printf '\n'
-        _header "Next Steps"
-        _box "${steps_body%$'\n'}"
-    fi
-
-    return 1
-}
 
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "${1}" in
-            -h|-help|--help|help)
+            -h|--help|help)
                 usage
                 exit 0
                 ;;
             -r|--restart)
                 if ! is_linux; then
-                    die "error: -r/--restart is only supported on Linux."
+                    die "-r/--restart is only supported on Linux."
                 fi
                 RESTART_AFTER_UPDATE=1
                 ;;
             *)
-                die "Unknown argument: ${1}"
+                die "Unknown option: ${1} (see ph-update --help)"
                 ;;
         esac
         shift
@@ -256,6 +197,7 @@ main() {
     parse_args "$@"
 
     preflight_check || {
+        print_results
         print_summary
         return 1
     }
@@ -268,6 +210,7 @@ main() {
     print_intro
 
     check_deps || {
+        print_results
         print_summary
         return 1
     }
@@ -295,6 +238,7 @@ main() {
         "Preparing Pi-hole update commands" \
         update_pihole || true
 
+    print_results
     print_summary || return 1
 
     if [[ "${RESTART_AFTER_UPDATE}" -eq 1 ]]; then

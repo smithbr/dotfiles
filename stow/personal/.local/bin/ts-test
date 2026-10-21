@@ -25,12 +25,15 @@ TS_SELF_HOSTNAME=""
 TS_ACCEPT_DNS=""
 
 usage() {
-    local help_text
-
-    help_text="$(cat <<'EOF'
+    show_help <<'EOF'
 # ts-test
 
 Run focused Tailscale diagnostics for the current machine.
+
+## Usage
+
+    ts-test [COMMAND]
+    ts-test --help
 
 ## Commands
 
@@ -44,25 +47,12 @@ Run focused Tailscale diagnostics for the current machine.
 | `peers`     | Check peer reachability with `tailscale ping`    |
 
 Running `ts-test` with no command runs the full suite.
-EOF
-)"
 
-    if [[ "${HAS_GUM}" == true ]]; then
-        printf '%s\n' "${help_text}" | gum format
-    else
-        cat <<'EOF'
-Usage:
-  ts-test
-  ts-test run
-  ts-test service
-  ts-test network
-  ts-test dns
-  ts-test exit-node
-  ts-test peers
+## Examples
 
-Running ts-test with no command runs the full suite.
+- `ts-test run`: run every check, as `ts-test` alone does
+- `ts-test exit-node`: check only the exit node
 EOF
-    fi
 }
 
 pass_result() {
@@ -543,80 +533,6 @@ test_peers() {
     _box "${section}"
 }
 
-print_summary() {
-    local entry=""
-    local kind=""
-    local message=""
-    local summary_body=""
-    local step=""
-    local steps_body=""
-
-    printf '\n'
-    _header "Summary"
-
-    summary_body="passed: ${PASS_COUNT}"$'\n'"warnings: ${WARN_COUNT}"$'\n'"failed: ${FAIL_COUNT}"
-    for entry in "${SUMMARY_RESULTS[@]}"; do
-        kind="${entry%%$'\t'*}"
-        message="${entry#*$'\t'}"
-        summary_body+=$'\n'
-        summary_body+="${kind}  ${message}"
-    done
-
-    _box "${summary_body}"
-    printf '\n'
-
-    if [[ "${FAIL_COUNT}" -eq 0 && "${WARN_COUNT}" -eq 0 ]]; then
-        if [[ "${HAS_GUM}" == true ]]; then
-            gum style --foreground 76 --bold "Passed: ${PASS_COUNT}  Warnings: ${WARN_COUNT}  Failed: ${FAIL_COUNT}"
-            gum style --foreground 76 --bold "All checks passed."
-        else
-            printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
-            printf 'All checks passed.\n'
-        fi
-        return 0
-    fi
-
-    if [[ "${FAIL_COUNT}" -eq 0 ]]; then
-        if [[ "${HAS_GUM}" == true ]]; then
-            gum style --foreground 76 --bold "Passed: ${PASS_COUNT}"
-            gum style --foreground 214 --bold "Warnings: ${WARN_COUNT}"
-            gum style --foreground 214 --bold "Completed with ${WARN_COUNT} warning(s)."
-        else
-            printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
-            printf 'Completed with %s warning(s).\n' "${WARN_COUNT}" >&2
-        fi
-        for step in "${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}"; do
-            steps_body+="- ${step}"$'\n'
-        done
-        if [[ -n "${steps_body}" ]]; then
-            printf '\n'
-            _header "Next Steps"
-            _box "${steps_body%$'\n'}"
-        fi
-        return 0
-    fi
-
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 76 --bold "Passed: ${PASS_COUNT}"
-        gum style --foreground 214 --bold "Warnings: ${WARN_COUNT}"
-        gum style --foreground 196 --bold "Failed: ${FAIL_COUNT}"
-        gum style --foreground 196 --bold "Found ${FAIL_COUNT} failing check(s)."
-    else
-        printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
-        printf 'Found %s failing check(s).\n' "${FAIL_COUNT}" >&2
-    fi
-
-    for step in "${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}"; do
-        steps_body+="- ${step}"$'\n'
-    done
-    if [[ -n "${steps_body}" ]]; then
-        printf '\n'
-        _header "Next Steps"
-        _box "${steps_body%$'\n'}"
-    fi
-
-    return 1
-}
 
 parse_args() {
     [[ $# -gt 0 ]] || {
@@ -705,6 +621,7 @@ main() {
     parse_args "$@"
 
     if ! check_deps; then
+        print_results
         print_summary
         return 1
     fi
@@ -712,6 +629,7 @@ main() {
     load_state
     print_intro
     run_command
+    print_results
     print_summary
 }
 

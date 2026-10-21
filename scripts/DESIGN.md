@@ -2,7 +2,7 @@
 
 How a script in this repo looks and behaves to the person running it: help, arguments, output, prompts, and the end of a run. It applies to every new script under `scripts/` and `stow/*/.local/bin/`, and to any script whose interface you reshape. Shell standards (quoting, `[[ ]]`, `printf`, functions) come from `~/.config/agents/rules/08-shell.mdc`; where a layer goes is in [`stow/README.md`](../stow/README.md). Bootstrap scripts that run before the repo is linked follow [`bootstrap/README.md`](bootstrap/README.md) first.
 
-The model scripts are `stow/tools/.local/bin/os-doctor` (a check-and-fix run), `stow/personal/.local/bin/firetv` (subcommands), and `scripts/doctor.sh` (a report followed by a list of changes). `sshkey` predates the shared helpers and redefines them; do not copy its header.
+Copy from `stow/tools/.local/bin/os-doctor` for the shape of a run and its help, `stow/personal/.local/bin/firetv` for subcommands, arguments, and errors, and `scripts/doctor.sh` only for its one-list review (section 7). `sshkey` predates the shared helpers and redefines them; do not copy its header.
 
 ## 1. Use the shared helpers, never your own copies
 
@@ -24,18 +24,20 @@ Under `scripts/`, set `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 
 | Need | Use |
 |---|---|
 | Section title | `_header "Name: detail"` |
-| Row in a section | `_check` (passed), `_cross` (failed), `_skip` (skipped), `_item` (plain) |
+| Row in a section | `_check` (passed), `_cross` (failed), `_caution` (warning), `_skip` (skipped), `_item` (plain) |
 | Block of text, summary, next steps | `_box` |
-| Final good or bad line | `_success`, `_warn` |
+| Final line, labeled | `_success`, `_warn` |
 | Log lines | `log_info`, `log_warn`, `log_error` |
 | Stop with an error | `die "message"` |
 | Slow command (network, install, build) | `spin "Title" cmd args...` |
 | Pick one / pick several | `choose_one`, `choose_many` |
 | Results and follow-ups | `add_result PASS\|WARN\|FAIL "message"`, `add_next_step "command"` |
+| End of a run | `print_results`, `print_summary` |
+| Help | `show_help <<'EOF'` |
 | Root and sudo | `require_non_root`, `sudo_cmd` |
 | Is a tool installed | `tool_installed NAME` |
 
-A helper two scripts would share (a `confirm`, a summary printer) goes in `common.sh` with a test in `tests/common.bats`, not inline. Colors are the ones these helpers use (212 headers, 76 pass, 214 warn, 196 fail, 244 dim, 240 borders); a script does not pick its own palette.
+A helper two scripts would share (a `confirm`, a summary printer) goes in `common.sh` with a test in `tests/common.bats`, not inline. Colors are the terminal's 16 ANSI colors, so they follow its theme: magenta headers, green pass, yellow warn, red fail, dim detail. The one exception is the log labels (`INFO`, `SUCCESS`, `WARN`, `ERROR`), which use gum log's fixed 256-color palette so they match gum's own levels. The helpers print them without gum, which draws only boxes, help, pickers, and spinners. A script does not pick its own palette.
 
 ## 2. Shape of the file
 
@@ -48,7 +50,7 @@ Top to bottom: shebang and `set -euo pipefail`, a one-line comment saying what t
 ## 3. Help
 
 - `-h`, `--help`, and `help` as a subcommand print help and exit 0.
-- Help is one markdown heredoc in `usage()`: `# name`, one sentence on what it does, then `## Commands` (a table) or `## Steps` (a list), `## Options`, and `## Examples`. On a terminal with gum it goes through `gum format`; otherwise the same text prints as is. Never keep a second, shorter plain version.
+- Help is one markdown heredoc piped to `show_help` in `usage()`: `# name`, one sentence on what it does, `## Usage` with the usage lines as an indented block, then `## Commands` (a table) or `## Steps` (a list), `## Options`, and `## Examples`. `show_help` renders it with `gum format` on a terminal and prints it as is otherwise. Never keep a second, shorter plain version.
 - Help says what the script changes and what it never touches, and the first-run setup a person needs.
 
 ## 4. Arguments and exit codes
@@ -64,26 +66,27 @@ Top to bottom: shebang and `set -euo pipefail`, a one-line comment saying what t
 - Each stage is a `_header` followed by rows: `_check` for done, `_cross` for failed, `_skip` for skipped with the reason. One line per thing, no prose paragraphs.
 - Every failure is two parts: what went wrong, then what to do, as a command when there is one (`add_next_step "ph login"`). Never a bare "failed".
 - Wrap slow commands in `spin`, never fast local ones. With `--verbose` the output streams instead.
-- Styling only on a terminal: `HAS_GUM` is true when gum is installed and stdout is a terminal, and every helper falls back to plain text. `NAME | cat` must read cleanly with no escape codes.
+- Styling only on a terminal: `HAS_COLOR` (stdout) and `HAS_COLOR_ERR` (stderr) are true on a terminal with `NO_COLOR` unset, `HAS_GUM` also needs gum installed, and every helper falls back to plain text. `NAME | cat` must read cleanly with no escape codes.
+- gum comes from `Brewfile.core`, which `brew.sh` installs first. No other script installs or downloads it; without gum, boxes, help, and pickers are plain.
 - Data goes to stdout, messages to stderr, so `NAME list | grep x` works. A `--tsv` or plain listing is better than parsing styled output.
 
 ## 6. End of a run
 
 Every run that does more than one thing ends the same way:
 
-1. A count line: `Passed: N  Warnings: N  Failed: N` (`_success` when nothing failed, `_warn` otherwise).
-2. `_header "Next steps"` and a `_box` of `- command` lines from `add_next_step`, only when there are any.
-3. The exit code from section 4.
+1. `print_results`, when the rows were not shown as the run went: every `add_result` under a `Summary` header.
+2. `print_summary`: the count line `Passed: N  Warnings: N  Failed: N`, then `Next steps` with the `add_next_step` commands when there are any. It returns 1 when something failed, so it can end `main`.
 
 A single action ends with one line saying what changed (`Disabled 4 packages`), or what would have with `--dry-run`.
 
 ## 7. Prompts
 
-- Ask every question up front, before the first change, then run without stopping. A step that must wait polls with a timeout; it never reads a key mid-run.
-- Choices go through `choose_one` and `choose_many`, which use gum when stdin and stderr are a terminal and a numbered list otherwise; `DOTFILES_PROMPT=gum|read` forces one. Offer the current or safe answer as the default so Enter accepts it.
+- Ask every question before the first change, then run without stopping. A step that must wait polls with a timeout; it never reads a key mid-run.
+- Choices go through `choose_one` and `choose_many`: gum when stdin and stderr are a terminal, else a numbered list; `DOTFILES_PROMPT=gum|read` forces one. Default to the current or safe answer so Enter accepts it.
+- gum's key help is off (a dark theme hides it); a picker with extra keys lists them in its header, like `choose_many`.
 - A yes/no question defaults to no: `gum confirm` on a terminal, else `Question? [y/N]`. `--yes` answers yes; `--dry-run` asks nothing.
-- No terminal or closed stdin never hangs and never opts in to anything: the script takes the saved choice or the safe default, or fails with the choices it would have offered and the flag that sets one. Guard `read` for `set -e` (`IFS= read -r reply || reply=""`).
-- A script with subcommands and no arguments, on a terminal, may offer `gum choose` over the subcommands; without a terminal it prints usage and exits 2.
+- No terminal or closed stdin never hangs or opts in: the script takes the saved choice or safe default, or fails naming the choices and the flag that sets one. Guard `read` for `set -e` (`IFS= read -r reply || reply=""`).
+- A script with subcommands and no arguments may offer `gum choose` over them on a terminal; otherwise it prints usage and exits 2.
 - More than a handful of items to decide on get one list with each row set to its suggestion and Enter applying all of them, as `df-doctor` does, not a question per item.
 
 ## 8. Making changes

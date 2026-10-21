@@ -23,18 +23,21 @@ for dir in "${supplemental_path_dirs[@]}"; do
 done
 
 usage() {
-    local help_text
-
-    help_text="$(cat <<'EOF'
+    show_help <<'EOF'
 # ph-test
 
 Run Pi-hole + Unbound diagnostics against the given DNS server.
+
+## Usage
+
+    ph-test [dns-server-ip]
+    ph-test --help
 
 ## Arguments
 
 | Argument | Description |
 |----------|-------------|
-| `dns-server-ip` | Optional DNS server to test. Defaults to `127.0.0.1`. |
+| `dns-server-ip` | Optional DNS server to test. Defaults to 127.0.0.1. |
 
 ## Examples
 
@@ -42,21 +45,6 @@ Run Pi-hole + Unbound diagnostics against the given DNS server.
 |---------|-------------|
 | `ph-test` | Run the full suite against `127.0.0.1` |
 | `ph-test 192.0.2.53` | Run the full suite against a specific DNS server |
-EOF
-)"
-
-    if command -v gum >/dev/null 2>&1 && [[ -t 1 ]]; then
-        printf '%s\n' "${help_text}" | gum format
-        return
-    fi
-
-    cat <<'EOF'
-Usage:
-  ph-test [dns-server-ip]
-  ph-test --help
-
-Run Pi-hole + Unbound diagnostics against the given DNS server.
-Defaults to 127.0.0.1 when no server is provided.
 EOF
 }
 
@@ -755,7 +743,7 @@ print_intro() {
 main() {
     check_deps || {
         flush_section
-        print_summary
+        finish_run
         return 1
     }
 
@@ -772,72 +760,19 @@ main() {
     test_stats
 
     flush_section
-    print_summary
+    finish_run
 }
 
-print_summary() {
-    local entry=""
-    local kind=""
-    local message=""
-    local summary_body=""
-    local step=""
-    local steps_body=""
-
-    printf '\n'
-    _header "Summary"
-
-    summary_body="passed: ${PASS_COUNT}"$'\n'"warnings: ${WARN_COUNT}"$'\n'"failed: ${FAIL_COUNT}"
-    for entry in "${SUMMARY_RESULTS[@]}"; do
-        kind="${entry%%$'\t'*}"
-        message="${entry#*$'\t'}"
-        summary_body+=$'\n'
-        summary_body+="${kind}  ${message}"
-    done
-
-    _box "${summary_body}"
-    printf '\n'
-
-    if [[ "${FAIL_COUNT}" -eq 0 && "${WARN_COUNT}" -eq 0 ]]; then
-        if [[ "${HAS_GUM}" == true ]]; then
-            gum style --foreground 76 --bold "Passed: ${PASS_COUNT}  Warnings: ${WARN_COUNT}  Failed: ${FAIL_COUNT}"
-            gum style --foreground 76 --bold "All checks passed."
-        else
-            printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
-            printf 'All checks passed.\n'
-        fi
-        return 0
+# Results, then counts; a run that did not pass gets the Unbound fixes.
+finish_run() {
+    if ((FAIL_COUNT + WARN_COUNT > 0)); then
+        add_next_step "Check config with: sudo unbound-checkconf"
+        add_next_step "View logs with: sudo journalctl -u unbound --no-pager -n 30"
+        add_next_step "Restart Unbound with: sudo systemctl restart unbound"
+        add_next_step "Re-run tests with: ${0} ${DNS_SERVER}"
     fi
-
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 76 --bold "Passed: ${PASS_COUNT}"
-        gum style --foreground 214 --bold "Warnings: ${WARN_COUNT}"
-        gum style --foreground 196 --bold "Failed: ${FAIL_COUNT}"
-    else
-        printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
-    fi
-
-    if [[ "${FAIL_COUNT}" -eq 0 ]]; then
-        _warn "Completed with ${WARN_COUNT} warning(s)."
-    else
-        _warn "Found ${FAIL_COUNT} failing check(s)."
-    fi
-
-    add_next_step "Check config with: sudo unbound-checkconf"
-    add_next_step "View logs with: sudo journalctl -u unbound --no-pager -n 30"
-    add_next_step "Restart Unbound with: sudo systemctl restart unbound"
-    add_next_step "Re-run tests with: ${0} ${DNS_SERVER}"
-
-    for step in "${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}"; do
-        steps_body+="- ${step}"$'\n'
-    done
-
-    if [[ -n "${steps_body}" ]]; then
-        printf '\n'
-        _header "Next Steps"
-        _box "${steps_body%$'\n'}"
-    fi
-
-    [[ "${FAIL_COUNT}" -eq 0 ]]
+    print_results
+    print_summary
 }
 
 main "$@"

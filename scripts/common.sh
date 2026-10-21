@@ -8,106 +8,63 @@ if [[ -z "${XDG_CONFIG_HOME:-}" && -n "${HOME:-}" ]]; then
     export XDG_CONFIG_HOME="${HOME}/.config"
 fi
 
-_has_gum=""
-_has_gum_checked=0
-_check_gum() {
-    if [[ "${_has_gum_checked}" -eq 0 ]]; then
-        _has_gum_checked=1
-        command -v gum >/dev/null 2>&1 && _has_gum=1 || _has_gum=0
-    fi
-}
-
-log_info() {
-    _check_gum
-    if [[ "${_has_gum}" -eq 1 ]]; then
-        gum log --level info "$*"
-    else
-        printf "info: %s\n" "$*"
-    fi
-}
-
-log_warn() {
-    _check_gum
-    if [[ "${_has_gum}" -eq 1 ]]; then
-        gum log --level warn "$*" >&2
-    else
-        printf "warning: %s\n" "$*" >&2
-    fi
-}
-
-log_error() {
-    _check_gum
-    if [[ "${_has_gum}" -eq 1 ]]; then
-        gum log --level error "$*" >&2
-    else
-        printf "error: %s\n" "$*" >&2
-    fi
-}
-
-# HAS_GUM: gum installed and stdout a terminal, decided when sourced; call
-# again after changing PATH.
+# Styling uses the terminal's own 16 ANSI colors, so it follows the theme;
+# only the log labels below use gum's fixed 256-color palette.
+# HAS_COLOR and HAS_COLOR_ERR: stdout and stderr are a terminal and NO_COLOR
+# is unset. HAS_GUM: gum is installed and stdout a terminal, for boxes, help,
+# and pickers. Decided when sourced; call again after changing PATH.
 detect_gum() {
-    HAS_GUM=false
+    HAS_GUM=false HAS_COLOR=false HAS_COLOR_ERR=false
     command -v gum >/dev/null 2>&1 && [[ -t 1 ]] && HAS_GUM=true
+    if [[ -z "${NO_COLOR:-}" ]]; then
+        [[ -t 1 ]] && HAS_COLOR=true
+        [[ -t 2 ]] && HAS_COLOR_ERR=true
+    fi
     return 0
 }
 detect_gum
 
-_header() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --bold --foreground 212 "$1"
+# gum's key-help line is drawn in fixed dark grays that a dark theme hides, so
+# it is off for every gum prompt. A picker that needs more than arrows and
+# Enter lists its keys in its header instead, as choose_many does.
+export GUM_CHOOSE_SHOW_HELP=false GUM_CONFIRM_SHOW_HELP=false \
+    GUM_FILTER_SHOW_HELP=false GUM_INPUT_SHOW_HELP=false
+
+# One line of TEXT in ANSI style CODE when COLOR is true, else PLAIN.
+_paint() {
+    local color="$1" code="$2" text="$3" plain="$4"
+    if [[ "${color}" == true ]]; then
+        printf '\033[%sm%s\033[0m\n' "${code}" "${text}"
     else
-        printf '%s\n' "$1"
+        printf '%s\n' "${plain}"
     fi
 }
 
-_item() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 244 "  $1"
+# Log lines lead with a bold label in gum log's own 256-color palette, so they
+# match gum's levels: INFO 86, WARN 192, ERROR 204. gum has no success level;
+# SUCCESS (_success) is 84, a green from the same bright family.
+log_info() { _badge "${HAS_COLOR}" '1;38;5;86' INFO "$*"; }
+log_warn() { _badge "${HAS_COLOR_ERR}" '1;38;5;192' WARN "$*" >&2; }
+log_error() { _badge "${HAS_COLOR_ERR}" '1;38;5;204' ERROR "$*" >&2; }
+
+_header() { _paint "${HAS_COLOR}" '1;35' "$1" "$1"; }
+_item() { _paint "${HAS_COLOR}" '2' "  $1" "  $1"; }
+_check() { _paint "${HAS_COLOR}" '32' "  ✓ $1" "  ok: $1"; }
+_cross() { _paint "${HAS_COLOR}" '31' "  ✗ $1" "  failed: $1"; }
+_caution() { _paint "${HAS_COLOR}" '33' "  ! $1" "  warning: $1"; }
+_skip() { _paint "${HAS_COLOR}" '2' "  - $1" "  skipped: $1"; }
+# The last line of a run: a bold LABEL in style CODE, then TEXT.
+_badge() {
+    local color="$1" code="$2" label="$3" text="$4"
+    if [[ "${color}" == true ]]; then
+        printf '\033[%sm%s\033[0m %s\n' "${code}" "${label}" "${text}"
     else
-        printf '  %s\n' "$1"
+        printf '%s %s\n' "${label}" "${text}"
     fi
 }
 
-_check() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 76 "  $(printf '\xe2\x9c\x93') $1"
-    else
-        printf '  ok: %s\n' "$1"
-    fi
-}
-
-_cross() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 196 "  $(printf '\xe2\x9c\x97') $1"
-    else
-        printf '  failed: %s\n' "$1"
-    fi
-}
-
-_skip() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 244 "  - $1"
-    else
-        printf '  skipped: %s\n' "$1"
-    fi
-}
-
-_success() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 76 --bold "$1"
-    else
-        printf '%s\n' "$1"
-    fi
-}
-
-_warn() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 214 --bold "$1"
-    else
-        printf '%s\n' "$1" >&2
-    fi
-}
+_success() { _badge "${HAS_COLOR}" '1;38;5;84' SUCCESS "$1"; }
+_warn() { _badge "${HAS_COLOR_ERR}" '1;38;5;192' WARN "$1" >&2; }
 
 # A bordered block. gum style never wraps, so a line wider than the terminal
 # would tear the border; cap the box to the terminal width only when needed.
@@ -121,18 +78,14 @@ _box() {
         if (( longest + 4 > columns && columns > 12 )); then
             width_args=(--width "$((columns - 2))")
         fi
-        printf '%s' "${content}" | gum style --border rounded --border-foreground 240 --margin "0 0" --padding "0 1" ${width_args[@]+"${width_args[@]}"}
+        printf '%s' "${content}" | gum style --border rounded --border-foreground 8 --margin "0 0" --padding "0 1" ${width_args[@]+"${width_args[@]}"}
     else
         printf '%s\n' "${content}" | sed 's/^/  /'
     fi
 }
 
 die() {
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum log --level error "$1" >&2
-    else
-        printf '%s\n' "$1" >&2
-    fi
+    _badge "${HAS_COLOR_ERR}" '1;38;5;204' ERROR "$1" >&2
     exit 1
 }
 
@@ -161,6 +114,53 @@ add_next_step() {
         [[ "${existing}" == "${step}" ]] && return 0
     done
     NEXT_STEPS+=("${step}")
+}
+
+# Every add_result under a Summary header, for a run whose rows were not
+# shown as it went.
+print_results() {
+    local entry body=""
+
+    for entry in ${SUMMARY_RESULTS[@]+"${SUMMARY_RESULTS[@]}"}; do
+        body+="${entry%%$'\t'*}  ${entry#*$'\t'}"$'\n'
+    done
+    [[ -n "${body}" ]] || return 0
+    printf '\n'
+    _header "Summary"
+    _box "${body%$'\n'}"
+}
+
+# The end of a run: the count line, then the next steps. Returns 1 when a
+# result failed, so it can be the last command of main.
+print_summary() {
+    local step body=""
+    local counts="Passed: ${PASS_COUNT}  Warnings: ${WARN_COUNT}  Failed: ${FAIL_COUNT}"
+
+    printf '\n'
+    if ((FAIL_COUNT > 0)); then
+        _warn "${counts}"
+    else
+        _success "${counts}"
+    fi
+    for step in ${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}; do
+        body+="- ${step}"$'\n'
+    done
+    if [[ -n "${body}" ]]; then
+        printf '\n'
+        _header "Next steps"
+        _box "${body%$'\n'}"
+    fi
+    ((FAIL_COUNT == 0))
+}
+
+# Help, as markdown on stdin: rendered by gum format on a terminal, printed
+# as is otherwise.
+show_help() {
+    if [[ "${HAS_GUM}" == true ]]; then
+        gum format
+    else
+        cat
+    fi
 }
 
 require_non_root() {
@@ -209,8 +209,8 @@ spin() {
     local title="$1"
     shift
 
-    # gum spin hides the wrapped command's stdout/stderr, which turns real
-    # failures into an opaque "<title> failed" with no detail. VERBOSE=1
+    # gum spin hides the wrapped command's output; --show-error prints it if
+    # the command fails, so a failure is never just "<title> failed". VERBOSE=1
     # (see brew.sh -v/--verbose) skips the spinner so output streams through.
     if [[ "${VERBOSE:-0}" -eq 1 ]]; then
         log_info "${title}"
@@ -224,7 +224,7 @@ spin() {
     # Spinner only on a terminal and for an external command; else log the
     # title and stream.
     if command -v gum >/dev/null 2>&1 && [[ -t 1 && "$(type -t "$1" 2>/dev/null)" != "function" ]]; then
-        if ! gum spin --spinner dot --title "${title}" --padding="0 1" -- "$@"; then
+        if ! gum spin --spinner dot --show-error --title "${title}" --padding="0 1" -- "$@"; then
             log_error "${title} failed"
             return 1
         fi
@@ -248,12 +248,10 @@ gum_choose_multiselect() {
         --cursor-prefix="> " \
         --selected-prefix="* " \
         --unselected-prefix="  " \
-        --no-show-help \
         --padding="0 1" \
-        --cursor.foreground="63" \
-        --header.foreground="245" \
-        --item.foreground="252" \
-        --selected.foreground="213" \
+        --cursor.foreground="5" \
+        --header.foreground="5" \
+        --selected.foreground="5" \
         "$@"
 }
 
@@ -268,6 +266,20 @@ prompt_mode() {
     else
         printf 'read\n'
     fi
+}
+
+# Yes or no, by gum or a [y/N] question on stderr answered on stdin. No
+# unless the answer starts with y; end of input is no.
+#   confirm QUESTION
+confirm() {
+    local answer=""
+    if [[ "$(prompt_mode)" == gum ]]; then
+        gum confirm "$1"
+        return
+    fi
+    printf '%s [y/N] ' "$1" >&2
+    IFS= read -r answer || answer=""
+    [[ "${answer}" =~ ^[Yy] ]]
 }
 
 # One of the ITEMs, by gum or a numbered list on stderr, printed to stdout.
@@ -346,7 +358,7 @@ choose_many() {
         if [[ "${#preselected[@]}" -gt 0 ]]; then
             options=(--selected="$(IFS=,; printf '%s' "${preselected[*]}")" "${options[@]}")
         fi
-        log_info "Use tab or x to select, ctrl+a for all, enter to continue, or esc to skip." >&2
+        header+=$'\n'"x toggles, ctrl+a ticks all, enter applies, esc skips"
         # Esc exits non-zero; whatever gum printed before that is no choice.
         reply="$(gum_choose_multiselect "${header}" "${height}" --label-delimiter=$'\t' "${options[@]}")" || return 1
         [[ -z "${reply}" ]] || printf '%s\n' "${reply}"

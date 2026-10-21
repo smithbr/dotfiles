@@ -21,12 +21,15 @@ NPM_BIN="${NPM_BIN:-npm}"
 ANTIDOTE_ZSH="${ANTIDOTE_ZSH:-}"
 
 usage() {
-    local help_text
-
-    help_text="$(cat <<'EOF'
+    show_help <<'EOF'
 # os-doctor
 
 Run operating system and package-manager updates for this machine.
+
+## Usage
+
+    os-doctor
+    os-doctor --help
 
 ## Steps
 
@@ -41,20 +44,6 @@ Run operating system and package-manager updates for this machine.
 ## Examples
 
 - `os-doctor`: run the full update flow for the current platform
-EOF
-)"
-
-    if [[ "${HAS_GUM}" == true ]]; then
-        printf '%s\n' "${help_text}" | gum format
-        return
-    fi
-
-    cat <<'EOF'
-Usage:
-  os-doctor
-  os-doctor --help
-
-Run operating system and package-manager updates for this machine.
 EOF
 }
 
@@ -385,74 +374,13 @@ run_macos_updates() {
     run_brew_updates
 }
 
-print_summary() {
-    local entry=""
-    local kind=""
-    local message=""
-    local summary_body=""
-    local step=""
-    local steps_body=""
-
-    printf '\n'
-    _header "Summary"
-
-    summary_body="passed: ${PASS_COUNT}"$'\n'"warnings: ${WARN_COUNT}"$'\n'"failed: ${FAIL_COUNT}"
-    for entry in "${SUMMARY_RESULTS[@]}"; do
-        kind="${entry%%$'\t'*}"
-        message="${entry#*$'\t'}"
-        summary_body+=$'\n'
-        summary_body+="${kind}  ${message}"
-    done
-
-    _box "${summary_body}"
-    printf '\n'
-
-    if [[ "${FAIL_COUNT}" -eq 0 && "${WARN_COUNT}" -eq 0 ]]; then
-        if [[ "${HAS_GUM}" == true ]]; then
-            gum style --foreground 76 --bold "Passed: ${PASS_COUNT}  Warnings: ${WARN_COUNT}  Failed: ${FAIL_COUNT}"
-            gum style --foreground 76 --bold "OS update run completed."
-        else
-            printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
-            printf 'OS update run completed.\n'
-        fi
-        return 0
-    fi
-
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 76 --bold "Passed: ${PASS_COUNT}"
-        gum style --foreground 214 --bold "Warnings: ${WARN_COUNT}"
-        gum style --foreground 196 --bold "Failed: ${FAIL_COUNT}"
-        gum style --foreground 214 --bold "Completed with ${WARN_COUNT} warning(s) and ${FAIL_COUNT} failing check(s)."
-    else
-        printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
-        printf 'Completed with %s warning(s) and %s failing check(s).\n' "${WARN_COUNT}" "${FAIL_COUNT}" >&2
-    fi
-
-    for step in "${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}"; do
-        steps_body+="- ${step}"$'\n'
-    done
-
-    if [[ -n "${steps_body}" ]]; then
-        printf '\n'
-        _header "Next Steps"
-        _box "${steps_body%$'\n'}"
-    fi
-
-    [[ "${FAIL_COUNT}" -eq 0 ]]
-}
-
 parse_args() {
-    case "${1:-}" in
-        "")
-            ;;
-        -h|-help|--help|help)
-            usage
-            exit 0
-            ;;
-        *)
-            die "Unknown argument: ${1}"
-            ;;
-    esac
+    while (($# > 0)); do
+        case "$1" in
+            -h|--help|help) usage; exit 0 ;;
+            *) die "Unknown option: $1 (see os-doctor --help)" ;;
+        esac
+    done
 }
 
 main() {
@@ -473,6 +401,7 @@ main() {
             printf '\n'
             _header "Platform"
             _box "FAIL  Unsupported OS: ${OSTYPE}"$'\n'"Fix: Run os-doctor on macOS or Linux"
+            print_results
             print_summary
             exit 1
             ;;
@@ -480,6 +409,9 @@ main() {
 
     run_antidote_updates
     run_tool_cache_cleanup
+    command -v gum >/dev/null 2>&1 \
+        || add_next_step "brew install gum, for boxes, rendered help, and arrow-key pickers"
+    print_results
     print_summary
 }
 

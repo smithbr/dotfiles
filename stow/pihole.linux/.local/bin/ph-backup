@@ -23,12 +23,17 @@ for dir in "${supplemental_path_dirs[@]}"; do
 done
 
 usage() {
-    local help_text
-
-    help_text="$(cat <<'EOF'
+    show_help <<'EOF'
 # ph-backup
 
 Snapshot Pi-hole, Unbound, and Tailscale into a single dated tar.gz archive.
+
+## Usage
+
+    ph-backup [-o|--output DIR] [-c|--copy-to DEST]
+    ph-backup --help
+
+The archive and any `--copy-to` copy are written as the user who ran sudo, owner-only (0600).
 
 ## Contents
 
@@ -54,23 +59,6 @@ Snapshot Pi-hole, Unbound, and Tailscale into a single dated tar.gz archive.
 | `ph-backup` | Back up to `~/backups/ph-backup` |
 | `ph-backup -o /mnt/nas/pihole` | Back up to a mounted share |
 | `ph-backup -c nas:/backups` | Back up locally, then copy off-box over scp |
-EOF
-)"
-
-    if command -v gum >/dev/null 2>&1 && [[ -t 1 ]]; then
-        printf '%s\n' "${help_text}" | gum format
-        return
-    fi
-
-    cat <<'EOF'
-Usage:
-  ph-backup [-o|--output DIR] [-c|--copy-to DEST]
-  ph-backup --help
-
-Snapshot Pi-hole (Teleporter), Unbound (/etc/unbound), and Tailscale state,
-write a summary of all three, and roll them into a dated tar.gz archive.
-Defaults to ~/backups/ph-backup of the user who ran sudo. The archive and
-any --copy-to copy are written as that user, owner-only (0600).
 EOF
 }
 
@@ -103,7 +91,7 @@ parse_args() {
                 COPY_TO="${1#--copy-to=}"
                 ;;
             *)
-                die "Unknown argument: ${1}"
+                die "Unknown option: ${1} (see ph-backup --help)"
                 ;;
         esac
         shift
@@ -879,55 +867,15 @@ run_step() {
     return 1
 }
 
-print_summary() {
-    local entry=""
-    local kind=""
-    local message=""
-    local summary_body=""
-    local step=""
-    local steps_body=""
-
-    printf '\n'
-    _header "Summary"
-
-    summary_body="passed: ${PASS_COUNT}"$'\n'"warnings: ${WARN_COUNT}"$'\n'"failed: ${FAIL_COUNT}"
-    for entry in "${SUMMARY_RESULTS[@]}"; do
-        kind="${entry%%$'\t'*}"
-        message="${entry#*$'\t'}"
-        summary_body+=$'\n'
-        summary_body+="${kind}  ${message}"
-    done
-
-    _box "${summary_body}"
-    printf '\n'
-
+# Results, the archive written, then counts.
+finish_run() {
+    print_results
     if [[ -n "${ARCHIVE_PATH}" && -s "${STAGED_ARCHIVE}" ]]; then
+        printf '\n'
+        _header "Archive"
         _box "Archive: ${ARCHIVE_PATH}"$'\n'"Size: $(file_size "${STAGED_ARCHIVE}")"
-        printf '\n'
     fi
-
-    for step in "${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}"; do
-        steps_body+="- ${step}"$'\n'
-    done
-    if [[ -n "${steps_body}" ]]; then
-        _header "Next Steps"
-        _box "${steps_body%$'\n'}"
-        printf '\n'
-    fi
-
-    if [[ "${HAS_GUM}" == true ]]; then
-        gum style --foreground 76 --bold "Passed: ${PASS_COUNT}"
-        if [[ "${WARN_COUNT}" -gt 0 ]]; then
-            gum style --foreground 214 --bold "Warnings: ${WARN_COUNT}"
-        fi
-        if [[ "${FAIL_COUNT}" -gt 0 ]]; then
-            gum style --foreground 196 --bold "Failed: ${FAIL_COUNT}"
-        fi
-    else
-        printf 'Passed: %s  Warnings: %s  Failed: %s\n' "${PASS_COUNT}" "${WARN_COUNT}" "${FAIL_COUNT}"
-    fi
-
-    [[ "${FAIL_COUNT}" -eq 0 ]]
+    print_summary
 }
 
 main() {
@@ -936,7 +884,7 @@ main() {
     print_intro
 
     check_deps || {
-        print_summary || true
+        finish_run || true
         return 1
     }
 
@@ -981,7 +929,7 @@ main() {
         write_summary || true
 
     if [[ "${FAIL_COUNT}" -gt 0 ]]; then
-        print_summary || true
+        finish_run || true
         return 1
     fi
 
@@ -1005,7 +953,7 @@ main() {
             copy_offbox || true
     fi
 
-    print_summary || return 1
+    finish_run || return 1
 }
 
 main

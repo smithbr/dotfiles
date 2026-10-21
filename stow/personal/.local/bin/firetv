@@ -69,69 +69,62 @@ COMMAND=""
 declare -a COMMAND_ARGS=()
 
 usage() {
-    cat <<EOF
-Usage:
-  firetv [--host IP[:PORT]] [--dry-run] [--watch SECONDS] COMMAND [ARGS]
+    show_help <<EOF
+# firetv
 
-Debloat the TCL Fire TV over ADB (Fire OS 8). Packages are disabled with
-\`pm disable-user\`, never uninstalled, so \`enable\` undoes everything.
+Debloat the TCL Fire TV over ADB (Fire OS 8). Packages are disabled with \`pm disable-user\`, never uninstalled, so \`enable\` undoes everything.
 
-Commands:
-  connect            connect and check the TV accepted this Mac
-  backup             save the full package list to ${FIRETV_STATE_DIR}
-  disable TARGET...  disable packages: a group (telemetry, ads, bloat, all)
-                     or a package name; core packages are refused
-  enable TARGET...   re-enable them, or any package by name
-  list [GROUP...]    show the debloat list: enabled, disabled, or absent
-  doctor             check adb, the connection, core apps, the debloat list,
-                     and, for packages that need root, that the Pi-hole
-                     blocks the hosts in their code the TV looks up; offers
-                     to block the rest
-  domains PACKAGE    the domains a package uses: hostnames built into its
-                     code that the TV has looked up, then what it connects to
-                     while watched; each with the Pi-hole's verdict
-  animations [fast|normal]
-                     show the animation speed, or set it: fast is 0.5x,
-                     normal is Android's 1x
-  tweaks             list the tweaks, each on, off, or partly on
-  tweak NAME on|off  apply a tweak, saving the values it replaces; off puts
-                     them back
-  settings-diff [reset]
-                     find a setting's key: run once, change the setting in
-                     the TV's menus, run again to see what changed; reset
-                     drops the saved snapshot
-  clean              trim app caches and show the storage freed
-  apps               list the apps you installed, with version codes
-  install FILE.apk   sideload an app, or update one in place (needs Apps
-                     from unknown sources on)
-  uninstall PACKAGE  remove an app you installed and its data, after asking;
-                     built-in and core packages are refused
-  reboot             restart the TV
-  disconnect         drop the ADB connection
+## Usage
 
-Options:
-  --host IP[:PORT]   the TV (default ${FIRETV_HOST}; or set FIRETV_HOST)
-  -n, --dry-run      show what disable or enable would change
-  -w, --watch SECS   domains: how long to watch connections (default 30; 0
-                     skips watching). Use the app meanwhile to see more.
-  -a, --all          domains: also list built-in hostnames the TV never
-                     looked up (mostly SDK tables, rarely called)
-  -h, --help         show this help
+    firetv [--host IP[:PORT]] [--dry-run] [--watch SECONDS] COMMAND [ARGS]
+    firetv --help
 
-First run: on the TV, Settings > My Fire TV > About, click the device name 7
-times; then Developer options > ADB debugging on. Install adb with
-\`brew install --cask android-platform-tools\`.
+## Commands
 
-Tweaks: built in are Android settings; add your own to ${TWEAKS_FILE}, one per
-line: NAME, then system|secure|global, KEY, VALUE, DESCRIPTION, tab-separated.
-A name on several lines sets each key.
+| Command | What it does |
+|---|---|
+| \`connect\` | Connect and check the TV accepted this Mac |
+| \`backup\` | Save the full package list to ${FIRETV_STATE_DIR} |
+| \`disable TARGET...\` | Disable packages: a group (telemetry, ads, bloat, all) or a package name; core packages are refused |
+| \`enable TARGET...\` | Re-enable them, or any package by name |
+| \`list [GROUP...]\` | Show the debloat list: enabled, disabled, or absent |
+| \`doctor\` | Check adb, the connection, core apps, the debloat list, and, for packages that need root, that the Pi-hole blocks the hosts in their code the TV looks up; offers to block the rest |
+| \`domains PACKAGE\` | The domains a package uses: hostnames built into its code that the TV has looked up, then what it connects to while watched; each with the Pi-hole's verdict |
+| \`animations [fast\|normal]\` | Show the animation speed, or set it: fast is 0.5x, normal is Android's 1x |
+| \`tweaks\` | List the tweaks, each on, off, or partly on |
+| \`tweak NAME on\|off\` | Apply a tweak, saving the values it replaces; off puts them back |
+| \`settings-diff [reset]\` | Find a setting's key: run once, change the setting in the TV's menus, run again to see what changed; reset drops the saved snapshot |
+| \`clean\` | Trim app caches and show the storage freed |
+| \`apps\` | List the apps you installed, with version codes |
+| \`install FILE.apk\` | Sideload an app, or update one in place (needs Apps from unknown sources on) |
+| \`uninstall PACKAGE\` | Remove an app you installed and its data, after asking; built-in and core packages are refused |
+| \`reboot\` | Restart the TV |
+| \`disconnect\` | Drop the ADB connection |
 
-Pi-hole: doctor checks and blocks through ph, with its PIHOLE_URL and saved
-password; run \`ph login\` once.
+## Options
 
-Suggested order: backup, disable telemetry, reboot and check the TV, then
-disable ads and bloat. Fire OS updates can re-enable packages; run disable
-again. Turn ADB debugging off when done.
+| Option | What it does |
+|---|---|
+| \`--host IP[:PORT]\` | The TV (default ${FIRETV_HOST}; or set FIRETV_HOST) |
+| \`-n\`, \`--dry-run\` | Show what disable or enable would change |
+| \`-w\`, \`--watch SECS\` | domains: how long to watch connections (default 30; 0 skips watching). Use the app meanwhile to see more. |
+| \`-a\`, \`--all\` | domains: also list built-in hostnames the TV never looked up (mostly SDK tables, rarely called) |
+| \`-h\`, \`--help\` | Show this help |
+
+## First run
+
+On the TV, Settings > My Fire TV > About, click the device name 7 times; then Developer options > ADB debugging on. Install adb with \`brew install --cask android-platform-tools\`.
+
+Tweaks: built in are Android settings; add your own to ${TWEAKS_FILE}, one per line: NAME, then system|secure|global, KEY, VALUE, DESCRIPTION, tab-separated. A name on several lines sets each key.
+
+Pi-hole: doctor checks and blocks through ph, with its PIHOLE_URL and saved password; run \`ph login\` once.
+
+## Examples
+
+- \`firetv backup\`, then \`firetv disable telemetry\`, reboot and check the TV, then \`firetv disable ads bloat\`
+- \`firetv --dry-run disable all\`: see what would change
+
+Fire OS updates can re-enable packages; run disable again. Turn ADB debugging off when done.
 EOF
 }
 
@@ -151,7 +144,7 @@ parse_args() {
                 WATCH_SECONDS="$2"
                 shift 2
                 ;;
-            -h|--help) usage; exit 0 ;;
+            -h|--help|help) usage; exit 0 ;;
             -*) die "Unknown option: $1 (see firetv --help)" ;;
             *)
                 if [[ -z "${COMMAND}" ]]; then
@@ -533,35 +526,9 @@ doctor_result() {
     add_result "${kind}" "${message}"
     case "${kind}" in
         PASS) _check "${message}" ;;
-        WARN)
-            if [[ "${HAS_GUM}" == true ]]; then
-                gum style --foreground 214 "  ! ${message}"
-            else
-                printf '  warning: %s\n' "${message}"
-            fi
-            ;;
+        WARN) _caution "${message}" ;;
         FAIL) _cross "${message}" ;;
     esac
-}
-
-doctor_summary() {
-    local step steps_body=""
-
-    printf '\n'
-    if ((FAIL_COUNT > 0)); then
-        _warn "Passed: ${PASS_COUNT}  Warnings: ${WARN_COUNT}  Failed: ${FAIL_COUNT}"
-    else
-        _success "Passed: ${PASS_COUNT}  Warnings: ${WARN_COUNT}  Failed: ${FAIL_COUNT}"
-    fi
-    for step in ${NEXT_STEPS[@]+"${NEXT_STEPS[@]}"}; do
-        steps_body+="- ${step}"$'\n'
-    done
-    if [[ -n "${steps_body}" ]]; then
-        printf '\n'
-        _header "Next steps"
-        _box "${steps_body%$'\n'}"
-    fi
-    ((FAIL_COUNT == 0))
 }
 
 cmd_doctor() {
@@ -574,14 +541,14 @@ cmd_doctor() {
     if ! command -v "${ADB_BIN}" >/dev/null 2>&1; then
         doctor_result FAIL "adb is not installed"
         add_next_step "brew install --cask android-platform-tools"
-        doctor_summary
+        print_summary
         return
     fi
     doctor_result PASS "adb $("${ADB_BIN}" version 2>/dev/null | sed -n '1s/.*version //p')"
 
     if ! connect_tv; then
         doctor_result FAIL "${CONNECT_ERROR}"
-        doctor_summary
+        print_summary
         return
     fi
     doctor_result PASS "Connected and authorized"
@@ -589,7 +556,7 @@ cmd_doctor() {
 
     if ! installed="$(tv_packages 2>&1)" || ! disabled="$(tv_packages -d 2>&1)"; then
         doctor_result FAIL "Could not list packages on the TV"
-        doctor_summary
+        print_summary
         return
     fi
 
@@ -657,7 +624,7 @@ cmd_doctor() {
     fi
 
     add_next_step "Turn ADB debugging off on the TV when you are done"
-    doctor_summary
+    print_summary
 }
 
 # Hostnames in a package's code: its APKs' dex files and the odex and vdex
