@@ -6,6 +6,8 @@
 load test_helper
 
 LINK="scripts/link.sh"
+# The repo as link.sh names it, with every symlink in its path resolved.
+REPO_ROOT="$(cd "${PROJECT_ROOT}" && pwd -P)"
 
 # Stands in for the private agents repo. Built once: link.sh only clones from
 # it, so every test shares it; a test that commits to it copies it first
@@ -30,6 +32,32 @@ setup_file() {
     git -C "${AGENTS_FIXTURE}" init -q
     git -C "${AGENTS_FIXTURE}" add -A
     git -C "${AGENTS_FIXTURE}" -c user.name=test -c user.email=test@example.com commit -q -m fixture
+
+    # No gum, as on CI: a gum process per warning costs more than the run.
+    PATH="$(path_without gum)"
+    export PATH
+    NO_STOW_PATH="$(path_without stow)"
+    export NO_STOW_PATH
+}
+
+# PATH with each directory that holds NAME swapped for a directory of links
+# to everything else in it.
+path_without() {
+    local name="$1" dir farm out="" i=0
+    local -a dirs=()
+    IFS=: read -r -a dirs <<< "${PATH}"
+    for dir in "${dirs[@]}"; do
+        if [[ -x "${dir}/${name}" ]]; then
+            i=$((i + 1))
+            farm="${BATS_FILE_TMPDIR}/no-${name}-${i}"
+            mkdir -p "${farm}"
+            ln -s "${dir}"/* "${farm}/"
+            rm -f "${farm}/${name}"
+            dir="${farm}"
+        fi
+        out="${out:+${out}:}${dir}"
+    done
+    printf '%s\n' "${out}"
 }
 
 # A private copy of the agents fixture for a test that changes it.
@@ -79,22 +107,6 @@ backup_of() {
     find "${DEST}/.local/state/dotfiles/clobbered" -path "*/$1" 2>/dev/null | head -1
 }
 
-# Sets NO_STOW_PATH to a directory of links to every command on PATH except stow.
-hide_stow() {
-    local dir entry name
-    local -a dirs=()
-    NO_STOW_PATH="${TEST_TMPDIR}/no-stow-bin"
-    mkdir -p "${NO_STOW_PATH}"
-    IFS=: read -r -a dirs <<< "${PATH}"
-    for dir in "${dirs[@]}"; do
-        for entry in "${dir}"/*; do
-            name="${entry##*/}"
-            [[ "${name}" == stow || -e "${NO_STOW_PATH}/${name}" || ! -x "${entry}" ]] && continue
-            ln -s "${entry}" "${NO_STOW_PATH}/${name}"
-        done
-    done
-}
-
 stat_mode() {
     stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"
 }
@@ -125,7 +137,7 @@ stat_mode() {
     local app f
     for app in Code Cursor; do
         for f in settings.json keybindings.json; do
-            [ "$(readlink "${DEST}/Library/Application Support/${app}/User/${f}")" = "${PROJECT_ROOT}/editors/code/${f}" ]
+            [ "$(readlink "${DEST}/Library/Application Support/${app}/User/${f}")" = "${REPO_ROOT}/editors/code/${f}" ]
         done
     done
     [ -d "${DEST}/Library/Application Support/Code/User" ] && [ ! -L "${DEST}/Library/Application Support/Code/User" ]
@@ -243,14 +255,15 @@ stat_mode() {
     command -v stow >/dev/null 2>&1 || skip "stow not installed"
     run_link
     assert_success
-    local before
-    before="$(cd "${DEST}" && find . -print | LC_ALL=C sort)"
+    local before="${TEST_TMPDIR}/before"
+    (cd "${DEST}" && find . -print | LC_ALL=C sort) > "${before}"
 
     run_link
     assert_success
     refute_output --partial "Backed up"
     refute_output --partial "Created"
-    [ "$(cd "${DEST}" && find . -print | LC_ALL=C sort)" = "${before}" ]
+    run diff "${before}" <(cd "${DEST}" && find . -print | LC_ALL=C sort)
+    assert_success
 }
 
 @test "a run names each link it makes and sums up every step" {
@@ -328,7 +341,6 @@ stat_mode() {
 }
 
 @test "dry run without stow still reports conflicts" {
-    hide_stow
     mkdir -p "${DEST}/.config/git"
     printf 'my local edit\n' > "${DEST}/.config/git/ignore"
 
@@ -339,7 +351,6 @@ stat_mode() {
 }
 
 @test "a real run without stow fails before moving anything" {
-    hide_stow
     mkdir -p "${DEST}/.config/git"
     printf 'my local edit\n' > "${DEST}/.config/git/ignore"
 
@@ -975,7 +986,8 @@ PY
 # ---------------------------------------------------------------------------
 
 # The fixture repo with an executable tool and an app directory of two files
-# committed in common, all linked into the destination.
+# committed in common, all linked into the destination. A function named as the
+# argument changes the repo before the one link run.
 make_linked_fixture() {
     make_fixture_repo
     mkdir -p "${FIXTURE}/stow/common/.local/bin" "${FIXTURE}/stow/common/.config/app/themes"
@@ -985,6 +997,7 @@ make_linked_fixture() {
     printf 'b\n' > "${FIXTURE}/stow/common/.config/app/themes/dark"
     git -C "${FIXTURE}" add -A
     git -C "${FIXTURE}" -c user.name=test -c user.email=test@example.com commit -q -m three
+    [[ -z "${1:-}" ]] || "$1"
     run_fixture_link
     assert_success
     [ -L "${DEST}/.local/bin/tool" ] && [ -L "${DEST}/.config/app/themes/dark" ]
@@ -1131,7 +1144,10 @@ fixture_untracks() {
 # The linked fixture with home linking common and extra, server also linking
 # solo, a layer home does not, and work linking only common.
 make_move_fixture() {
-    make_linked_fixture
+    make_linked_fixture write_move_personas
+}
+
+write_move_personas() {
     local name layers
     for name in home server work; do
         case "${name}" in
@@ -1144,8 +1160,6 @@ make_move_fixture() {
     done
     git -C "${FIXTURE}" add -A
     git -C "${FIXTURE}" -c user.name=test -c user.email=test@example.com commit -q -m four
-    run_fixture_link
-    assert_success
 }
 
 # Where a link in the destination points inside the fixture's stow/.
@@ -1705,8 +1719,8 @@ plant_single_layer_links() {
     assert_success
     refute_output --partial "Backed up"
     [ "$(readlink "${DEST}/.local/bin/sshkey")" = "../../.dotfiles/stow/tools/.local/bin/sshkey" ] \
-        || [ "$(cd "${DEST}/.local/bin" && cd -P "$(dirname "$(readlink sshkey)")" && pwd)" = "${PROJECT_ROOT}/stow/tools/.local/bin" ]
-    [ "$(cd "${DEST}/.config/ghostty" && cd -P "$(dirname "$(readlink config.ghostty)")" && pwd)" = "${PROJECT_ROOT}/stow/desktop/.config/ghostty" ]
+        || [ "$(cd "${DEST}/.local/bin" && cd -P "$(dirname "$(readlink sshkey)")" && pwd)" = "${REPO_ROOT}/stow/tools/.local/bin" ]
+    [ "$(cd "${DEST}/.config/ghostty" && cd -P "$(dirname "$(readlink config.ghostty)")" && pwd)" = "${REPO_ROOT}/stow/desktop/.config/ghostty" ]
     [ ! -L "${DEST}/.local/bin/ph-update" ]
     [ ! -L "${DEST}/.local/bin/ph-backup" ]
     [ ! -e "${DEST}/.local/state/dotfiles/clobbered" ]
