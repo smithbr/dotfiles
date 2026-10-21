@@ -77,26 +77,6 @@ parse_args() {
     fi
 }
 
-# Print a picked item from the arguments, asking with gum or a numbered list.
-# Fails on closed stdin or when nothing is picked.
-choose() {
-    local header="$1" item choice index=1
-    shift
-    [[ -t 0 ]] || return 1
-    if command -v gum >/dev/null 2>&1; then
-        gum choose --header "${header}" "$@" || return 1
-        return 0
-    fi
-    for item in "$@"; do
-        printf '  %d) %s\n' "${index}" "${item}" >&2
-        index=$((index + 1))
-    done
-    printf '%s [1-%d]: ' "${header}" "$#" >&2
-    IFS= read -r choice || return 1
-    [[ "${choice}" =~ ^[0-9]+$ && "${choice}" -ge 1 && "${choice}" -le $# ]] || return 1
-    printf '%s\n' "${!choice}"
-}
-
 # The persona's Brewfile names (brew, then brew_optional), from link.sh.
 persona_brewfiles() {
     local line
@@ -131,7 +111,7 @@ choose_file() {
             offered+=("${name##*/Brewfile.}")
         done
     fi
-    if ! FILE="$(choose "Brewfile for ${names[*]}" "${offered[@]}")" || [[ -z "${FILE}" ]]; then
+    if ! FILE="$(choose_one "Brewfile for ${names[*]}" "" "${offered[@]}")" || [[ -z "${FILE}" ]]; then
         log_error "Name the Brewfile with --file (one of: ${offered[*]})"
         exit 2
     fi
@@ -183,7 +163,7 @@ choose_section() {
         0) SECTION_START=0; SECTION_END=0; return 0 ;;
         1) SECTION_START="${starts[0]}"; SECTION_END="${ends[0]}"; SECTION="${labels[0]}"; return 0 ;;
     esac
-    if ! SECTION="$(choose "Section of Brewfile.${FILE}" "${labels[@]}")" || [[ -z "${SECTION}" ]]; then
+    if ! SECTION="$(choose_one "Section of Brewfile.${FILE}" "" "${labels[@]}")" || [[ -z "${SECTION}" ]]; then
         log_error "Name the section with --section (one of: $(printf '"%s" ' "${labels[@]}"))"
         exit 2
     fi

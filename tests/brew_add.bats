@@ -163,6 +163,14 @@ brew_add() {
     assert_failure
 }
 
+@test "brew-add asks for the Brewfile and section through choose_one" {
+    run bash -c 'printf "1\n2\n" | DOTFILES_PROMPT=read bash "$1" llmfit' _ "${FAKE_REPO}/scripts/brew-add.sh"
+    assert_success
+    assert_output --partial "Brewfile for llmfit"
+    assert_output --partial "Section of Brewfile.core"
+    assert_output --partial 'Added brew "llmfit" to homebrew/Brewfile.core (Fonts)'
+}
+
 @test "brew-add rejects unknown packages, files, sections and malformed names" {
     brew_add --file core nosuchthing
     assert_failure

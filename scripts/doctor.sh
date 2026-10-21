@@ -1452,7 +1452,7 @@ pick_by_line() {
 # Build the change list (Fix rows preset, links to relink, the rest skip),
 # ask once, apply. Deleting asks again; a cancelled list changes nothing.
 fix_flow() {
-    local i r group relink=0 failed=0 answer summary="" relink_paths=""
+    local i r group relink=0 failed=0 summary="" relink_paths=""
     local -a row_ids=() row_actions=() row_texts=() to_archive=() to_delete=() to_move=() to_manage=() to_ignore=()
 
     if [[ "${REVIEW_INCOMPLETE}" -ne 0 ]]; then
@@ -1522,20 +1522,10 @@ fix_flow() {
         for i in "${to_delete[@]}"; do
             printf '  %s\n' "$(printable "$(display_path "${i}")")"
         done
-        if [[ "$(prompt_mode)" == gum ]]; then
-            answer=""
-            gum confirm --default=false "Delete $(count_of "${#to_delete[@]}" item items) for good?" && answer=y
-        else
-            printf 'Delete %s? [y/N] ' "$(count_of "${#to_delete[@]}" item items)" >&2
-            IFS= read -r answer || answer=""
+        if ! confirm "Delete $(count_of "${#to_delete[@]}" item items) for good?"; then
+            printf 'Not deleting them.\n'
+            to_delete=()
         fi
-        case "${answer}" in
-            y | Y | yes) ;;
-            *)
-                printf 'Not deleting them.\n'
-                to_delete=()
-                ;;
-        esac
     fi
     if [[ "${#to_archive[@]}" -eq 0 && "${#to_delete[@]}" -eq 0 && "${#to_move[@]}" -eq 0 && "${#to_manage[@]}" -eq 0 && "${#to_ignore[@]}" -eq 0 && "${relink}" -eq 0 ]]; then
         printf 'Nothing changed.\n'

@@ -272,12 +272,12 @@ prompt_mode() {
 }
 
 # Yes or no, by gum or a [y/N] question on stderr answered on stdin. No
-# unless the answer starts with y; end of input is no.
+# unless the answer starts with y; end of input, and Enter in gum, is no.
 #   confirm QUESTION
 confirm() {
     local answer=""
     if [[ "$(prompt_mode)" == gum ]]; then
-        gum confirm "$1"
+        gum confirm --default=false "$1"
         return
     fi
     printf '%s [y/N] ' "$1" >&2

@@ -468,7 +468,7 @@ MOCK
         DOTFILES_PROMPT=gum confirm "Delete it?"
     '
     assert_success
-    assert_output "gum confirm Delete it?"
+    assert_output "gum confirm --default=false Delete it?"
 }
 
 @test "choose_one takes a number or an item and falls back to the default" {
