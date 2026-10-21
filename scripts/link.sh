@@ -782,37 +782,42 @@ is_repo_link() {
 # Relative paths of the links that belong here: this platform's stow files and
 # editor links.
 managed_links() {
-    local entry
+    local entry stow editors
+    stow="$(package_entries stow)"
+    editors="$(editor_links)"
     while IFS= read -r entry; do
-        printf '%s\n' "${entry#*|}"
-    done < <(package_entries stow)
+        [[ -z "${entry}" ]] || printf '%s\n' "${entry#*|}"
+    done <<< "${stow}"
     while IFS= read -r entry; do
-        printf '%s\n' "${entry%%|*}"
-    done < <(editor_links)
+        [[ -z "${entry}" ]] || printf '%s\n' "${entry%%|*}"
+    done <<< "${editors}"
 }
 
 # Relative paths where a repo link may have been left behind: every file any
 # stow package has held, now or in the repo's history, and whatever sits in
 # any platform's editor directories.
 stale_candidates() {
-    local dir line entry os
+    local dir line entry os list
     for dir in "${REPO}/stow"/*/; do
         dir="${dir%/}"
         [[ -d "${dir}" ]] && package_files stow "${dir##*/}"
     done
+    # Lists are captured before printing, as in package_entries.
     if command -v git >/dev/null 2>&1 && git -C "${REPO}" rev-parse --git-dir >/dev/null 2>&1; then
+        list="$(git -C "${REPO}" -c core.quotePath=false log --format= --name-only -- stow 2>/dev/null || true)"
         while IFS= read -r line; do
             [[ "${line}" == stow/*/* ]] && printf '%s\n' "${line#stow/*/}"
-        done < <(git -C "${REPO}" -c core.quotePath=false log --format= --name-only -- stow 2>/dev/null || true)
+        done <<< "${list}"
     fi
     for os in darwin linux; do
+        list="$(editor_dirs "${os}")"
         while IFS= read -r entry; do
             dir="${DEST}/${entry%%|*}"
-            [[ -d "${dir}" && ! -L "${dir}" ]] || continue
+            [[ -n "${entry}" && -d "${dir}" && ! -L "${dir}" ]] || continue
             for line in "${dir}"/*; do
                 [[ -L "${line}" ]] && printf '%s\n' "${line#"${DEST}"/}"
             done
-        done < <(editor_dirs "${os}")
+        done <<< "${list}"
     done
 }
 
@@ -1319,28 +1324,34 @@ warn_unused_agents_checkout() {
     log_warn "${DEST}/.config/agents holds the private agents repo, which this persona does not use. It is left in place; delete it yourself if this machine should not keep it."
 }
 
-# destination|source for every shared editor file on this platform.
+# destination|source for every shared editor file on this platform. Like
+# package_entries, each list is captured before anything is printed.
 editor_links() {
-    local entry dir name relative
+    local entry dir name relative dirs files
     [[ "${PERSONA_EDITORS}" == yes ]] || return 0
+    dirs="$(editor_dirs)"
     while IFS= read -r entry; do
+        [[ -n "${entry}" ]] || continue
         dir="${entry%%|*}"
         name="${entry#*|}"
         [[ -d "${REPO}/editors/${name}" ]] || continue
+        files="$(package_files editors "${name}")"
+        [[ -n "${files}" ]] || continue
         while IFS= read -r relative; do
             printf '%s/%s|%s/editors/%s/%s\n' "${dir}" "${relative}" "${REPO}" "${name}" "${relative}"
-        done < <(package_files editors "${name}")
-    done < <(editor_dirs)
+        done <<< "${files}"
+    done <<< "${dirs}"
 }
 
 # Same rules as the stow packages: an identical copy is replaced, anything
 # else is backed up first.
 link_editors() {
-    local entry
+    local entry links
     place_links "Editor settings" < <(
+        links="$(editor_links)"
         while IFS= read -r entry; do
-            printf '%s|%s\n' "${DEST}/${entry%%|*}" "${entry#*|}"
-        done < <(editor_links)
+            [[ -z "${entry}" ]] || printf '%s|%s\n' "${DEST}/${entry%%|*}" "${entry#*|}"
+        done <<< "${links}"
     )
 }
 
