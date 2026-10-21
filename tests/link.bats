@@ -865,19 +865,6 @@ plant_old_links() {
     [ -f "${DEST}/.fine" ] && [ ! -L "${DEST}/.fine" ]
 }
 
-@test "add refuses a file with a banned word without naming the word" {
-    make_fixture_repo
-    mkdir -p "${DEST}/.config"
-    printf '# comment\nzorblax\n' > "${DEST}/.config/banned-words"
-    printf 'say ZORBLAX here\n' > "${DEST}/.rc"
-
-    run_fixture_link add --layer common "${DEST}/.rc" < /dev/null
-    assert_failure
-    assert_output --partial "contains a banned word"
-    refute_output --partial "orblax"
-    [ ! -e "${FIXTURE}/stow/common/.rc" ]
-}
-
 @test "add needs a layer this persona links, and asks for none without a terminal" {
     make_fixture_repo
     printf 'x\n' > "${DEST}/.rc"

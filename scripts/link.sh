@@ -1459,7 +1459,7 @@ print_status() {
 # Why a home-relative path must not enter the repo, or nothing when it may.
 # The repo is public, so secrets and machine-specific files stay out.
 add_refusal() {
-    local relative="$1" file="$2" name entry dir os banned="${DEST}/.config/banned-words"
+    local relative="$1" file="$2" name entry dir os
     name="${relative##*/}"
 
     for dir in "${REPO}"/stow/*/ "${REPO}"/seed/*/; do
@@ -1510,10 +1510,6 @@ add_refusal() {
     esac
     if grep -qE -- '-----BEGIN ([A-Z]+ )*PRIVATE KEY-----' "${file}" 2>/dev/null; then
         printf 'contains a private key\n'
-        return 0
-    fi
-    if [[ -f "${banned}" ]] && grep -qwiIE -f <(grep -v '^#' "${banned}" | grep -v '^[[:space:]]*$') "${file}" 2>/dev/null; then
-        printf 'contains a banned word\n'
         return 0
     fi
     return 0
