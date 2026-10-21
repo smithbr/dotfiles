@@ -63,14 +63,16 @@ MOCK
 # ph-backup must run as root, so tests exercise a copy with the self-elevation
 # block stripped out. Mocks stand in for Pi-hole, Unbound, Tailscale, and the
 # GNU flags (stat -c, numfmt) that the Linux host provides but macOS does not.
-setup_ph_backup_sandbox() {
-    local teleporter_status="${1:-0}"
+# Both are written once, the mocks to $1: macOS checks a new executable on its first run.
+write_ph_backup_mocks() {
+    local dir="$1"
+    mkdir -p "${dir}"
 
-    cat > "${BIN_SANDBOX}/pihole-FTL" <<MOCK
+    cat > "${dir}/pihole-FTL" <<'MOCK'
 #!/usr/bin/env bash
-case "\${1}" in
+case "${1}" in
     --teleporter)
-        [[ "${teleporter_status}" -eq 0 ]] || exit 1
+        [[ "${PH_BACKUP_TELEPORTER_STATUS:-0}" -eq 0 ]] || exit 1
         # A real zip, so the restore map can enumerate its paths the way it
         # does against Pi-hole's own export.
         mkdir -p etc/pihole
@@ -82,7 +84,7 @@ case "\${1}" in
         ;;
     --config) printf '["127.0.0.1#5335"]\n' ;;
     sqlite3)
-        case "\${3}" in
+        case "${3}" in
             *gravity*) printf '8843595\n' ;;
             *) printf '9\n' ;;
         esac
@@ -90,13 +92,13 @@ case "\${1}" in
 esac
 MOCK
 
-    cat > "${BIN_SANDBOX}/pihole" <<'MOCK'
+    cat > "${dir}/pihole" <<'MOCK'
 #!/usr/bin/env bash
 [[ "${1}" == "-v" ]] && printf 'Core version is v6.1.4\n'
 MOCK
 
     # Peer "m" carries Mullvad's shared-exit-node tag and must be filtered out.
-    cat > "${BIN_SANDBOX}/tailscale" <<'MOCK'
+    cat > "${dir}/tailscale" <<'MOCK'
 #!/usr/bin/env bash
 if [[ "${1}" == "status" && "${2}" == "--json" ]]; then
     printf '{"Version":"1.90.2","BackendState":"Running","MagicDNSSuffix":"tail1.ts.net",'
@@ -107,18 +109,18 @@ if [[ "${1}" == "status" && "${2}" == "--json" ]]; then
 fi
 MOCK
 
-    cat > "${BIN_SANDBOX}/unbound-checkconf" <<MOCK
+    cat > "${dir}/unbound-checkconf" <<'MOCK'
 #!/usr/bin/env bash
-case "\${2}" in
-    config-file) printf '${TEST_TMPDIR}/etc/unbound/unbound.conf\n' ;;
+case "${2}" in
+    config-file) printf '%s\n' "${TEST_TMPDIR}/etc/unbound/unbound.conf" ;;
     interface) printf '127.0.0.1\n' ;;
     port) printf '5335\n' ;;
-    auto-trust-anchor-file) printf '${TEST_TMPDIR}/var/lib/unbound/root.key\n' ;;
+    auto-trust-anchor-file) printf '%s\n' "${TEST_TMPDIR}/var/lib/unbound/root.key" ;;
     *) exit 0 ;;
 esac
 MOCK
 
-    cat > "${BIN_SANDBOX}/sqlite3" <<'MOCK'
+    cat > "${dir}/sqlite3" <<'MOCK'
 #!/usr/bin/env bash
 case "${2}" in
     *gravity*) printf '128432\n' ;;
@@ -126,20 +128,34 @@ case "${2}" in
 esac
 MOCK
 
-    cat > "${BIN_SANDBOX}/hostname" <<'MOCK'
+    cat > "${dir}/hostname" <<'MOCK'
 #!/usr/bin/env bash
 printf 'pi\n'
 MOCK
 
-    cat > "${BIN_SANDBOX}/stat" <<'MOCK'
+    cat > "${dir}/stat" <<'MOCK'
 #!/usr/bin/env bash
 [[ "${1}" == "-c" && "${2}" == "%s" ]] && exec /usr/bin/stat -f%z "${3}"
 exec /usr/bin/stat "$@"
 MOCK
 
-    chmod +x "${BIN_SANDBOX}/pihole-FTL" "${BIN_SANDBOX}/pihole" "${BIN_SANDBOX}/tailscale" \
-        "${BIN_SANDBOX}/unbound-checkconf" "${BIN_SANDBOX}/sqlite3" "${BIN_SANDBOX}/hostname" \
-        "${BIN_SANDBOX}/stat"
+    chmod +x "${dir}"/*
+
+    awk '
+        /^# Self-elevate if not root/ { skip = 1 }
+        skip && /^fi$/ { skip = 0; next }
+        skip { next }
+        { print }
+    ' "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-backup" > "${BATS_FILE_TMPDIR}/ph-backup"
+    chmod +x "${BATS_FILE_TMPDIR}/ph-backup"
+}
+
+# Links the mocks into BIN_SANDBOX and the copy into TEST_TMPDIR, and lays out
+# the Pi-hole and Unbound files. $1 is the Teleporter export's exit status.
+setup_ph_backup_sandbox() {
+    export PH_BACKUP_TELEPORTER_STATUS="${1:-0}"
+    ln -s "${PH_BACKUP_MOCKS}"/* "${BIN_SANDBOX}/"
+    ln -s "${BATS_FILE_TMPDIR}/ph-backup" "${TEST_TMPDIR}/ph-backup"
 
     mkdir -p "${TEST_TMPDIR}/etc/unbound/unbound.conf.d" "${TEST_TMPDIR}/etc/pihole" \
         "${TEST_TMPDIR}/var/lib/unbound" "${TEST_TMPDIR}/out"
@@ -147,15 +163,6 @@ MOCK
     printf 'gravity\n' > "${TEST_TMPDIR}/etc/pihole/gravity.db"
     # The trust anchor lives outside the config directory, as on Debian.
     printf 'anchor\n' > "${TEST_TMPDIR}/var/lib/unbound/root.key"
-
-    awk '
-        /^# Self-elevate if not root/ { skip = 1 }
-        skip && /^fi$/ { skip = 0; next }
-        skip { next }
-        { print }
-    ' "${PROJECT_ROOT}/stow/pihole.linux/.local/bin/ph-backup" > "${TEST_TMPDIR}/ph-backup"
-
-    chmod +x "${TEST_TMPDIR}/ph-backup"
 }
 
 run_ph_backup_probe() {
@@ -166,11 +173,12 @@ run_ph_backup_probe() {
         "${TEST_TMPDIR}/ph-backup" -o "${TEST_TMPDIR}/out"
 }
 
-# One run of the default sandbox, shared by the tests that only read its
-# output and archive; PH_BACKUP_RUN stands in for their TEST_TMPDIR.
+# The mocks, and one run of the default sandbox shared by the tests that only
+# read its output and archive; PH_BACKUP_RUN stands in for their TEST_TMPDIR.
 setup_file() {
     local TEST_TMPDIR="${BATS_FILE_TMPDIR}/run" BIN_SANDBOX="${BATS_FILE_TMPDIR}/run/bin"
-    export DOTFILES_DIR="${PROJECT_ROOT}"
+    export TEST_TMPDIR DOTFILES_DIR="${PROJECT_ROOT}" PH_BACKUP_MOCKS="${BATS_FILE_TMPDIR}/mocks"
+    write_ph_backup_mocks "${PH_BACKUP_MOCKS}"
     mkdir -p "${BIN_SANDBOX}"
     setup_ph_backup_sandbox
     run_ph_backup_probe
@@ -337,6 +345,7 @@ load_ph_backup_run() {
 
     # The Pi has no sqlite3 package at all; a stub that returns nothing stands
     # in for that, since the host running these tests has its own sqlite3.
+    rm "${BIN_SANDBOX}/sqlite3"
     cat > "${BIN_SANDBOX}/sqlite3" <<'MOCK'
 #!/usr/bin/env bash
 exit 1

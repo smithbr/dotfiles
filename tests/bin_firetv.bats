@@ -15,22 +15,14 @@ teardown() {
     teardown_tmpdir
 }
 
-setup_firetv_sandbox() {
-    FIRETV="${PROJECT_ROOT}/stow/personal/.local/bin/firetv"
-    export FIRETV_STATE="${TEST_TMPDIR}/tv"
-    export FIRETV_STATE_DIR="${TEST_TMPDIR}/state"
-    # Never the real Pi-hole: this ph refuses until setup_firetv_pihole replaces it.
-    export PH_BIN="${BIN_SANDBOX}/ph"
-    export FIRETV_TWEAKS_FILE="${TEST_TMPDIR}/no-tweaks"
+# The mocks are written once: macOS checks each new executable on its first
+# run, which would cost every test. Tests link them and never write through.
+setup_file() {
+    export FIRETV_MOCKS="${BATS_FILE_TMPDIR}/mocks"
+    mkdir -p "${FIRETV_MOCKS}"
     printf '%s\n' '#!/usr/bin/env bash' \
-        "printf 'ph: no password: run '\\''ph login'\\'' or set PIHOLE_PASSWORD\\n' >&2" 'exit 1' > "${PH_BIN}"
-    chmod +x "${PH_BIN}"
-    mkdir -p "${FIRETV_STATE}"
-    # The TV: installed packages and disabled ones, one per line.
-    printf '%s\n' com.amazon.tv.acr com.amazon.device.metrics com.amazon.device.metrics \
-        com.amazon.storm.lightning.tutorial com.amazon.tv.launcher > "${FIRETV_STATE}/installed"
-    printf '%s\n' com.amazon.storm.lightning.tutorial > "${FIRETV_STATE}/disabled"
-    cat > "${BIN_SANDBOX}/adb" <<'MOCK'
+        "printf 'ph: no password: run '\\''ph login'\\'' or set PIHOLE_PASSWORD\\n' >&2" 'exit 1' > "${FIRETV_MOCKS}/ph-no-login"
+    cat > "${FIRETV_MOCKS}/adb" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "${FIRETV_STATE}/calls.log"
@@ -109,7 +101,70 @@ case "$*" in
     *) printf 'adb %s\n' "$*" ;;
 esac
 MOCK
-    chmod +x "${BIN_SANDBOX}/adb"
+    # ph's --json check and deny, against a deny list in a file.
+    cat > "${FIRETV_MOCKS}/ph-pihole" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${PIHOLE_STATE}/calls.log"
+[[ "${1:-}" == --json ]] || { printf 'ph: test expects --json\n' >&2; exit 1; }
+shift
+case "$1" in
+    -n)
+        [[ "$3" == queries && "$4" == 192.168.0.84 ]] || { printf 'ph: unexpected %s\n' "$*" >&2; exit 1; }
+        jq -n '{queries: [
+            {domain: "appstore-tv-prod-na.amazon.com", status: "FORWARDED"},
+            {domain: "appstore-tv-prod-na.amazon.com", status: "CACHE"},
+            {domain: "unagi-na.amazon.com", status: "GRAVITY"},
+            {domain: "avs-alexa-19-na.amazon.com", status: "FORWARDED"},
+            {domain: "mads.amazon.com", status: "GRAVITY"},
+            {domain: "aax-us-east.amazon-adsystem.com", status: "FORWARDED"},
+            {domain: "api.amazon.com", status: "CACHE"},
+            {domain: "bad name;rm", status: "FORWARDED"}]}'
+        ;;
+    check)
+        # A Pi-hole that rate-limits the first login for a domain.
+        if [[ -n "${PH_LIMIT_ONCE:-}" && ! -e "${PIHOLE_STATE}/limited-$2" ]]; then
+            touch "${PIHOLE_STATE}/limited-$2"
+            printf 'ph: login failed: HTTP 429: Rate-limiting login attempts\n' >&2
+            exit 1
+        fi
+        if grep -qxF "$2" "${PIHOLE_STATE}/blocked"; then
+            printf '{"search":{"domains":[],"gravity":[{"domain":"%s","type":"block","enabled":true}]}}\n' "$2"
+        else
+            printf '{"search":{"domains":[],"gravity":[]}}\n'
+        fi
+        ;;
+    list)
+        [[ "$2" == deny ]] || { printf 'ph: unexpected %s\n' "$*" >&2; exit 1; }
+        jq -R -s '{domains: (split("\n") | map(select(. != "")) | map({domain: ., kind: "exact", type: "deny", enabled: true}))}' \
+            "${PIHOLE_STATE}/denylist"
+        ;;
+    deny)
+        [[ "$2" == -c && -n "$3" ]] || { printf 'ph: test expects a comment\n' >&2; exit 1; }
+        shift 3
+        printf '%s\n' "$@" | tee -a "${PIHOLE_STATE}/blocked" > "${PIHOLE_STATE}/denied"
+        printf '{"processed":{"success":[],"errors":[]}}\n'
+        ;;
+    *) printf 'ph: unexpected %s\n' "$*" >&2; exit 1 ;;
+esac
+MOCK
+    chmod +x "${FIRETV_MOCKS}"/*
+}
+
+setup_firetv_sandbox() {
+    FIRETV="${PROJECT_ROOT}/stow/personal/.local/bin/firetv"
+    export FIRETV_STATE="${TEST_TMPDIR}/tv"
+    export FIRETV_STATE_DIR="${TEST_TMPDIR}/state"
+    # Never the real Pi-hole: this ph refuses until setup_firetv_pihole replaces it.
+    export PH_BIN="${BIN_SANDBOX}/ph"
+    export FIRETV_TWEAKS_FILE="${TEST_TMPDIR}/no-tweaks"
+    ln -s "${FIRETV_MOCKS}/ph-no-login" "${PH_BIN}"
+    mkdir -p "${FIRETV_STATE}"
+    # The TV: installed packages and disabled ones, one per line.
+    printf '%s\n' com.amazon.tv.acr com.amazon.device.metrics com.amazon.device.metrics \
+        com.amazon.storm.lightning.tutorial com.amazon.tv.launcher > "${FIRETV_STATE}/installed"
+    printf '%s\n' com.amazon.storm.lightning.tutorial > "${FIRETV_STATE}/disabled"
+    ln -s "${FIRETV_MOCKS}/adb" "${BIN_SANDBOX}/adb"
 }
 
 @test "firetv shows help and rejects bad commands and groups" {
@@ -222,7 +277,9 @@ MOCK
     printf '%s\n' com.amazon.gamehub >> "${FIRETV_STATE}/installed"
     run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" enable bloat
     assert_success
-    sed -i.bak 's/new state: enabled/Unknown package/' "${BIN_SANDBOX}/adb"
+    rm "${BIN_SANDBOX}/adb"
+    sed 's/new state: enabled/Unknown package/' "${FIRETV_MOCKS}/adb" > "${BIN_SANDBOX}/adb"
+    chmod +x "${BIN_SANDBOX}/adb"
     printf '%s\n' com.amazon.gamehub >> "${FIRETV_STATE}/disabled"
     run env PATH="${BIN_SANDBOX}:${PATH}" "${FIRETV}" enable bloat
     assert_failure
@@ -335,54 +392,7 @@ setup_firetv_pihole() {
     printf '%s\n' mads.amazon.com > "${PIHOLE_STATE}/blocked"
     printf '%s\n' msh.amazon.com > "${PIHOLE_STATE}/denylist"
     : > "${PIHOLE_STATE}/calls.log"
-    # ph's --json check and deny, against a deny list in a file.
-    cat > "${PH_BIN}" <<'MOCK'
-#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$*" >> "${PIHOLE_STATE}/calls.log"
-[[ "${1:-}" == --json ]] || { printf 'ph: test expects --json\n' >&2; exit 1; }
-shift
-case "$1" in
-    -n)
-        [[ "$3" == queries && "$4" == 192.168.0.84 ]] || { printf 'ph: unexpected %s\n' "$*" >&2; exit 1; }
-        jq -n '{queries: [
-            {domain: "appstore-tv-prod-na.amazon.com", status: "FORWARDED"},
-            {domain: "appstore-tv-prod-na.amazon.com", status: "CACHE"},
-            {domain: "unagi-na.amazon.com", status: "GRAVITY"},
-            {domain: "avs-alexa-19-na.amazon.com", status: "FORWARDED"},
-            {domain: "mads.amazon.com", status: "GRAVITY"},
-            {domain: "aax-us-east.amazon-adsystem.com", status: "FORWARDED"},
-            {domain: "api.amazon.com", status: "CACHE"},
-            {domain: "bad name;rm", status: "FORWARDED"}]}'
-        ;;
-    check)
-        # A Pi-hole that rate-limits the first login for a domain.
-        if [[ -n "${PH_LIMIT_ONCE:-}" && ! -e "${PIHOLE_STATE}/limited-$2" ]]; then
-            touch "${PIHOLE_STATE}/limited-$2"
-            printf 'ph: login failed: HTTP 429: Rate-limiting login attempts\n' >&2
-            exit 1
-        fi
-        if grep -qxF "$2" "${PIHOLE_STATE}/blocked"; then
-            printf '{"search":{"domains":[],"gravity":[{"domain":"%s","type":"block","enabled":true}]}}\n' "$2"
-        else
-            printf '{"search":{"domains":[],"gravity":[]}}\n'
-        fi
-        ;;
-    list)
-        [[ "$2" == deny ]] || { printf 'ph: unexpected %s\n' "$*" >&2; exit 1; }
-        jq -R -s '{domains: (split("\n") | map(select(. != "")) | map({domain: ., kind: "exact", type: "deny", enabled: true}))}' \
-            "${PIHOLE_STATE}/denylist"
-        ;;
-    deny)
-        [[ "$2" == -c && -n "$3" ]] || { printf 'ph: test expects a comment\n' >&2; exit 1; }
-        shift 3
-        printf '%s\n' "$@" | tee -a "${PIHOLE_STATE}/blocked" > "${PIHOLE_STATE}/denied"
-        printf '{"processed":{"success":[],"errors":[]}}\n'
-        ;;
-    *) printf 'ph: unexpected %s\n' "$*" >&2; exit 1 ;;
-esac
-MOCK
-    chmod +x "${PH_BIN}"
+    ln -sf "${FIRETV_MOCKS}/ph-pihole" "${PH_BIN}"
 }
 
 @test "firetv doctor passes on ph's error and says to log in" {
@@ -456,7 +466,10 @@ MOCK
 
 @test "firetv doctor fails when ph cannot add the domains" {
     setup_firetv_pihole
-    sed -i.bak 's/"errors":\[\]/"errors":[{"item":"aax.amazon-adsystem.com","error":"UNIQUE constraint failed"}]/' "${PH_BIN}"
+    rm "${PH_BIN}"
+    sed 's/"errors":\[\]/"errors":[{"item":"aax.amazon-adsystem.com","error":"UNIQUE constraint failed"}]/' \
+        "${FIRETV_MOCKS}/ph-pihole" > "${PH_BIN}"
+    chmod +x "${PH_BIN}"
     run bash -c 'printf "1\n" | env PATH="$1" DOTFILES_PROMPT=read "$2" doctor' _ "${BIN_SANDBOX}:${PATH}" "${FIRETV}"
     assert_failure
     assert_output --partial "Pi-hole did not block them: aax.amazon-adsystem.com: UNIQUE constraint failed"
