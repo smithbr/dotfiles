@@ -769,7 +769,7 @@ JSON
     printf 'b\n' > "${HOME}/.old-b"
     # Rows: .notes.bak (archive), .old-a, .old-b, ph-extra. Set the first to
     # archive, then back to skip; ignore the second; delete the third after a yes.
-    run bash -c '{ printf "as"; sleep 1; printf "\033[Bi"; sleep 1; printf "\033[Bd"; sleep 1; printf "\r"; sleep 1; printf "y\r"; sleep 1; } |
+    run bash -c 'printf "as\033[Bi\033[Bd\ry\r" |
         script -q /dev/null bash "$1" --source "$2"' _ "${DOCTOR}" "${TEST_SOURCE_DIR}"
     assert_success
     assert_output --partial "Choose a change for each item"

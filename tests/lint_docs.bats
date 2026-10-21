@@ -7,7 +7,9 @@ load test_helper
 setup() {
     setup_tmpdir
     REPO="${TEST_TMPDIR}/repo"
-    mkdir -p "${REPO}/scripts" "${REPO}/docs" "${REPO}/stow/tools/.local/bin"
+    # git reads the scratch home's config, not the real one's excludes.
+    export HOME="${TEST_TMPDIR}/home"
+    mkdir -p "${HOME}" "${REPO}/scripts" "${REPO}/docs" "${REPO}/stow/tools/.local/bin"
     git -C "${REPO}" init -q
     printf '#!/usr/bin/env bash\n# Does one thing.\nset -euo pipefail\n[[ "${1:-}" == --dry-run ]] && echo "${SCRATCH_HOME:-}"\n' > "${REPO}/scripts/tool.sh"
     printf '# Repo\n\nRun `scripts/tool.sh` with `--dry-run`; `SCRATCH_HOME` moves its state.\n' > "${REPO}/README.md"

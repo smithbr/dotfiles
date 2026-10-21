@@ -8,6 +8,8 @@ setup() {
     setup_tmpdir
     mkdir -p "${TEST_TMPDIR}/home/.config/agents/scripts" "${TEST_TMPDIR}/bin"
     CHECK_DRIFT="${TEST_TMPDIR}/home/.config/agents/scripts/check-drift"
+    # git reads the scratch home's config, not the real one's signing or hooks.
+    export HOME="${TEST_TMPDIR}/home"
     # A scratch repo with the hook and the runner it lints through, so what
     # the real repo has staged never matters.
     REPO="${TEST_TMPDIR}/repo"
@@ -27,7 +29,7 @@ write_check_drift() {
 }
 
 run_pre_commit() {
-    run env HOME="${TEST_TMPDIR}/home" bash -c 'cd "$1" && bash .githooks/pre-commit' _ "${REPO}"
+    run bash -c 'cd "$1" && bash .githooks/pre-commit' _ "${REPO}"
 }
 
 # A script ShellCheck flags (SC2086, an unquoted variable) and one it passes.

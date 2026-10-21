@@ -4,6 +4,35 @@
 
 load test_helper
 
+# Fixture tarballs, named as upstream names them, built once; each test gets
+# its own copy, which one test trims.
+setup_file() {
+    local stage="${BATS_FILE_TMPDIR}/stage" fixtures="${BATS_FILE_TMPDIR}/fixtures"
+    mkdir -p "${fixtures}" "${stage}/bats-core-1.14.0/bin" "${stage}/bats-core-1.14.0/lib/bats-core" \
+        "${stage}/bats-support-0.3.0" "${stage}/bats-assert-2.2.4" \
+        "${stage}/parallel-20260922/src" "${stage}/bash-5.3"
+    printf '#!/bin/sh\necho "Bats stub"\n' > "${stage}/bats-core-1.14.0/bin/bats"
+    chmod +x "${stage}/bats-core-1.14.0/bin/bats"
+    printf 'bats_support_loaded=1\n' > "${stage}/bats-support-0.3.0/load.bash"
+    printf 'bats_assert_loaded=1\n' > "${stage}/bats-assert-2.2.4/load.bash"
+    printf '#!/bin/sh\necho "GNU parallel stub"\n' > "${stage}/parallel-20260922/src/parallel"
+    printf '#!/bin/sh\nexit 0\n' > "${stage}/bash-5.3/configure"
+    chmod +x "${stage}/bash-5.3/configure"
+    tar -czf "${fixtures}/v1.14.0.tar.gz" -C "${stage}" bats-core-1.14.0
+    tar -czf "${fixtures}/v0.3.0.tar.gz" -C "${stage}" bats-support-0.3.0
+    tar -czf "${fixtures}/v2.2.4.tar.gz" -C "${stage}" bats-assert-2.2.4
+    tar -cjf "${fixtures}/parallel-20260922.tar.bz2" -C "${stage}" parallel-20260922
+    tar -czf "${fixtures}/bash-5.3.tar.gz" -C "${stage}" bash-5.3
+
+    # The pins match the fixtures, not upstream.
+    export DEPS_BATS_CORE_SHA256 DEPS_BATS_SUPPORT_SHA256 DEPS_BATS_ASSERT_SHA256 DEPS_PARALLEL_SHA256 DEPS_BASH_SHA256
+    DEPS_BATS_CORE_SHA256="$(shasum -a 256 "${fixtures}/v1.14.0.tar.gz" | cut -d' ' -f1)"
+    DEPS_BATS_SUPPORT_SHA256="$(shasum -a 256 "${fixtures}/v0.3.0.tar.gz" | cut -d' ' -f1)"
+    DEPS_BATS_ASSERT_SHA256="$(shasum -a 256 "${fixtures}/v2.2.4.tar.gz" | cut -d' ' -f1)"
+    DEPS_PARALLEL_SHA256="$(shasum -a 256 "${fixtures}/parallel-20260922.tar.bz2" | cut -d' ' -f1)"
+    DEPS_BASH_SHA256="$(shasum -a 256 "${fixtures}/bash-5.3.tar.gz" | cut -d' ' -f1)"
+}
+
 setup() {
     setup_tmpdir
     export HOME="${TEST_TMPDIR}/home"
@@ -15,7 +44,8 @@ setup() {
     unset DEPS_DIR DEPS_TEST_BASH DEPS_BATS BATS_LIB_PATH_SAVED
     FIXTURES="${TEST_TMPDIR}/fixtures"
     CURL_LOG="${TEST_TMPDIR}/curl.log"
-    mkdir -p "${HOME}" "${FIXTURES}" "${TEST_TMPDIR}/bin"
+    mkdir -p "${HOME}" "${TEST_TMPDIR}/bin"
+    cp -R "${BATS_FILE_TMPDIR}/fixtures" "${FIXTURES}"
 
     # Only the stubs, plus the system tools deps.sh needs (tar, mktemp, shasum).
     export PATH="${TEST_TMPDIR}/bin:/usr/bin:/bin"
@@ -36,32 +66,6 @@ printf '%s\n' "\$url" >> "${CURL_LOG}"
 cp "${FIXTURES}/\${url##*/}" "\$dest"
 CURL
     chmod +x "${TEST_TMPDIR}/bin/curl"
-
-    # Fixture tarballs, named as upstream names them.
-    local stage="${TEST_TMPDIR}/stage"
-    mkdir -p "${stage}/bats-core-1.14.0/bin" "${stage}/bats-core-1.14.0/lib/bats-core" \
-        "${stage}/bats-support-0.3.0" "${stage}/bats-assert-2.2.4" \
-        "${stage}/parallel-20260922/src" "${stage}/bash-5.3"
-    printf '#!/bin/sh\necho "Bats stub"\n' > "${stage}/bats-core-1.14.0/bin/bats"
-    chmod +x "${stage}/bats-core-1.14.0/bin/bats"
-    printf 'bats_support_loaded=1\n' > "${stage}/bats-support-0.3.0/load.bash"
-    printf 'bats_assert_loaded=1\n' > "${stage}/bats-assert-2.2.4/load.bash"
-    printf '#!/bin/sh\necho "GNU parallel stub"\n' > "${stage}/parallel-20260922/src/parallel"
-    printf '#!/bin/sh\nexit 0\n' > "${stage}/bash-5.3/configure"
-    chmod +x "${stage}/bash-5.3/configure"
-    tar -czf "${FIXTURES}/v1.14.0.tar.gz" -C "${stage}" bats-core-1.14.0
-    tar -czf "${FIXTURES}/v0.3.0.tar.gz" -C "${stage}" bats-support-0.3.0
-    tar -czf "${FIXTURES}/v2.2.4.tar.gz" -C "${stage}" bats-assert-2.2.4
-    tar -cjf "${FIXTURES}/parallel-20260922.tar.bz2" -C "${stage}" parallel-20260922
-    tar -czf "${FIXTURES}/bash-5.3.tar.gz" -C "${stage}" bash-5.3
-
-    # The pins match the fixtures, not upstream.
-    export DEPS_BATS_CORE_SHA256 DEPS_BATS_SUPPORT_SHA256 DEPS_BATS_ASSERT_SHA256 DEPS_PARALLEL_SHA256 DEPS_BASH_SHA256
-    DEPS_BATS_CORE_SHA256="$(shasum -a 256 "${FIXTURES}/v1.14.0.tar.gz" | cut -d' ' -f1)"
-    DEPS_BATS_SUPPORT_SHA256="$(shasum -a 256 "${FIXTURES}/v0.3.0.tar.gz" | cut -d' ' -f1)"
-    DEPS_BATS_ASSERT_SHA256="$(shasum -a 256 "${FIXTURES}/v2.2.4.tar.gz" | cut -d' ' -f1)"
-    DEPS_PARALLEL_SHA256="$(shasum -a 256 "${FIXTURES}/parallel-20260922.tar.bz2" | cut -d' ' -f1)"
-    DEPS_BASH_SHA256="$(shasum -a 256 "${FIXTURES}/bash-5.3.tar.gz" | cut -d' ' -f1)"
 
     # In-process, so a test can override a function; the real BATS_LIB_PATH is
     # restored because deps_ensure sets its own.
@@ -266,8 +270,14 @@ UV
 # run_tests.sh's preflight: the machine's own tools are required, not installed,
 # and --lint-only touches neither the network nor the cache.
 
+# A copy of the runner, from the repo root, with a stub docs lint:
+# lint_docs.bats covers that, and the real one takes seconds.
 runner() {
-    (cd "${PROJECT_ROOT}" && env PATH="${TEST_TMPDIR}/bin:/usr/bin:/bin" bash tests/run_tests.sh "$@")
+    local tests="${TEST_TMPDIR}/runner/tests"
+    mkdir -p "${tests}"
+    cp "${PROJECT_ROOT}/tests/run_tests.sh" "${PROJECT_ROOT}/tests/deps.sh" "${tests}/"
+    printf '#!/bin/sh\n' > "${tests}/lint-docs.sh"
+    (cd "${PROJECT_ROOT}" && env PATH="${TEST_TMPDIR}/bin:/usr/bin:/bin" bash "${tests}/run_tests.sh" "$@")
 }
 
 @test "runner: a missing shellcheck fails with the install hint and installs nothing" {

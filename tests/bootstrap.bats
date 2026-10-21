@@ -7,6 +7,9 @@ load test_helper
 
 setup() {
     setup_tmpdir
+    # A scratch home, so no script under test can reach the real one.
+    export HOME="${TEST_TMPDIR}/home"
+    mkdir -p "${HOME}"
 }
 
 teardown() {
