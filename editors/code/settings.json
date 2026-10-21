@@ -37,5 +37,6 @@
     },
     "vscodeGoogleTranslate.preferredLanguage": "English",
     "claudeCode.preferredLocation": "panel",
-    "claudeCode.hideOnboarding": true
+    "claudeCode.hideOnboarding": true,
+    "security.promptForLocalFileProtocolHandling": false
 }
