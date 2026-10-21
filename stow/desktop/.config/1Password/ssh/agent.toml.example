@@ -3,7 +3,13 @@
 # Keep the real file local if different machines should expose different keys.
 
 [[ssh-keys]]
-vault = "Example Vault"
+# vault = "Example Vault"
+# vault = "Agents"
+# vault = "Automation"
+# vault = "Employee"
+# vault = "Personal"
+# vault = "Private"
+# vault = "Server"
 
 # To expose only a single key instead of a whole vault:
 # [[ssh-keys]]
