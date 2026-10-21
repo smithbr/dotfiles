@@ -400,7 +400,9 @@ run_resolve_harden() {
     local repo="${TEST_TMPDIR}/repo" home="${TEST_TMPDIR}/harden-home" bin="${TEST_TMPDIR}/bin"
     mkdir -p "${repo}/scripts/bootstrap/linux" "${repo}/stow/common" "${repo}/personas" "${repo}/roles" "${home}" "${bin}"
     cp "${PROJECT_ROOT}/install.sh" "${repo}/"
-    cp "${PROJECT_ROOT}/scripts/common.sh" "${PROJECT_ROOT}/scripts/link.sh" "${PROJECT_ROOT}/scripts/doctor.sh" "${repo}/scripts/"
+    cp "${PROJECT_ROOT}/scripts/common.sh" "${PROJECT_ROOT}/scripts/link.sh" "${repo}/scripts/"
+    # A stub: the isolated-home test covers the file review, a second a run.
+    printf '#!/usr/bin/env bash\n' > "${repo}/scripts/doctor.sh"
     printf 'export DEMO=1\n' > "${repo}/stow/common/.demo"
     printf 'os=darwin,linux\nlayers=common\nagents=no\neditors=no\nharden=yes\nbrew=\nbrew_optional=\n' > "${repo}/personas/server"
     cp "${repo}/personas/server" "${repo}/personas/home"
@@ -949,7 +951,9 @@ MOCK
     local repo="${TEST_TMPDIR}/repo" home="${TEST_TMPDIR}/install-home" bin="${TEST_TMPDIR}/bin"
     mkdir -p "${repo}/scripts/bootstrap/linux" "${repo}/stow/common" "${repo}/personas" "${repo}/roles" "${home}" "${bin}"
     cp "${PROJECT_ROOT}/install.sh" "${repo}/"
-    cp "${PROJECT_ROOT}/scripts/common.sh" "${PROJECT_ROOT}/scripts/link.sh" "${PROJECT_ROOT}/scripts/doctor.sh" "${repo}/scripts/"
+    cp "${PROJECT_ROOT}/scripts/common.sh" "${PROJECT_ROOT}/scripts/link.sh" "${repo}/scripts/"
+    # A stub: the isolated-home test covers the file review, a second a run.
+    printf '#!/usr/bin/env bash\n' > "${repo}/scripts/doctor.sh"
     printf 'export DEMO=1\n' > "${repo}/stow/common/.demo"
     printf 'os=darwin,linux\nlayers=common\nagents=no\neditors=no\nbrew=\nbrew_optional=\nroles_optional=demo\n' > "${repo}/personas/home"
     cp "${repo}/personas/home" "${repo}/personas/server"

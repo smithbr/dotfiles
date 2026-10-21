@@ -8,12 +8,20 @@ load test_helper
 
 AI_DOCTOR="${PROJECT_ROOT}/stow/tools/.local/bin/ai-doctor"
 
-setup() {
-    setup_tmpdir
-    local python uv
+# Checked once, with the transcript every test starts from.
+setup_file() {
+    local python
     python="$(command -v python3 || true)"
     [[ -n "${python}" ]] || skip "python3 is required"
     "${python}" -c 'import sys; sys.exit(sys.version_info < (3, 11))' || skip "python3 3.11+ is required"
+    HOME="${BATS_FILE_TMPDIR}/home" used commit-work 1
+    HOME="${BATS_FILE_TMPDIR}/home" used obsidian-vault 2
+}
+
+setup() {
+    setup_tmpdir
+    local python uv
+    python="$(command -v python3)"
     uv="$(command -v uv || true)"
     [[ -n "${uv}" ]] || skip "uv is required"
     # Only uv and python3 on PATH, and AI_DOCTOR_CLAUDE and AI_DOCTOR_CODEX
@@ -38,8 +46,7 @@ setup() {
     ln -s "${HOME}/.agents/skills" "${HOME}/.claude/skills"
     add_skill core commit-work
     add_skill vault obsidian-vault
-    used commit-work 1
-    used obsidian-vault 2
+    cp -R "${BATS_FILE_TMPDIR}/home/.claude/projects" "${HOME}/.claude/"
 
     # skills-add from the agents checkout, logging what it was asked to do.
     mkdir -p "${XDG_CONFIG_HOME}/agents/scripts"
