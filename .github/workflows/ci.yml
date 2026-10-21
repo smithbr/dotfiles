@@ -13,41 +13,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint:
-    name: shellcheck
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install shellcheck
-        run: brew install shellcheck
-      - name: Run shellcheck
-        run: bash tests/run_tests.sh --lint-only
-
   test:
     name: bats (${{ matrix.shard }})
     # macOS runner: a few tests are macOS-only, and this is the OS the suite is
     # written against. The runner image ships bash 3.2 and neither shellcheck
     # nor stow, like a fresh Mac.
     runs-on: macos-latest
-    # Three shards of about equal time on CI's runners, run side by side:
-    # link.bats, doctor.bats with install.bats, and a third that globs every
-    # file not named in NAMED, so a new .bats file runs there without a change
-    # here.
+    # Five shards of about equal time on CI's runners, the most macOS jobs an
+    # account runs at once. The last globs every file not named in NAMED, so a
+    # new .bats file runs there without a change here, and lints first with the
+    # same Homebrew shellcheck a Mac has.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - shard: link
-            files: tests/link.bats
-          - shard: doctor-install
-            files: tests/doctor.bats tests/install.bats
-          - shard: others
+          - shard: link-install
+            files: tests/link.bats tests/install.bats tests/brew.bats
+          - shard: link-doctor
+            files: tests/link_ops.bats tests/doctor.bats tests/brew_add.bats
+          - shard: bin-bootstrap
+            files: tests/bin_scripts.bats tests/bootstrap.bats tests/bin_ph_backup.bats
+          - shard: bin-common
+            files: tests/bin_pihole.bats tests/bin_firetv.bats tests/common.bats tests/ai_doctor.bats tests/ph.bats
+          - shard: lint-others
             files: ''
+            lint: true
     # The bats suite shells out to TUI tools (tput/stty); give it a sane TERM so
     # terminal-aware scripts behave as they do in an interactive shell.
     env:
       TERM: xterm
-      NAMED: tests/link.bats tests/doctor.bats tests/install.bats
+      NAMED: >-
+        tests/link.bats tests/install.bats tests/brew.bats
+        tests/link_ops.bats tests/doctor.bats tests/brew_add.bats
+        tests/bin_scripts.bats tests/bootstrap.bats tests/bin_ph_backup.bats
+        tests/bin_pihole.bats tests/bin_firetv.bats tests/common.bats
+        tests/ai_doctor.bats tests/ph.bats
       FILES: ${{ matrix.files }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -59,10 +59,12 @@ jobs:
         with:
           path: ~/.cache/dotfiles/tests
           key: test-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/deps.sh') }}
-      # The machine's own tools, which run_tests.sh requires but never installs
-      # (shellcheck only for the lint job).
+      # The machine's own tools, which run_tests.sh requires but never installs.
       - name: Install stow and uv
-        run: brew install stow uv
+        run: brew install stow uv ${{ matrix.lint && 'shellcheck' || '' }}
+      - name: Run shellcheck
+        if: matrix.lint
+        run: bash tests/run_tests.sh --lint-only
       - name: Fetch test dependencies
         run: bash tests/deps.sh
       - name: Run bats shard

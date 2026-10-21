@@ -22,6 +22,7 @@ EXPLAIN=""
 REVIEW_INCOMPLETE=0
 MANAGED_PATHS_CACHE=""
 LINK_STATUS=""
+LINK_OUTPUT=""
 LOGIN_ENV=""
 XDG_DB=""
 XDG_PROGRAMS=""
@@ -188,9 +189,22 @@ link_script() {
     bash "${BASEDIR}/scripts/link.sh" --repo "${SOURCE_DIR}" --destination "${DEST_DIR}" "$@"
 }
 
+# link_script's output in LINK_OUTPUT, through a file: macOS bash 3.2 can fail
+# a write to a pipe with EINTR when a child exits, which read as a failed check.
+link_output() {
+    local file status=0
+    file="$(mktemp)" || return 1
+    link_script "$@" > "${file}" || status=$?
+    LINK_OUTPUT="$(< "${file}")"
+    rm -f "${file}"
+    return "${status}"
+}
+
 prime_managed_paths_cache() {
     [[ -z "${MANAGED_PATHS_CACHE}" ]] || return 0
-    if ! MANAGED_PATHS_CACHE="$(link_script managed)"; then
+    if link_output managed; then
+        MANAGED_PATHS_CACHE="${LINK_OUTPUT}"
+    else
         log_error "Could not list managed paths; the check is incomplete"
         return 1
     fi
@@ -635,11 +649,12 @@ size_of() {
 collect_links() {
     local line state path
 
-    if ! LINK_STATUS="$(link_script status)"; then
+    if ! link_output status; then
         log_warn "Could not check the repo's links; the check is incomplete"
         REVIEW_INCOMPLETE=1
         return
     fi
+    LINK_STATUS="${LINK_OUTPUT}"
     while IFS= read -r line; do
         [[ -n "${line}" ]] || continue
         state="${line%% *}"

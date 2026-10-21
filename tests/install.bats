@@ -400,7 +400,9 @@ run_resolve_harden() {
     local repo="${TEST_TMPDIR}/repo" home="${TEST_TMPDIR}/harden-home" bin="${TEST_TMPDIR}/bin"
     mkdir -p "${repo}/scripts/bootstrap/linux" "${repo}/stow/common" "${repo}/personas" "${repo}/roles" "${home}" "${bin}"
     cp "${PROJECT_ROOT}/install.sh" "${repo}/"
-    cp "${PROJECT_ROOT}/scripts/common.sh" "${PROJECT_ROOT}/scripts/link.sh" "${PROJECT_ROOT}/scripts/doctor.sh" "${repo}/scripts/"
+    cp "${PROJECT_ROOT}/scripts/common.sh" "${PROJECT_ROOT}/scripts/link.sh" "${repo}/scripts/"
+    # A stub: the isolated-home test covers the file review, a second a run.
+    printf '#!/usr/bin/env bash\n' > "${repo}/scripts/doctor.sh"
     printf 'export DEMO=1\n' > "${repo}/stow/common/.demo"
     printf 'os=darwin,linux\nlayers=common\nagents=no\neditors=no\nharden=yes\nbrew=\nbrew_optional=\n' > "${repo}/personas/server"
     cp "${repo}/personas/server" "${repo}/personas/home"
@@ -706,6 +708,7 @@ run_resolve_harden() {
         export TEST_LOG="'"${TEST_TMPDIR}"'/actions.log"
         export TEST_STOW_STUB="'"${TEST_TMPDIR}"'/stow.stub"
         export AGENTS_REPO_URL="file://'"${TEST_TMPDIR}"'/no-agents-repo"
+        export HOMEBREW_PREFIX="'"${TEST_TMPDIR}"'/brew"
         export USER="sandbox-user"
         export SHELL="${TEST_BIN}/zsh"
 
@@ -796,17 +799,19 @@ MOCK
         chmod +x "${TEST_BIN}/hostname" "${TEST_BIN}/find" "${TEST_BIN}/zsh" "${TEST_BIN}/grep" "${TEST_BIN}/ssh-keygen" "${TEST_BIN}/brew" "${TEST_STOW_STUB}"
 
         cd "'"${PROJECT_ROOT}"'"
+        # install.sh links the physical path, which a symlinked TMPDIR changes.
+        REAL_ROOT="$(pwd -P)"
         # No installs: claude-code, on by default, would run its real
         # installer; holeberry is off by default, and dropping it is harmless.
         ./install.sh --skip-system --skip-brew --no-install claude-code --no-install holeberry --adopt
 
         [[ -L "${HOME}/.dotfiles" ]] || { echo "missing dotfiles symlink"; exit 1; }
         [[ "$(cat "${HOME}/.local/state/dotfiles/installs")" == "" ]] || { echo "installs not saved as none"; exit 1; }
-        [[ "$(readlink "${HOME}/.dotfiles")" == "'"${PROJECT_ROOT}"'" ]] || { echo "bad dotfiles symlink"; exit 1; }
+        [[ "$(readlink "${HOME}/.dotfiles")" == "${REAL_ROOT}" ]] || { echo "bad dotfiles symlink"; exit 1; }
         [[ -f "${HOME}/.ssh/id_ed25519" ]] || { echo "missing private key"; exit 1; }
         [[ -f "${HOME}/.ssh/id_ed25519.pub" ]] || { echo "missing public key"; exit 1; }
         grep -qx "brew install stow" "${TEST_LOG}" || { echo "missing brew install stow"; exit 1; }
-        grep -q "^stow --dir '"${PROJECT_ROOT}"'/stow --target ${HOME} --no-folding --restow .* --adopt common\( \|$\)" "${TEST_LOG}" || {
+        grep -q "^stow --dir ${REAL_ROOT}/stow --target ${HOME} --no-folding --restow .* --adopt common\( \|$\)" "${TEST_LOG}" || {
             echo "missing stow run"
             cat "${TEST_LOG}"
             exit 1
@@ -946,7 +951,9 @@ MOCK
     local repo="${TEST_TMPDIR}/repo" home="${TEST_TMPDIR}/install-home" bin="${TEST_TMPDIR}/bin"
     mkdir -p "${repo}/scripts/bootstrap/linux" "${repo}/stow/common" "${repo}/personas" "${repo}/roles" "${home}" "${bin}"
     cp "${PROJECT_ROOT}/install.sh" "${repo}/"
-    cp "${PROJECT_ROOT}/scripts/common.sh" "${PROJECT_ROOT}/scripts/link.sh" "${PROJECT_ROOT}/scripts/doctor.sh" "${repo}/scripts/"
+    cp "${PROJECT_ROOT}/scripts/common.sh" "${PROJECT_ROOT}/scripts/link.sh" "${repo}/scripts/"
+    # A stub: the isolated-home test covers the file review, a second a run.
+    printf '#!/usr/bin/env bash\n' > "${repo}/scripts/doctor.sh"
     printf 'export DEMO=1\n' > "${repo}/stow/common/.demo"
     printf 'os=darwin,linux\nlayers=common\nagents=no\neditors=no\nbrew=\nbrew_optional=\nroles_optional=demo\n' > "${repo}/personas/home"
     cp "${repo}/personas/home" "${repo}/personas/server"

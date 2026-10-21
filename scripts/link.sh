@@ -434,9 +434,9 @@ save_persona() {
 
 # This platform's own directory of setup scripts.
 bootstrap_dir() {
-    case "$(platform)" in
+    case "${PLATFORM_DETECTED}" in
         darwin) printf '%s/scripts/bootstrap/macos\n' "${REPO}" ;;
-        *) printf '%s/scripts/bootstrap/%s\n' "${REPO}" "$(platform)" ;;
+        *) printf '%s/scripts/bootstrap/%s\n' "${REPO}" "${PLATFORM_DETECTED}" ;;
     esac
 }
 
@@ -461,7 +461,8 @@ optional_installs() {
         for script in "${dir}"/*.sh; do
             [[ -f "${script}" ]] || continue
             grep -q '^# detect: ' "${script}" || continue
-            name="$(basename "${script}" .sh)"
+            name="${script##*/}"
+            name="${name%.sh}"
             [[ " ${seen} " != *" ${name} "* ]] || continue
             seen="${seen} ${name}"
             printf '%s\n' "${name}"
@@ -537,7 +538,8 @@ visit_install() {
 # DOTFILES_INSTALLS (set, maybe empty), else the saved choice, else the
 # defaults; a saved one no longer offered is dropped with a warning.
 load_installs() {
-    local saved name offered kept=""
+    local saved name offered kept="" all
+    all="$(offered_installs)"
     if [[ -n "${DOTFILES_INSTALLS+x}" ]]; then
         INSTALLS="${DOTFILES_INSTALLS}" INSTALLS_SOURCE=env
     else
@@ -546,10 +548,10 @@ load_installs() {
             IFS= read -r INSTALLS < "${saved}" || true
             INSTALLS_SOURCE=saved
         else
-            INSTALLS="$(offered_installs | awk -F'\t' '$2 == "default" { print $1 }' | tr '\n' ' ')" INSTALLS_SOURCE=default
+            INSTALLS="$(awk -F'\t' '$2 == "default" { print $1 }' <<< "${all}" | tr '\n' ' ')" INSTALLS_SOURCE=default
         fi
     fi
-    offered="$(offered_installs | cut -f1)"
+    offered="$(cut -f1 <<< "${all}")"
     for name in ${INSTALLS}; do
         if grep -qxF "${name}" <<< "${offered}"; then
             kept="${kept} ${name}"
@@ -617,7 +619,7 @@ warn_missing_layers() {
 packages_in() {
     local kind="$1" layer name
     for layer in ${PERSONA_LAYERS}; do
-        for name in "${layer}" "${layer}.$(platform)"; do
+        for name in "${layer}" "${layer}.${PLATFORM_DETECTED}"; do
             [[ -d "${REPO}/${kind}/${name}" ]] && printf '%s\n' "${name}"
         done
     done
@@ -638,10 +640,34 @@ package_entries() {
     done
 }
 
-# Relative paths of every file and symlink in one package.
+# Relative paths of every file and symlink in one package, from the listings
+# list_packages_once made when there are any.
 package_files() {
-    local dir="${REPO}/$1/$2"
+    local dir="${REPO}/$1/$2" i
+    for i in ${PACKAGE_KEYS[@]+"${!PACKAGE_KEYS[@]}"}; do
+        if [[ "${PACKAGE_KEYS[i]}" == "$1/$2" ]]; then
+            [[ -z "${PACKAGE_LISTS[i]}" ]] || printf '%s\n' "${PACKAGE_LISTS[i]}"
+            return 0
+        fi
+    done
     (cd "${dir}" && find . \( -type f -o -type l \) ! -name .DS_Store -print | sed 's#^\./##' | LC_ALL=C sort)
+}
+
+# List every package once, for apply and status: they never change the repo
+# and would otherwise list each package up to four times.
+PACKAGE_KEYS=()
+PACKAGE_LISTS=()
+list_packages_once() {
+    local dir kind list
+    for dir in "${REPO}"/stow/*/ "${REPO}"/seed/*/ "${REPO}"/editors/*/; do
+        [[ -d "${dir}" ]] || continue
+        dir="${dir%/}"
+        kind="${dir%/*}"
+        kind="${kind##*/}"
+        list="$(package_files "${kind}" "${dir##*/}")" || continue
+        PACKAGE_LISTS+=("${list}")
+        PACKAGE_KEYS+=("${kind}/${dir##*/}")
+    done
 }
 
 # The directory part of a path, as dirname gives it, without the process.
@@ -669,12 +695,18 @@ physical_path() {
     printf '%s/%s\n' "${dir}" "${path##*/}"
 }
 
-# An absolute path with its . and .. segments folded, by string alone: no
-# symlink is followed and nothing is forked.
-normalize_path() {
-    local part out=""
+# Sets LINK_PATH to where the link $1 with text $2 points: an absolute text as
+# it is, else the text from the link's directory with its . and .. segments
+# folded, by string alone. Every link is checked here, so nothing is followed
+# or forked, not even a subshell.
+LINK_PATH=""
+link_text_path() {
+    local part out="" path="./$2"
     local -a parts=()
-    IFS=/ read -r -a parts <<< "$1"
+    LINK_PATH="$2"
+    [[ "$2" != /* ]] || return 0
+    [[ "$1" != */* ]] || path="${1%/*}/$2"
+    IFS=/ read -r -a parts <<< "${path}"
     for part in ${parts[@]+"${parts[@]}"}; do
         case "${part}" in
             '' | .) ;;
@@ -682,7 +714,7 @@ normalize_path() {
             *) out="${out}/${part}" ;;
         esac
     done
-    printf '%s\n' "${out:-/}"
+    LINK_PATH="${out:-/}"
 }
 
 # True when the destination already resolves to the package file. Fast string
@@ -692,8 +724,8 @@ is_linked() {
     local target="$1" source="$2" resolved
     [[ -L "${target}" ]] || return 1
     resolved="$(readlink "${target}")" || return 1
-    [[ "${resolved}" == /* ]] || resolved="$(normalize_path "$(dir_of "${target}")/${resolved}")"
-    [[ "${resolved}" == "${source}" ]] && return 0
+    link_text_path "${target}" "${resolved}"
+    [[ "${LINK_PATH}" == "${source}" ]] && return 0
     resolved="$(physical_path "${target}")" || return 1
     [[ "${resolved}" == "$(physical_path "${source}")" ]]
 }
@@ -741,8 +773,8 @@ is_repo_link() {
     local destination
     [[ -L "$1" ]] || return 1
     destination="$(readlink "$1")" || return 1
-    [[ "${destination}" == /* ]] || destination="$(normalize_path "$(dir_of "$1")/${destination}")"
-    [[ "${destination}" == "${REPO}/stow/"* || "${destination}" == "${REPO}/editors/"* ]] && return 0
+    link_text_path "$1" "${destination}"
+    [[ "${LINK_PATH}" == "${REPO}/stow/"* || "${LINK_PATH}" == "${REPO}/editors/"* ]] && return 0
     destination="$(link_destination "$1")" || return 1
     [[ "${destination}" == "${REPO}/stow/"* || "${destination}" == "${REPO}/editors/"* ]]
 }
@@ -750,37 +782,49 @@ is_repo_link() {
 # Relative paths of the links that belong here: this platform's stow files and
 # editor links.
 managed_links() {
-    local entry
+    local entry stow editors
+    stow="$(package_entries stow)"
+    editors="$(editor_links)"
     while IFS= read -r entry; do
-        printf '%s\n' "${entry#*|}"
-    done < <(package_entries stow)
+        [[ -z "${entry}" ]] || printf '%s\n' "${entry#*|}"
+    done <<< "${stow}"
     while IFS= read -r entry; do
-        printf '%s\n' "${entry%%|*}"
-    done < <(editor_links)
+        [[ -z "${entry}" ]] || printf '%s\n' "${entry%%|*}"
+    done <<< "${editors}"
 }
 
 # Relative paths where a repo link may have been left behind: every file any
 # stow package has held, now or in the repo's history, and whatever sits in
 # any platform's editor directories.
 stale_candidates() {
-    local dir line entry os
+    local dir line entry os list
     for dir in "${REPO}/stow"/*/; do
-        [[ -d "${dir}" ]] && package_files stow "$(basename "${dir}")"
+        dir="${dir%/}"
+        [[ -d "${dir}" ]] && package_files stow "${dir##*/}"
     done
+    # Lists are captured before printing, as in package_entries.
     if command -v git >/dev/null 2>&1 && git -C "${REPO}" rev-parse --git-dir >/dev/null 2>&1; then
+        list="$(git -C "${REPO}" -c core.quotePath=false log --format= --name-only -- stow 2>/dev/null || true)"
         while IFS= read -r line; do
             [[ "${line}" == stow/*/* ]] && printf '%s\n' "${line#stow/*/}"
-        done < <(git -C "${REPO}" -c core.quotePath=false log --format= --name-only -- stow 2>/dev/null || true)
+        done <<< "${list}"
     fi
     for os in darwin linux; do
+        list="$(editor_dirs "${os}")"
         while IFS= read -r entry; do
             dir="${DEST}/${entry%%|*}"
-            [[ -d "${dir}" && ! -L "${dir}" ]] || continue
+            [[ -n "${entry}" && -d "${dir}" && ! -L "${dir}" ]] || continue
             for line in "${dir}"/*; do
                 [[ -L "${line}" ]] && printf '%s\n' "${line#"${DEST}"/}"
             done
-        done < <(editor_dirs "${os}")
+        done <<< "${list}"
     done
+}
+
+# True when the lines in $1 include $2, as grep -Fxq would say, without the
+# process.
+has_line() {
+    [[ $'\n'"$1"$'\n' == *$'\n'"$2"$'\n'* ]]
 }
 
 # Absolute paths of stale links: repo links that are not managed here.
@@ -789,9 +833,9 @@ stale_links() {
     managed="$(managed_links)"
     while IFS= read -r relative; do
         [[ -n "${relative}" ]] || continue
+        has_line "${managed}" "${relative}" && continue
         target="${DEST}/${relative}"
         is_repo_link "${target}" || continue
-        grep -Fxq -- "${relative}" <<< "${managed}" && continue
         printf '%s\n' "${target}"
     done < <(stale_candidates | LC_ALL=C sort -u)
     stale_agent_links
@@ -857,34 +901,50 @@ persona_skill_bundles() {
 # Absolute paths of links in ~/.agents/skills into a bundle another persona
 # lists but this one does not.
 stale_skill_links() {
-    local skills="${DEST}/${SKILLS_DIR}" home bundles target bundle listed
+    local skills="${DEST}/${SKILLS_DIR}" home bundles target bundle listed=""
     [[ "${PERSONA_AGENTS}" == yes && -d "${skills}" && ! -L "${skills}" ]] || return 0
     home="$(cd -P "${DEST}" && pwd)" || return 0
     bundles="${home}/.config/agents/skills/"
-    listed="$(persona_skill_bundles)"
     while IFS= read -r target; do
         bundle="$(link_destination "${target}")" || continue
         [[ "${bundle}" == "${bundles}"* ]] || continue
         bundle="${bundle#"${bundles}"}"
         bundle="${bundle%%/*}"
         [[ " ${PERSONA_SKILLS} " == *" ${bundle} "* ]] && continue
-        grep -Fxq -- "${bundle}" <<< "${listed}" && printf '%s\n' "${target}"
+        [[ -n "${listed}" ]] || listed="$(persona_skill_bundles)"
+        has_line "${listed}" "${bundle}" && printf '%s\n' "${target}"
     done < <(find "${skills}" -mindepth 1 -maxdepth 1 -type l | LC_ALL=C sort)
 }
 
-# A path as the reader knows it: ~/... when linking into $HOME, and relative
-# to the repo for the repo's own files.
-show_path() {
+# Sets SHOWN to a path as the reader knows it: ~/... when linking into $HOME,
+# and relative to the repo for the repo's own files.
+SHOWN=""
+shown_path() {
     local path="$1" home="~"
     if [[ "${path}" == "${REPO}/"* ]]; then
-        printf '%s\n' "${path#"${REPO}"/}"
+        SHOWN="${path#"${REPO}"/}"
     elif [[ "${DEST}" == "${HOME}" && "${path}" == "${DEST}" ]]; then
-        printf '%s\n' "${home}"
+        SHOWN="${home}"
     elif [[ "${DEST}" == "${HOME}" && "${path}" == "${DEST}/"* ]]; then
-        printf '%s/%s\n' "${home}" "${path#"${DEST}"/}"
+        SHOWN="${home}/${path#"${DEST}"/}"
     else
-        printf '%s\n' "${path}"
+        SHOWN="${path}"
     fi
+}
+
+show_path() {
+    shown_path "$1"
+    printf '%s\n' "${SHOWN}"
+}
+
+# Prints "VERB TARGET -> SOURCE" with both paths shown, without a subshell for
+# each: every link a run makes is named here.
+print_link() {
+    local target
+    shown_path "$2"
+    target="${SHOWN}"
+    shown_path "$3"
+    printf '%s %s -> %s\n' "$1" "${target}" "${SHOWN}"
 }
 
 # Links counted across the run for the closing summary.
@@ -1019,12 +1079,12 @@ place_link() {
     clear_target "${target}" "${source}" || return 0
     PLACED=new
     if [[ "${DRY_RUN}" -eq 1 ]]; then
-        printf 'Would link %s -> %s\n' "$(show_path "${target}")" "$(show_path "${source}")"
+        print_link 'Would link' "${target}" "${source}"
         return 0
     fi
     mkdir -p "$(dirname "${target}")"
     ln -sfn "${source}" "${target}"
-    printf 'Linked %s -> %s\n' "$(show_path "${target}")" "$(show_path "${source}")"
+    print_link 'Linked' "${target}" "${source}"
 }
 
 # Place each TARGET|SOURCE line on stdin and report them under LABEL.
@@ -1070,9 +1130,9 @@ report_stow() {
     for entry in ${STOW_PENDING[@]+"${STOW_PENDING[@]}"}; do
         target="${DEST}/${entry#*|}" source="${REPO}/stow/${entry%%|*}/${entry#*|}"
         if [[ "${DRY_RUN}" -eq 1 ]]; then
-            printf 'Would link %s -> %s\n' "$(show_path "${target}")" "$(show_path "${source}")"
+            print_link 'Would link' "${target}" "${source}"
         elif is_linked "${target}" "${source}"; then
-            printf 'Linked %s -> %s\n' "$(show_path "${target}")" "$(show_path "${source}")"
+            print_link 'Linked' "${target}" "${source}"
             in_place=$((in_place + 1))
         else
             continue
@@ -1264,28 +1324,34 @@ warn_unused_agents_checkout() {
     log_warn "${DEST}/.config/agents holds the private agents repo, which this persona does not use. It is left in place; delete it yourself if this machine should not keep it."
 }
 
-# destination|source for every shared editor file on this platform.
+# destination|source for every shared editor file on this platform. Like
+# package_entries, each list is captured before anything is printed.
 editor_links() {
-    local entry dir name relative
+    local entry dir name relative dirs files
     [[ "${PERSONA_EDITORS}" == yes ]] || return 0
+    dirs="$(editor_dirs)"
     while IFS= read -r entry; do
+        [[ -n "${entry}" ]] || continue
         dir="${entry%%|*}"
         name="${entry#*|}"
         [[ -d "${REPO}/editors/${name}" ]] || continue
+        files="$(package_files editors "${name}")"
+        [[ -n "${files}" ]] || continue
         while IFS= read -r relative; do
             printf '%s/%s|%s/editors/%s/%s\n' "${dir}" "${relative}" "${REPO}" "${name}" "${relative}"
-        done < <(package_files editors "${name}")
-    done < <(editor_dirs)
+        done <<< "${files}"
+    done <<< "${dirs}"
 }
 
 # Same rules as the stow packages: an identical copy is replaced, anything
 # else is backed up first.
 link_editors() {
-    local entry
+    local entry links
     place_links "Editor settings" < <(
+        links="$(editor_links)"
         while IFS= read -r entry; do
-            printf '%s|%s\n' "${DEST}/${entry%%|*}" "${entry#*|}"
-        done < <(editor_links)
+            [[ -z "${entry}" ]] || printf '%s|%s\n' "${DEST}/${entry%%|*}" "${entry#*|}"
+        done <<< "${links}"
     )
 }
 
@@ -1338,18 +1404,20 @@ path_prefixes() {
 unlinked_layer_paths() {
     local dir layer relative shared
     for layer in $(for dir in "${REPO}"/stow/*/; do
-        if [[ -d "${dir}" ]]; then dir="$(basename "${dir}")"; printf '%s\n' "${dir%%.*}"; fi
+        dir="${dir%/}"
+        if [[ -d "${dir}" ]]; then dir="${dir##*/}"; printf '%s\n' "${dir%%.*}"; fi
     done | LC_ALL=C sort -u); do
         [[ " ${PERSONA_LAYERS} " == *" ${layer} "* ]] && continue
         shared="$(for dir in "${REPO}"/stow/*/; do
-            dir="$(basename "${dir}")"
+            dir="${dir%/}"
+            dir="${dir##*/}"
             if [[ -d "${REPO}/stow/${dir}" && "${dir%%.*}" != "${layer}" ]]; then package_files stow "${dir}"; fi
         done | path_prefixes | LC_ALL=C sort -u)"
         for dir in "${REPO}/stow/${layer}" "${REPO}/stow/${layer}".*; do
-            if [[ -d "${dir}" ]]; then package_files stow "$(basename "${dir}")"; fi
+            if [[ -d "${dir}" ]]; then package_files stow "${dir##*/}"; fi
         done | path_prefixes | LC_ALL=C sort -u | while IFS= read -r relative; do
-            grep -Fxq -- "${relative}" <<< "${shared}" && continue
-            if [[ "${relative}" == */* ]] && ! grep -Fxq -- "${relative%/*}" <<< "${shared}"; then
+            has_line "${shared}" "${relative}" && continue
+            if [[ "${relative}" == */* ]] && ! has_line "${shared}" "${relative%/*}"; then
                 continue
             fi
             # An empty folder is what pruning stale links leaves behind.
@@ -2099,11 +2167,15 @@ main() {
             done
             ;;
         managed) print_managed ;;
-        status) print_status ;;
+        status)
+            list_packages_once
+            print_status
+            ;;
         add) add_files ;;
         rm) remove_files ;;
         mv) move_files ;;
         apply)
+            list_packages_once
             if [[ "${PERSONA_SOURCE}" == default ]]; then
                 log_warn "No persona chosen; linking as '${PERSONA_NAME}', the default for $(platform). Pick one with: install.sh --persona NAME"
             fi
