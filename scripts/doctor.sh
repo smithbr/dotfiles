@@ -20,6 +20,9 @@ HINT=1
 TSV=0
 EXPLAIN=""
 REVIEW_INCOMPLETE=0
+# 1 when the gum list follows the report: it shows the items the list holds
+# only once, in the list.
+LIST_FOLLOWS=0
 MANAGED_PATHS_CACHE=""
 LINK_STATUS=""
 LOGIN_ENV=""
@@ -953,6 +956,16 @@ count_group() {
     printf '%d\n' "${n}"
 }
 
+# The items of a group the report lists, leaving out those the list holds.
+count_listed() {
+    local i n=0
+    for i in ${f_group[@]+"${!f_group[@]}"}; do
+        [[ "${f_group[i]}" == "$1" ]] || continue
+        [[ "${LIST_FOLLOWS}" -eq 1 && "${f_fixable[i]}" -eq 1 ]] || n=$((n + 1))
+    done
+    printf '%d\n' "${n}"
+}
+
 count_kind() {
     local i n=0
     for i in ${f_group[@]+"${!f_group[@]}"}; do
@@ -1005,6 +1018,7 @@ print_items() {
 
     for i in ${f_group[@]+"${!f_group[@]}"}; do
         [[ "${f_group[i]}" == "${group}" ]] || continue
+        [[ "${group}" == links || "${LIST_FOLLOWS}" -eq 0 || "${f_fixable[i]}" -eq 0 ]] || continue
         path="$(printable "$(display_path "${f_path[i]}")")"
         note="$(printable "${f_reason[i]}")"
         case "${group}" in
@@ -1102,6 +1116,8 @@ print_report() {
         print_heading "${RED}" Links "${links}" "repair these, then run df-link"
         print_items links
     fi
+    # With the list to follow, these sections keep only what it leaves out.
+    fix="$(count_listed fix)" decide="$(count_listed decide)" unmanaged="$(count_listed unmanaged)"
     if [[ "${fix}" -gt 0 ]]; then
         print_heading "${YELLOW}" Fix "${fix}" "df-doctor suggests these changes"
         print_items fix
@@ -1652,6 +1668,7 @@ main() {
     fi
     # A terminal gets the list without asking for it.
     [[ "${FIX}" -eq 1 || "${REPORT_ONLY}" -eq 1 || ! -t 0 || ! -t 1 ]] || FIX=1
+    [[ "${FIX}" -eq 0 || "$(prompt_mode)" != gum ]] || LIST_FOLLOWS=1
     [[ "${FIX_ONLY}" -eq 1 ]] || print_report
     if [[ "${FIX}" -eq 1 ]]; then
         fix_flow || status=1

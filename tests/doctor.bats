@@ -687,6 +687,16 @@ JSON
     assert_output --partial "Nothing changed."
     assert test -f "${HOME}/.notes.bak"
 
+    # The report above the list keeps its counts but leaves the list's rows to it.
+    stub_gum esc
+    run bash -c 'printf "" | DOTFILES_PROMPT=gum bash "$1" --source "$2" --fix' _ "${DOCTOR}" "${TEST_SOURCE_DIR}"
+    assert_success
+    assert_output --regexp "1 to fix.*· .*3 to decide"
+    refute_output --partial "Decide ("
+    refute_output --partial "~/.old-a"
+    run grep -F '~/.old-a' "${GUM_CALLS}"
+    assert_success
+
     # Skip the suggested archive, ignore one, delete one after the confirm.
     stub_gum "row ~/.notes.bak" skip "row ~/.old-a" ignore "row ~/.old-b" delete apply yes
     run bash -c 'printf "" | DOTFILES_PROMPT=gum bash "$1" --source "$2" --fix-only' _ "${DOCTOR}" "${TEST_SOURCE_DIR}"
