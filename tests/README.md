@@ -8,7 +8,7 @@ The Bats suite for the repo. Run it with `./tests/run_tests.sh`; the [root `AGEN
 - The suite's own tools live in `~/.cache/dotfiles/tests` (`XDG_CACHE_HOME` or `DOTFILES_TEST_DEPS` move it), which `deps.sh` fills on the first run: `bats-core`, `bats-support`, `bats-assert`, GNU `parallel`, a `python3` link to a uv-managed Python 3.11+ (without `uv`, the tests that need it skip), and on macOS a `bash` 5 built from source. Each download is checked against the sha256 pinned in `deps.sh`; a rerun with everything present is offline and silent; `rm -rf ~/.cache/dotfiles/tests` starts over. Nothing is installed through Homebrew for the tests. The machine's own `shellcheck` and `stow` are required, not installed (`Brewfile.core`, apt), and on Debian `bzip2`.
 - Bats runs on the cache's bash through a `bash` shim first on `PATH` that sends only Bats' own programs there: `bash -c`, `run bash script`, and `#!/usr/bin/env bash` scripts under test still run on `/bin/bash`, as on a fresh Mac. Code a test sources in-process runs on the new bash. The cache's `python3` comes first on `PATH`, its `bats` and `parallel` last.
 - Bumping a pin: set the version and the tarball's sha256 in `deps.sh` (cross-check with the GNU `.sig` or `brew info --json=v2 NAME`), then delete the cache directory. CI's cache key is the file's hash.
-- CI ([`ci.yml`](../.github/workflows/ci.yml)) runs on every push as four parallel macOS jobs: one `--lint-only` and three `--no-lint` Bats shards: `link.bats`; `doctor.bats` with `install.bats`; and every other `*.bats` file by glob, so a new file runs there without a workflow change. Move a file between shards (and in `NAMED`) when one shard grows well past the others.
+- CI ([`ci.yml`](../.github/workflows/ci.yml)) runs on every push as five parallel macOS Bats shards, the most macOS jobs an account runs at once, each listing its files in the matrix. The last also runs `--lint-only` and takes every `*.bats` file not in `NAMED` by glob, so a new file runs there without a workflow change. Move a file between shards (and in `NAMED`) when one shard grows well past the others.
 
 ## Docs lint
 
@@ -32,7 +32,10 @@ chmod +x .githooks/pre-commit .githooks/pre-push
 Tests run against scratch homes, overridden `PATH`, and stub executables: process-level isolation, not a container. Each `.bats` file names its cases; this list says only what each is for.
 
 - `ai_doctor.bats`: `ai-doctor` against fixture Claude Code, Codex, and Cursor config and a fake `claude`: each kind of row, each change and its undo, `--reset`, the menus, and that nothing changes without them.
-- `bin_scripts.bats`: the scripts in `stow/*/.local/bin` other than `ai-doctor` and `ph`, with their external commands mocked.
+- `bin_scripts.bats`: `os-doctor`, `cf-cert`, `ts-test`, `sshkey`, the `df-` wrappers, `df-deploy`, and `st`, with their external commands mocked.
+- `bin_firetv.bats`: `firetv` against a mocked `adb` and `ph`.
+- `bin_ph_backup.bats`: `ph-backup` against a scratch Pi-hole, Unbound, and Tailscale.
+- `bin_pihole.bats`: `ph-sec-audit`, `ph-padd`, `ph-update`, and `ph-test`, with their external commands mocked.
 - `bootstrap.bats`: `apt-packages.txt`, the Linux and macOS bootstrap scripts, the optional installs, `pihole.sh` (`PIHOLE_ROOT`), `harden.sh` dry runs (`HARDEN_ROOT`), `iterm2.sh`, `bootstrap.sh`, and script conventions (shebang, strict mode, `common.sh`).
 - `brew_add.bats`: `brew-add.sh` and `df-add` against scratch Brewfiles and a stub `brew`.
 - `brew.bats`: the Brewfiles' shape and `brew.sh` against a mocked brew.
