@@ -58,7 +58,7 @@ run_brew_sh() {
 # ---------------------------------------------------------------------------
 
 @test "Brewfile.core holds only entries, comments, and an OS.mac? block" {
-    run grep -vE '^\s*$|^\s*#|^\s*(brew|cask|tap|mas) "|^if OS\.mac\?$|^end$' "${PROJECT_ROOT}/homebrew/Brewfile.core"
+    run grep -vE '^\s*$|^\s*#|^\s*(brew|cask|tap|mas|uv) "|^if OS\.mac\?$|^end$' "${PROJECT_ROOT}/homebrew/Brewfile.core"
     assert_failure
 }
 

@@ -26,6 +26,7 @@ brew "stow"
 brew "tmux"
 brew "uv"
 brew "xdg-ninja", args: ["HEAD"]
+uv "whichllm"
 
 # Shell Enhancements
 brew "antidote"

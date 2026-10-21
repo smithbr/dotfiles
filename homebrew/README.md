@@ -16,7 +16,7 @@ One source per kind of tool. Agents follow this on every machine, and the shell 
 - **A command-line tool you always want:** `Brewfile.core` (`df-add brew NAME`), or apt for what needs root or runs before brew.
 - **A Mac app:** a cask in a Brewfile; adopt one installed by hand with `brew install --cask --adopt NAME`. App Store apps are `mas` entries.
 - **A one-off run:** `uvx`, `npx`, or `bunx`; nothing stays installed.
-- **A Python tool you keep:** `uv tool install`. Never `pipx`, and never `pip` outside a virtualenv; `.zshenv` sets `PIP_REQUIRE_VIRTUALENV=1`.
+- **A Python tool you keep:** `uv tool install`, recorded as a `uv "NAME"` entry in a Brewfile so `brew bundle` installs it. Never `pipx`, and never `pip` outside a virtualenv; `.zshenv` sets `PIP_REQUIRE_VIRTUALENV=1`.
 - **Python itself:** uv's, never Homebrew's or Apple's. A Python script in this repo starts with `#!/usr/bin/env -S uv run --script` and a `requires-python` line, so uv supplies a new enough interpreter wherever `python3` is not; the test suite's `python3` is uv's too.
 - **Never `npm install -g`:** the `npm` shell function refuses global installs (`NPM_ALLOW_GLOBAL=1 npm …` for a one-time exception). Homebrew's own npm updates with `brew upgrade node`.
 - **MCP servers:** as `uvx`, `npx`, or `bunx` commands where possible, so nothing has to be installed first; give a GUI app an absolute path, since it doesn't read the shell's PATH.
