@@ -12,17 +12,24 @@
   ai-doctor -n, --dry-run   say what --yes would change, change nothing
   ai-doctor --reset [WHAT]  undo ai-doctor's changes: plugins, skills, bundles,
                             servers, or all of them
-  ai-doctor -v              also every row kept, what is already off, and the
-                            instruction files and agents
+  ai-doctor -v              also what is already off and instruction/agent totals
   ai-doctor --app NAME      only claude, codex, or cursor (repeatable)
 
-Each row shows what the source adds to the / menu, the tokens it adds before
-you type, and when you last used it. A row unused for 30 days starts on off;
-one you used starts on keep. Last use comes from Claude Code's transcripts,
+Each app has separate app-default and custom-configuration sections. Every
+custom row explains its source, purpose, upfront context estimate, cost when
+used, and usage evidence. On a terminal, ? opens the app overview and [ ]
+scroll the selected row's details. Cost labels: low <500, medium 500-1999,
+high >=2000 upfront tokens. These are context sizes, not speed or RAM tests.
+Unknown MCP costs are not zero; tool definitions, startup and results vary.
+
+A Claude source unused for 30 days starts on off; one you used starts on keep.
+Last use comes from Claude Code's transcripts,
 saved in ~/.local/state/ai-doctor/usage.json as they age out, and token
 counts from Claude Code's own `claude -p /context` report (estimated from
-skill descriptions when no claude command is found). Claude's built-in
-skills and tools get no row, only their share in the summary.
+skill descriptions when absent from the report). Direct Codex MCP calls are
+also counted from retained sessions; Cursor history is unavailable. Missing
+history means not recorded, not never used. App defaults are read-only;
+their full runtime inventory and costs may be unavailable locally.
 
 Turning a row off uses the tool's own command where there is one: claude
 plugin disable, skill-drop, claude mcp remove, codex mcp remove. A skill is
@@ -38,7 +45,9 @@ otherwise 0.
 """
 
 import argparse
+import contextlib
 import datetime
+import io
 import json
 import os
 import re
@@ -48,6 +57,7 @@ import stat
 import subprocess
 import sys
 import termios
+import textwrap
 import time
 import tty
 from pathlib import Path
@@ -305,8 +315,36 @@ def transcript_uses():
 class Usage:
     """Last use per key, from the transcripts and from ai-doctor's own ledger, which outlives them."""
 
-    def __init__(self, enabled):
+    def __init__(self, enabled, codex=False):
         self.uses, oldest = transcript_uses() if enabled else ({}, NOW)
+        self.codex_tools = {}
+        if codex:
+            for folder in (HOME / ".codex/sessions", HOME / ".codex/archived_sessions"):
+                for path in folder.rglob("*.jsonl"):
+                    try:
+                        handle = path.open(encoding="utf-8", errors="replace")
+                    except OSError:
+                        continue
+                    with handle:
+                        for line in handle:
+                            if '"function_call"' not in line or "mcp__" not in line:
+                                continue
+                            try:
+                                record = json.loads(line)
+                                payload = record.get("payload") or {}
+                                name = payload.get("name", "")
+                                if record.get("type") != "response_item" or payload.get("type") != "function_call":
+                                    continue
+                                match = re.fullmatch(r"mcp__([\w-]+)__(\w+)", name)
+                                if not match:
+                                    continue
+                                when = datetime.datetime.fromisoformat(record["timestamp"].replace("Z", "+00:00")).timestamp()
+                            except (ValueError, KeyError, TypeError, AttributeError):
+                                continue
+                            key = "codex:mcp:" + key_name(match[1])
+                            count, last = self.uses.get(key, (0, 0))
+                            self.uses[key] = (count + 1, max(last, when))
+                            self.codex_tools.setdefault(key, set()).add(match[2])
         ledger = read_json(STATE_DIR / "usage.json") or {}
         self.last = {k: v for k, v in (ledger.get("last") or {}).items() if isinstance(v, (int, float))}
         for key, (_count, when) in self.uses.items():
@@ -348,7 +386,7 @@ def dormant(last):
 
 def describe_last(last, uses):
     if last is None:
-        return "never"
+        return "not recorded"
     days = max(int((NOW - last) // 86400), 0)
     when = "today" if days == 0 else f"{days}d ago"
     return f"{when} ({uses})" if uses else when
@@ -586,6 +624,14 @@ class Row:
         self.broken = False
         self.parent = None
         self.group = "claude"
+        self.origin = "Custom setup"
+        self.purpose = "Purpose not described by this source."
+        self.cost = "Unknown cost: not measured, not zero."
+        self.evidence = "Claude Code records only; no record does not mean never used."
+
+    def details(self):
+        return [self.origin, f"Purpose: {self.purpose}", f"Impact: {self.cost}",
+                f"Use: {self.when() if self.dated else 'unknown'}; {self.evidence}", f"Off/restore: {self.note}"]
 
     def offer(self, verb, todo, apply):
         self.choices.append((verb, todo, apply))
@@ -608,8 +654,8 @@ class Inventory:
         self.off = []  # (what, how to turn it back on), for -v
         self.health = []
         self.verbose = []  # (section, line), for -v
-        self.headings = {"claude": "Claude Code: the terminal and the desktop app's Code tab", "codex": "Codex",
-                         "cursor": "Cursor", "undo": "Undo ai-doctor's changes"}
+        self.headings = {"claude": "Claude Code: the terminal and the desktop app's Code tab | custom sources", "codex": "Codex | custom sources",
+                         "cursor": "Cursor | custom sources", "undo": "Undo ai-doctor's changes"}
         self.slash = 0
         self.est_chars = 0
 
@@ -676,8 +722,15 @@ def add_plugins(inv, usage, report, needs_auth):
             parts.append(plural(len(agents), "agent"))
         origin = "from claude.ai" if source == "claude.ai" else "installed"
         row = Row(f"plugin {name} ({origin}): {', '.join(parts)}", len(skill_files),
-                  measured.get(name, tokens_of(chars) if report is None else 0), last, uses,
+                  measured.get(name, tokens_of(chars)), last, uses,
                   f"claude plugin enable {key} turns it back on")
+        meta = read_json(root / ".claude-plugin" / "plugin.json") or {}
+        row.origin = f"Added plugin ({origin}): {tilde(root)}; not a core app default"
+        row.purpose = meta.get("description") or "; ".join(frontmatter(f)[1] for f in skill_files) or row.purpose
+        row.cost = skill_cost(row.tokens, sum(len(read_text(f) or "") for f in skill_files),
+                              name in measured, bool(report))
+        if servers or agents:
+            row.cost += " Includes servers/agents: their tool, output and extra model-call costs are not included."
         row.offer("off", f"claude plugin disable {key}", disable_plugin(key))
         duplicate = source == "installed" and "claude.ai" in names[name]
         if duplicate:
@@ -699,11 +752,11 @@ def bundle_of(path):
     return parts[0] if len(parts) > 1 else "local"
 
 
-def skill_row(name, label, chars, usage, measured, report, keys, others=""):
-    overrides = settings().get("skillOverrides") or {}
+def skill_row(name, label, chars, usage, measured, report, keys, others="", claude_enabled=True):
+    overrides = (settings().get("skillOverrides") or {}) if claude_enabled else {}
     current = overrides.get(name)
     uses, last = usage.lookup(keys)
-    tokens = measured.get(name, 0 if report else tokens_of(chars))
+    tokens = measured.get(name, tokens_of(chars))
     if current == "user-invocable-only":
         tokens = 0
     row = Row(f"{label} {name}" + (" (menu only)" if current == "user-invocable-only" else ""), 1, tokens, last,
@@ -715,7 +768,35 @@ def skill_row(name, label, chars, usage, measured, report, keys, others=""):
                   override_skill(name, "user-invocable-only"))
     if dormant(last):
         row.start_off()
+    row.cost = skill_cost(tokens, None, name in measured, bool(report))
+    if current == "off":
+        row.title += " (off in Claude Code; still available in other apps)"
+        without_claude_switch(row)
     return row
+
+
+def skill_cost(tokens, body_chars, measured=False, report=False):
+    size = "unknown" if body_chars is None else f"~{tokens_of(body_chars):,} tokens"
+    level = "low" if (tokens or 0) < 500 else "medium" if tokens < 2000 else "high"
+    basis = "reported by Claude /context" if measured else "description estimate, characters / 4"
+    if report and not measured:
+        basis += "; not present in /context; using description estimate"
+    return (f"{level} upfront: ~{tokens or 0:,} tokens ({basis}). "
+            f"When used: {size} of full instructions across this source, plus references/output and model work; "
+            "only selected instructions are read, not included upfront.")
+
+
+def explain_skill(row, path):
+    name, description = frontmatter(path)
+    row.origin = f"Custom skill: {tilde(path)} (resolved: {tilde(path.resolve())})"
+    row.purpose = description.removeprefix(name or "").strip() or row.purpose
+    row.cost = row.cost.replace("When used: unknown", f"When used: ~{tokens_of(len(read_text(path) or '')):,} tokens")
+
+
+def without_claude_switch(row):
+    row.choices = row.choices[:1]
+    row.default = 0
+    row.note = "Individual overrides control Claude Code only; disable the containing bundle for all apps instead."
 
 
 def add_skills(inv, apps, usage, report):
@@ -751,7 +832,7 @@ def add_skills(inv, apps, usage, report):
         everyone = ", ".join(names[a] for a in loaders[:-1]) + (" and " if len(loaders) > 1 else "") + names[loaders[-1]] \
             if loaders else "Claude Code"
         if group == "shared":
-            inv.headings["shared"] = f"Skills folder {tilde(real)}, loaded by {everyone}"
+            inv.headings["shared"] = f"Skills folder {tilde(real)}, loaded by {everyone} | custom sources"
         entries = sorted(e for e in real.iterdir() if not e.name.startswith("."))
         synced = real / "synced"
         for entry in entries:
@@ -769,28 +850,39 @@ def add_skills(inv, apps, usage, report):
             name, text = frontmatter(skill_md)
             name = name or entry.name
             inv.est_chars += len(text)
-            if overrides.get(name) == "off":
+            if overrides.get(name) == "off" and loaders == ["claude"]:
                 inv.off.append((f"skill {name}", "ai-doctor --reset skills, or remove its skillOverrides entry"))
                 continue
             where = bundle_of(entry)
             if where in ("local", "linked elsewhere"):
-                row = skill_row(name, "skill", len(text), usage, measured, report, {f"skill:{key_name(name)}"}, others)
+                row = skill_row(name, "skill", len(text), usage, measured, report, {f"skill:{key_name(name)}"}, others,
+                                claude_enabled="claude" in loaders)
                 row.group = group
                 inv.slash += 1
                 inv.rows.append(row)
             else:
-                bundles.setdefault(where, []).append((name, len(text)))
+                bundles.setdefault(where, []).append((name, len(text), skill_md))
+            if where in ("local", "linked elsewhere"):
+                explain_skill(row, skill_md)
+                if "claude" not in loaders:
+                    without_claude_switch(row)
         for skill_md in sorted(synced.glob("*/*/SKILL.md")):
             name, text = frontmatter(skill_md)
             name = name or skill_md.parent.name
             inv.est_chars += len(text)
-            if overrides.get(name) == "off":
+            if overrides.get(name) == "off" and loaders == ["claude"]:
                 inv.off.append((f"claude.ai skill {name}", "ai-doctor --reset skills, or remove its skillOverrides entry"))
                 continue
             keys = {f"skill:{key_name(name)}", f"skill:anthropic-skills:{key_name(name)}"}
             inv.slash += 1
-            inv.rows.append(skill_row(name, "skill", len(text), usage, measured, report, keys))
+            inv.rows.append(skill_row(name, "skill", len(text), usage, measured, report, keys,
+                                      claude_enabled="claude" in loaders))
             inv.rows[-1].title += " (from claude.ai)"
+            inv.rows[-1].group = group
+            explain_skill(inv.rows[-1], skill_md)
+            inv.rows[-1].origin = f"Synced from claude.ai: {tilde(skill_md)}; not a core app default"
+            if "claude" not in loaders:
+                without_claude_switch(inv.rows[-1])
         for bundle, skills in sorted(bundles.items()):
             add_bundle(inv, bundle, skills, usage, measured, report, group, others, everyone)
         bundles.clear()
@@ -798,12 +890,20 @@ def add_skills(inv, apps, usage, report):
 
 def add_bundle(inv, bundle, skills, usage, measured, report, group, others, everyone):
     """A bundle row with a row per skill beneath it; a dormant bundle drops whole, so its skills start on keep."""
-    children = [skill_row(name, "skill", chars, usage, measured, report, {f"skill:{key_name(name)}"}, others)
-                for name, chars in skills]
+    children = []
+    for name, chars, path in skills:
+        child = skill_row(name, "skill", chars, usage, measured, report, {f"skill:{key_name(name)}"}, others,
+                          claude_enabled="Claude Code" in everyone)
+        explain_skill(child, path)
+        children.append(child)
     last = max((c.last for c in children if c.last), default=None)
     row = Row(f"bundle {bundle}: {plural(len(children), 'skill')}", len(children),
               sum(c.tokens or 0 for c in children), last, sum(c.uses for c in children),
               f"skills-add {bundle} turns it back on")
+    row.origin = f"Your agents bundle: {tilde(AGENTS_DIR / 'skills' / bundle)}; used by {everyone}"
+    row.purpose = "Groups these skills: " + ", ".join(name for name, _, _ in skills) + ". See each child for its job."
+    row.cost = skill_cost(row.tokens, sum(len(read_text(p) or "") for _, _, p in skills))
+    row.cost += " Bundle total includes its children; do not count both."
     row.offer("off", f"skill-drop {bundle}: unlinks it for {everyone}", drop_bundle(bundle))
     row.group = group
     if dormant(last):
@@ -814,6 +914,10 @@ def add_bundle(inv, bundle, skills, usage, measured, report, group, others, ever
         child.parent = row
         child.group = group
     row.children = children
+    if "Claude Code" not in everyone:
+        row.default = 0
+        for child in children:
+            without_claude_switch(child)
     inv.slash += len(children)
     inv.rows.append(row)
 
@@ -829,6 +933,9 @@ def app_skills(inv, app, real):
         row = Row(f"skill {name or entry.name}", 1, tokens_of(len(text)), dated=False,
                   note=f"ai-doctor --reset skills moves it back into {tilde(real)}")
         row.group = app
+        row.cost = skill_cost(row.tokens, len(read_text(skill_md) or ""))
+        explain_skill(row, skill_md)
+        row.evidence = f"{app.capitalize()} usage history is not read; use is unknown."
         row.offer("off", f"move {tilde(entry)} to ai-doctor's archive", archive_skill(entry, app))
         inv.rows.append(row)
 
@@ -881,7 +988,7 @@ def server_problem(conf):
     return None
 
 
-def add_servers(inv, apps, cwd, usage, needs_auth, ctx):
+def add_servers(inv, apps, cwd, usage, needs_auth, ctx, report=None):
     servers = []
     if "claude" in apps:
         state_file = HOME / ".claude.json"
@@ -913,12 +1020,43 @@ def add_servers(inv, apps, cwd, usage, needs_auth, ctx):
         if conf.get("type") in ("http", "sse") and not conf.get("url") and not conf.get("command"):
             continue  # a claude.ai connector placeholder, filled in by the app
         problem = server_problem(conf)
-        dated = app == "claude"
-        uses, last = usage.lookup({f"mcp:{key_name(name)}"}) if dated else (0, None)
+        usage_key = ("codex:" if app == "codex" else "") + f"mcp:{key_name(name)}"
+        uses, last = usage.lookup({usage_key}) if app in ("claude", "codex") else (0, None)
+        dated = app == "claude" or (app == "codex" and last is not None)
         state = f": can't start, {problem}" if problem else (": waits for a sign-in" if app == "claude" and name in needs_auth else "")
         how = "claude mcp add" if app == "claude" else "ai-doctor --reset servers"
         row = Row(f"MCP server {name}{state}", 0, None, last, uses,
-                  f"its tools load only when used; ai-doctor --reset servers puts it back ({how})", dated)
+                  f"disables this connection; ai-doctor --reset servers puts it back ({how})", dated)
+        row.origin = f"Custom configuration: {tilde(file)} ({scope} scope); installation reason/date unknown"
+        known = {
+            "node_repl": ("JavaScript workspace that keeps variables between calls; useful for calculations, "
+                          "data processing and tools that create documents. Keep if those workflows use it; "
+                          "turn off if you do not need JavaScript automation."),
+            "github": "Access to GitHub repositories, issues and pull requests. Keep for connected GitHub work.",
+            "gh": "Access to GitHub repositories, issues and pull requests (inferred from its name).",
+            "monarch_money": "Connects to Monarch Money for personal finance information (inferred from its name).",
+        }
+        row.purpose = known.get(key_name(name),
+                               "Adds external tools to this app. No local purpose description; the name alone is insufficient.")
+        if key_name(name) in known:
+            row.purpose += " Purpose inferred from server name; original reason for adding it is not recorded."
+        command = str(conf.get("command") or "")
+        if ".app/Contents/" in command:
+            row.origin += "; executable supplied by " + command.split(".app/Contents/", 1)[0].rsplit("/", 1)[-1] + ".app"
+        measured = [(tool, count) for tool, _, count in (report or {}).get("mcp", [])
+                    if app == "claude" and tool.startswith(f"mcp__{name}__")]
+        row.tokens = sum(count for _, count in measured) if measured else None
+        row.cost = ((f"Tool definitions: ~{row.tokens:,} tokens reported by Claude /context; may be deferred. "
+                     if measured else "Unknown cost: tool definitions and loading policy not measured, not zero. ")
+                    + ("A local process may add startup time and RAM. " if command else "Remote calls add network delay. ")
+                    + "Calls/results consume context; large data or repeated calls can be heavy. No RAM/latency measurement.")
+        if app == "codex":
+            tools = sorted(usage.codex_tools.get(usage_key, ()))
+            row.evidence = "Codex direct MCP calls in retained local sessions; calls inside JavaScript/scripts are not counted."
+            if tools:
+                row.evidence += " Observed operations: " + ", ".join(tools[:8]) + "."
+        elif not dated:
+            row.evidence = f"{app.capitalize()} usage history is not read; use is unknown."
         if app == "claude" and ctx.claude:
             verb = f"claude mcp remove {name} -s {scope}"
         elif app == "codex" and ctx.codex:
@@ -930,7 +1068,7 @@ def add_servers(inv, apps, cwd, usage, needs_auth, ctx):
         row.offer("off", verb, remove_server(app, file, scope, name, conf, cwd))
         row.broken = bool(problem)
         row.group = app
-        if problem or (dated and dormant(last)):
+        if problem or (app == "claude" and dormant(last)):
             row.start_off()
         inv.rows.append(row)
 
@@ -942,6 +1080,10 @@ def add_resets(inv, entries):
             continue
         row = Row(f"reset {category}: undo {plural(len(mine), 'change')} by ai-doctor",
                   note=", ".join(e.get("item", "?") for e in reversed(mine)), dated=False)
+        row.origin = "Recovery action from ai-doctor's change log"
+        row.purpose = f"Restore the {category} ai-doctor previously changed."
+        row.cost = "No ongoing context cost for this action; restored sources resume their own costs."
+        row.evidence = "Saved changes, not app usage."
         row.offer("reset", f"ai-doctor --reset {category}", category)
         row.reset = category
         row.group = "undo"
@@ -1000,6 +1142,87 @@ def agents(inv, apps):
 # Output -------------------------------------------------------------------
 
 
+def print_app_sources(paint, inv, apps, report, cwd):
+    print("\nTokens are context estimates, not RAM or disk size; unknown does not mean free.")
+    print("Skill usage: Claude Code records only. MCP usage: Claude Code and direct Codex calls; Cursor history unavailable.")
+    for app in apps:
+        title = {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor"}[app]
+        print(paint("1", f"\n{title}: app defaults (read-only)"))
+        print("  System instructions and native tools: app-managed; full inventory and cost unavailable locally.")
+        print("  They support basic conversation, file/code work and tool use; no per-item RAM/token measurement.")
+        if app == "claude" and report:
+            for name, source, count in report["skills"]:
+                if source == "Built-in":
+                    print(f"  App defaults: {name}: ~{count:,} tokens reported by /context; purpose not in report.")
+        if app == "codex":
+            for path in sorted((HOME / ".codex/skills/.system").glob("*/SKILL.md")):
+                name, desc = frontmatter(path)
+                print(f"  {name or path.parent.name}: {desc.removeprefix(name or '').strip()}")
+                print(f"    {skill_cost(tokens_of(len(desc)), len(read_text(path) or ''))}")
+        print(paint("1", f"{title}: your custom agents/configs"))
+        print("  Local source files below; inherited instructions, imports and app/account settings may add more.")
+        config_files = {"claude": [HOME / ".claude/settings.json", HOME / ".claude/settings.local.json"],
+                        "codex": [HOME / ".codex/config.toml"],
+                        "cursor": [HOME / ".cursor/cli-config.json", HOME / ".cursor/hooks.json"]}
+        for path in config_files[app]:
+            if not path.is_file():
+                continue
+            if path.suffix == ".toml":
+                try:
+                    config = tomllib.loads(read_text(path) or "") if tomllib else {}
+                except ValueError:
+                    config = {}
+            else:
+                config = read_json(path) or {}
+            descriptions = {
+                "hooks": "Runs commands at app events; can add latency/process work each time. Cost unmeasured; review hook commands.",
+                "mcp_servers": "Extra tool connections; see server rows for purpose and cost.",
+                "enabledPlugins": "Installed add-ons; see plugin rows for costs.",
+                "model": "Selects the model; can materially affect speed, usage limits and price. No numeric cost inferred.",
+                "model_reasoning_effort": "Controls thinking effort; higher effort can increase response time and token use.",
+                "features": "Optional app capabilities; impact varies by feature and whether used. Not measured.",
+                "permissions": "Controls allowed actions; not normally a useful context-saving switch.",
+                "skillOverrides": "Controls which skill descriptions load; see skill rows for estimates.",
+            }
+            print(f"  Configuration file: {tilde(path)} (custom settings, not evidence of app defaults).")
+            for key, explanation in descriptions.items():
+                if key in config:
+                    print(f"    {key}: {explanation}")
+            print("    Other settings: not interpreted; configuration file size is not its prompt cost. Values are not printed.")
+        candidates = [cwd / "AGENTS.md"]
+        if app == "claude":
+            candidates += [HOME / ".claude/CLAUDE.md", cwd / "CLAUDE.md", cwd / "CLAUDE.local.md", memory_dir(cwd) / "MEMORY.md"]
+        elif app == "codex":
+            candidates += [HOME / ".codex/AGENTS.md", HOME / ".codex/AGENTS.override.md", cwd / "AGENTS.override.md"]
+        else:
+            candidates += [HOME / ".cursor/AGENTS.md"] + list((HOME / ".cursor/rules").glob("*.mdc")) + list((cwd / ".cursor/rules").glob("*.mdc"))
+        for path in candidates:
+            if path.is_file():
+                count = tokens_of(len(read_text(path) or ""))
+                level = "high" if count >= 2000 else "medium" if count >= 500 else "low"
+                print(f"  Instructions {tilde(path)}: ~{count:,} tokens ({level}, file-size estimate).")
+                print("    Tells the assistant your rules/preferences; loaded when this file's scope applies. Imports excluded.")
+        folder = HOME / f".{app}" / "agents"
+        for path in sorted(folder.glob("*.md")):
+            name, desc = frontmatter(path)
+            print(f"  Agent {name or path.stem}: {desc.removeprefix(name or '').strip() or 'Purpose not described.'}")
+            print(f"    Custom file: {tilde(path)}. {skill_cost(tokens_of(len(desc)), len(read_text(path) or ''))}")
+            print("    Delegated runs can add separate model calls/context; use history not tracked.")
+        shared = HOME / ".agents/skills"
+        print(f"  Skills: {tilde(HOME / ('.agents/skills' if app == 'codex' else '.' + app + '/skills'))}; see custom rows below.")
+        if app == "codex":
+            # Plugin caches prove local availability, not enabled status or default installation.
+            paths = sorted((HOME / ".codex/plugins/cache").glob("*/*/*/skills/*/SKILL.md"))
+            if paths:
+                print(paint("1", "Codex: plugin-managed skills (enabled/default status unknown)"))
+                for path in paths:
+                    name, desc = frontmatter(path)
+                    print(f"  {name or path.parent.name}: {desc.removeprefix(name or '').strip()}")
+                    print(f"    Source: {tilde(path)}. {skill_cost(tokens_of(len(desc)), len(read_text(path) or ''))}")
+        if not shared.exists() and app == "codex":
+            print("  No shared skill folder found.")
+
+
 class Paint:
     def __init__(self, color):
         self.color = color
@@ -1018,11 +1241,11 @@ def summary(inv, apps, report):
         defaults = cats.get("System prompt", 0) + cats.get("System tools", 0) + builtin
         yours = max(loaded - defaults, 0)
         share = (lambda n: f"{round(100 * n / loaded)}%") if loaded else (lambda n: "-")
-        parts.append(f"before you type ~{short_tokens(loaded)} tokens: yours ~{short_tokens(yours)} ({share(yours)}), "
+        parts.append(f"Claude Code only: before you type ~{short_tokens(loaded)} tokens: yours ~{short_tokens(yours)} ({share(yours)}), "
                      f"Claude's defaults ~{short_tokens(defaults)} ({share(defaults)})")
     else:
-        parts.append(f"~{short_tokens(tokens_of(inv.est_chars))} tokens of yours before you type "
-                     "(estimated; no claude command to measure Claude's defaults)")
+        parts.append(f"~{short_tokens(tokens_of(inv.est_chars))} tokens of custom source text "
+                     "(estimate, overlapping scopes; not a per-app startup total)")
     parts.append(f"/ menu: {inv.slash} of yours")
     if inv.off:
         parts.append(f"{len(inv.off)} already off")
@@ -1051,14 +1274,11 @@ def layout(rows, indices, headings):
     return lines
 
 
-def print_rows(paint, rows, verbose, headings):
-    wanted = {id(r) for r in rows if verbose or r.default or hasattr(r, "reset")}
-    wanted |= {id(r.parent) for r in rows if id(r) in wanted and r.parent}
-    shown = [i for i, r in enumerate(rows) if id(r) in wanted]
-    kept = len(rows) - len(shown)
+def print_rows(paint, rows, headings):
+    shown = list(range(len(rows)))
     print()
     if not shown:
-        print(f"  {paint('32', 'Nothing to turn off.')}" + (f" {kept} sources in use; -v lists them." if kept else ""))
+        print(f"  {paint('32', 'Nothing to turn off.')}")
         return
     print(header_line(paint))
     for kind, value in layout(rows, shown, headings):
@@ -1066,8 +1286,8 @@ def print_rows(paint, rows, verbose, headings):
             print(paint("1", f"\n  {value}"))
         else:
             print(row_line(paint, value + 1, rows[value], rows[value].verbs[rows[value].default]))
-    if kept:
-        print(paint("2", f"\n  {kept} more in use, set to keep; -v lists them."))
+            for detail in rows[value].details():
+                print(textwrap.fill(detail, width=100, initial_indent="       ", subsequent_indent="       "))
 
 
 def print_verbose(paint, inv):
@@ -1098,7 +1318,7 @@ def tally(rows, picked):
     return ", ".join(f"{verb} {n}" for verb, n in counts.items()) or "nothing changes"
 
 
-def pick_on_terminal(paint, rows, picked, headings):
+def pick_on_terminal(paint, rows, picked, headings, overview=""):
     """Every row on the alternate screen, df-doctor's way: the arrows choose a row,
     space or left and right step through what it can do, a letter picks it (k
     keep, o off, m menu, r reset), Enter applies every row, q or Esc cancels."""
@@ -1107,9 +1327,12 @@ def pick_on_terminal(paint, rows, picked, headings):
     out = sys.stderr
     picked = list(picked)
     cursor = top = 0
+    previous_cursor = 0
+    detail_top = overview_top = 0
+    viewing_overview = False
     note = ""
     head = "space or ←→ next action  letter picks it: k keep, o off, m menu only, r reset"
-    keys = "↑↓ PgUp PgDn Home End choose a row  enter apply all  q cancel"
+    keys = "↑↓ choose row  PgUp/PgDn page  [ ] details  ? app defaults/configs  enter apply  q cancel"
 
     def key():
         return os.read(fd, 1)
@@ -1129,8 +1352,30 @@ def pick_on_terminal(paint, rows, picked, headings):
         while True:
             cols, screen_lines = shutil.get_terminal_size()
             cols = cols if cols >= 20 else 80
-            # Four lines above the rows and four below.
-            height = max(screen_lines - 9, 3)
+            if viewing_overview:
+                info = [part for line in overview.splitlines() for part in (textwrap.wrap(line, cols) or [""])]
+                page = max(screen_lines - 3, 1)
+                overview_top = min(overview_top, max(len(info) - page, 0))
+                out.write("\033[H\033[2JApp defaults and your configuration | ↑↓ scroll, PgUp/PgDn page, ? or q back\n"
+                          + "\n".join(info[overview_top:overview_top + page]))
+                out.flush()
+                pressed = key()
+                if pressed in (b"?", b"q", b"\n", b"\r", b""):
+                    viewing_overview = False
+                elif pressed == b"\033" and waiting():
+                    rest = os.read(fd, 2)
+                    if rest in (b"[5", b"[6") and waiting():
+                        key()
+                    overview_top = max(0, overview_top + {b"[A": -1, b"[B": 1, b"[5": -page, b"[6": page}.get(rest, 0))
+                continue
+            row = rows[cursor]
+            if cursor != previous_cursor:
+                detail_top = 0
+                previous_cursor = cursor
+            details = [part for line in row.details() for part in textwrap.wrap(line, cols)]
+            detail_height = max(1, min(max(screen_lines // 2, 4), 14, screen_lines - 9))
+            detail_top = min(detail_top, max(len(details) - detail_height, 0))
+            height = max(screen_lines - detail_height - 8, 1)
             here = line_of[cursor]
             # Keep the cursor's heading in view when it sits just above.
             top = min(top, here - 1 if here and lines[here - 1][0] == "head" else here)
@@ -1149,9 +1394,10 @@ def pick_on_terminal(paint, rows, picked, headings):
             foot = paint("2", f"{shown[0] + 1}-{shown[-1] + 1} of {len(rows)}") + "  " \
                 if len(lines) > height and shown else ""
             foot += paint("33", note) if note else f"Enter: {tally(rows, picked)}"
-            row = rows[cursor]
             offers = "   ".join(f"{verb[0]} {verb}: {todo}" for verb, todo, _ in row.choices[1:])
-            screen += [foot, paint("1", row.title[:cols]), paint("36", offers[:cols]), paint("2", row.note[:cols])]
+            screen += [foot, paint("1", row.title[:cols]), paint("36", offers[:cols])]
+            screen += details[detail_top:detail_top + detail_height]
+            screen.append(paint("2", f"Details {detail_top + 1}-{min(detail_top + detail_height, len(details))}/{len(details)}; [ ] scroll; ? defaults"))
             out.write("\n".join(screen))
             out.flush()
             note = ""
@@ -1171,12 +1417,16 @@ def pick_on_terminal(paint, rows, picked, headings):
                 elif rest in (b"[5", b"[6"):
                     if waiting():
                         key()
-                    jump = -(height - 2) if rest == b"[5" else height - 2
+                    jump = -max(height - 2, 1) if rest == b"[5" else max(height - 2, 1)
                     cursor = min(max(cursor + jump, 0), len(rows) - 1)
                 else:
                     return None
             elif pressed == b" ":
                 step(1)
+            elif pressed == b"?":
+                viewing_overview = True
+            elif pressed in (b"[", b"]"):
+                detail_top = max(0, detail_top + (-detail_height if pressed == b"[" else detail_height))
             elif pressed in (b"\n", b"\r"):
                 return picked
             elif pressed in (b"q", b""):
@@ -1208,6 +1458,8 @@ def pick_by_line(paint, rows, picked, headings):
         row = rows[value]
         offers = f"  [{' / '.join(row.verbs)}]" if len(row.choices) > 2 else ""
         print(row_line(paint, value + 1, row, row.verbs[picked[value]]) + offers, file=sys.stderr)
+        for detail in row.details():
+            print(textwrap.fill(detail, 100, initial_indent="       ", subsequent_indent="       "), file=sys.stderr)
     print('Actions then row numbers, like "off 2 5-7 keep 3 menu 4"; none keeps everything; '
           "Enter applies the list as shown: ", end="", file=sys.stderr, flush=True)
     try:
@@ -1319,7 +1571,7 @@ def main(argv=None):
     parser.add_argument("-n", "--dry-run", action="store_true", help="say what would change, change nothing")
     parser.add_argument("--reset", nargs="?", const="all", choices=(*CATEGORIES, "all"), metavar="WHAT",
                         help="undo ai-doctor's changes: plugins, skills, bundles, servers, or all")
-    parser.add_argument("-v", "--verbose", action="store_true", help="also every kept row and what is already off")
+    parser.add_argument("-v", "--verbose", action="store_true", help="also what is already off and instruction/agent totals")
     parser.add_argument("--app", action="append", choices=APPS, help="check only this app (repeatable)")
     parser.add_argument("--no-color", action="store_true", help="plain output")
     args = parser.parse_args(argv)
@@ -1342,7 +1594,7 @@ def main(argv=None):
     cwd = Path.cwd()
     if claude and sys.stderr.isatty():
         print(paint("2", "measuring context with claude -p /context ..."), file=sys.stderr, end="\r", flush=True)
-    usage = Usage("claude" in apps)
+    usage = Usage("claude" in apps, "codex" in apps)
     report = context_report(claude, cwd) if claude else None
     if claude and sys.stderr.isatty():
         print(" " * 50, file=sys.stderr, end="\r", flush=True)
@@ -1353,16 +1605,20 @@ def main(argv=None):
     if "claude" in apps:
         add_plugins(inv, usage, report, needs_auth)
     add_skills(inv, apps, usage, report)
-    add_servers(inv, apps, cwd, usage, needs_auth, ctx)
+    add_servers(inv, apps, cwd, usage, needs_auth, ctx, report)
     add_resets(inv, read_log())
     if not args.dry_run:
         usage.save()
 
     rows = ordered(inv.rows)
     print(paint("1", f"ai-doctor: {summary(inv, apps, report)}"))
+    with contextlib.redirect_stdout(io.StringIO()) as captured:
+        print_app_sources(Paint(False), inv, apps, report, cwd)
+    overview = captured.getvalue()
+    print(overview, end="")
     if args.verbose:
         print_verbose(paint, inv)
-    print_rows(paint, rows, args.verbose, inv.headings)
+    print_rows(paint, rows, inv.headings)
     for line in inv.health:
         print(paint("31", f"\n  health: {line}"))
 
@@ -1379,7 +1635,7 @@ def main(argv=None):
         else:
             print(file=sys.stderr)
             if os.environ.get("DOTFILES_PROMPT") != "read" and sys.stdin.isatty() and sys.stderr.isatty():
-                picked = pick_on_terminal(paint, rows, picked, inv.headings)
+                picked = pick_on_terminal(paint, rows, picked, inv.headings, overview)
             else:
                 picked = pick_by_line(paint, rows, picked, inv.headings)
             if picked is None or not any(picked):

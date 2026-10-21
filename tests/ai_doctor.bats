@@ -148,11 +148,11 @@ settings_value() {
     python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); print(d.get(sys.argv[2]))' "${HOME}/.claude/settings.json" "$1"
 }
 
-@test "ai-doctor: a setup in use prints the summary and nothing to turn off" {
+@test "ai-doctor: a setup in use prints every source and leaves it on keep" {
     run ai_doctor
     assert_success
-    assert_line --index 0 --regexp "^ai-doctor: claude · ~[0-9]+ tokens of yours before you type \(estimated; no claude command to measure Claude's defaults\) · / menu: 2 of yours$"
-    assert_output --partial "Nothing to turn off. 4 sources in use; -v lists them."
+    assert_line --index 0 --regexp "^ai-doctor: claude · ~[0-9]+ tokens of custom source text .* / menu: 2 of yours$"
+    assert_output --partial "bundle core: 1 skill"
     refute_output --partial "--fix"
     # Each run keeps the dates it found, for when the transcripts are gone.
     run python3 -c 'import json, sys; print(sorted(json.load(open(sys.argv[1]))["last"]))' "${STATE}/usage.json"
@@ -187,10 +187,10 @@ settings_value() {
     printf '{"enabledPlugins": {"gone@synced": false}}\n' > "${HOME}/.claude/settings.json"
     run ai_doctor
     assert_success
-    assert_output --regexp "1  off +2 +[0-9]+ +never +plugin idle \(from claude.ai\): 2 skills"
+    assert_output --regexp "1  off +2 +[0-9]+ +not recorded +plugin idle \(from claude.ai\): 2 skills"
     assert_output --regexp "off +1 +[0-9]+ +40d ago \(1\) +plugin old"
-    refute_output --partial "plugin busy"
-    refute_output --partial "plugin loved"
+    assert_output --partial "plugin busy"
+    assert_output --partial "plugin loved"
     refute_output --partial "plugin gone"
     assert_output --partial "· / menu: 7 of yours · 1 already off"
     assert_output --partial "Run ai-doctor --fix to choose, or ai-doctor --yes to turn off what is preselected."
@@ -225,7 +225,7 @@ settings_value() {
     synced_plugin idle a
     run ai_doctor
     assert_line --index 0 --partial "before you type ~10.0k tokens: yours ~3.0k (30%), Claude's defaults ~7.0k (70%)"
-    assert_output --regexp "off +1 +700 +never +plugin idle"
+    assert_output --regexp "off +1 +700 +not recorded +plugin idle"
 
     run ai_doctor --fix <<< "off 1"
     assert_success
@@ -243,9 +243,9 @@ settings_value() {
     add_skill design figma
     add_skill core grill-me
     run ai_doctor
-    assert_output --regexp "off +1 +[0-9]+ +never +bundle design: 1 skill"
+    assert_output --regexp "off +1 +[0-9]+ +not recorded +bundle design: 1 skill"
     assert_output --regexp "keep +2 +[0-9]+ +1d ago \(1\) +bundle core: 2 skills"
-    assert_output --regexp "off +1 +[0-9]+ +never +  skill grill-me"
+    assert_output --regexp "off +1 +[0-9]+ +not recorded +  skill grill-me"
 
     run ai_doctor --fix <<< "keep 1-9 off 1 menu 4"
     assert_success
@@ -288,7 +288,7 @@ settings_value() {
     mkdir -p "${synced}"
     printf -- '---\nname: docx\ndescription: Word files\n---\n' > "${synced}/SKILL.md"
     run ai_doctor
-    assert_output --regexp "off +1 +[0-9]+ +never +skill docx \(from claude.ai\)"
+    assert_output --regexp "off +1 +[0-9]+ +not recorded +skill docx \(from claude.ai\)"
     run ai_doctor --yes
     assert_output --partial 'skillOverrides "docx": "off": done'
     run ai_doctor -v
@@ -312,7 +312,7 @@ JSON
     assert_output --partial "MCP server lastfm: waits for a sign-in"
     assert_output --partial "MCP server gone: can't start, no-such-mcp is not installed"
     assert_output --partial "MCP server local: can't start, /missing/python is missing"
-    refute_output --partial "server busy"
+    assert_output --partial "server busy"
 
     run ai_doctor --yes
     assert_success
@@ -354,7 +354,7 @@ JSON
     ln -s "${TEST_TMPDIR}/gone" "${HOME}/.agents/skills/gone"
     run ai_doctor -v
     assert_failure 1
-    assert_output --regexp "off +- +- +never +broken skill link ~/.agents/skills/gone"
+    assert_output --regexp "off +- +- +not recorded +broken skill link ~/.agents/skills/gone"
     assert_output --regexp "keep +1 +[0-9]+ +- +skill shot"
 
     run ai_doctor --fix <<< "off 1-9"
@@ -396,6 +396,11 @@ JSON
     assert_output --partial "Nothing changed."
     refute test -e "${HOME}/.claude/settings.json"
 
+    on_terminal '?qq'
+    assert_output --partial "App defaults and your configuration"
+    assert_output --partial "Claude Code: app defaults"
+    assert_output --partial "Nothing changed."
+
     on_terminal 'k\n'
     assert_output --partial "Nothing changed."
     refute test -e "${HOME}/.claude/settings.json"
@@ -432,4 +437,79 @@ JSON
     assert_equal "${after}" "${before}"
     assert test -f "${STATE}/usage.json"
     refute test -e "${STATE}/actions.jsonl"
+}
+
+@test "ai-doctor: separates each app's defaults and custom sources with useful costs" {
+    mkdir -p "${HOME}/.codex/skills/.system/helper" "${HOME}/.cursor"
+    printf -- '---\nname: helper\ndescription: Built-in assistance\n---\nLarge body\n' > "${HOME}/.codex/skills/.system/helper/SKILL.md"
+    printf '[mcp_servers.node_repl]\ncommand = "/bin/sh"\n' > "${HOME}/.codex/config.toml"
+    printf '{"mcpServers":{"GitHub":{"url":"https://example.com"}}}\n' > "${HOME}/.cursor/mcp.json"
+    run ai_doctor -v
+    assert_success
+    assert_output --partial "Claude Code: app defaults"
+    assert_output --partial "Codex: app defaults"
+    assert_output --partial "Cursor: app defaults"
+    assert_output --partial "helper: Built-in assistance"
+    assert_output --partial "Custom configuration: ~/.codex/config.toml"
+    assert_output --partial "JavaScript workspace"
+    assert_output --partial "GitHub repositories"
+    assert_output --partial "Unknown cost: tool definitions"
+    assert_output --partial "not measured, not zero"
+    assert_output --partial "Purpose: Does commit-work things across two lines."
+    assert_output --partial "When used: ~"
+    assert_output --partial "Claude Code records only"
+    refute_output --partial "its tools load only when used"
+    refute_output --partial "  never "
+    refute test -e "${STATE}/actions.jsonl"
+}
+
+@test "ai-doctor: missing context rows stay unknown and combined totals stay scoped to Claude" {
+    fake_claude
+    mkdir -p "${HOME}/.codex"
+    add_skill core new-skill
+    run ai_doctor -v
+    assert_success
+    assert_output --partial "Claude Code only: before you type"
+    assert_output --partial "not present in"
+    assert_output --partial "/context; using description estimate"
+    assert_output --partial "App defaults: simplify"
+    assert_output --partial "Tokens are context estimates, not RAM or disk size"
+    assert_output --regexp "off +1 +[1-9][0-9]* +not recorded +  skill new-skill"
+}
+
+@test "ai-doctor: Codex MCP history is separate from Claude evidence and never preselects off" {
+    mkdir -p "${HOME}/.codex/sessions/2026/01/01"
+    printf '[mcp_servers.node_repl]\ncommand = "/bin/sh"\n' > "${HOME}/.codex/config.toml"
+    cat > "${HOME}/.codex/sessions/2026/01/01/rollout.jsonl" <<'JSON'
+{"type":"response_item","timestamp":"2026-01-01T01:00:00Z","payload":{"type":"function_call","name":"mcp__node_repl__js","arguments":"private data"}}
+{"type":"response_item","timestamp":"2026-01-01T01:00:00Z","payload":{"type":"function_call_output","name":"mcp__node_repl__js","output":"private data"}}
+JSON
+    run ai_doctor --app codex
+    assert_success
+    assert_output --regexp "keep +- +- +[0-9]+d ago \\(1\\) +MCP server node_repl"
+    assert_output --partial "Observed operations: js."
+    refute_output --partial "private data"
+    run python3 -c 'import json, sys; print(sorted(json.load(open(sys.argv[1]))["last"]))' "${STATE}/usage.json"
+    assert_output "['codex:mcp:node_repl']"
+}
+
+@test "ai-doctor: a Codex-only view does not offer Claude overrides or assume unused bundles" {
+    mkdir -p "${HOME}/.codex"
+    run ai_doctor --app codex --fix <<< "off 2"
+    assert_success
+    assert_output --partial "Row 2 can't off; it offers keep; nothing changed"
+    assert_output --partial "Individual overrides control Claude Code only"
+    refute test -e "${HOME}/.claude/settings.json"
+    run ai_doctor --app codex --dry-run
+    assert_success
+    refute_output --partial "would:"
+    refute test -e "${STATE}/actions.jsonl"
+    printf '{"skillOverrides":{"commit-work":"off"}}\n' > "${HOME}/.claude/settings.json"
+    run ai_doctor --app codex
+    assert_success
+    assert_output --partial "skill commit-work"
+    refute_output --partial "off in Claude Code"
+    run ai_doctor --app claude --app codex
+    assert_success
+    assert_output --partial "skill commit-work (off in Claude Code; still available in other apps)"
 }
