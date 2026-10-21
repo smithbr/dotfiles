@@ -1301,6 +1301,17 @@ row_choices() {
     fi
 }
 
+# Why row R refuses ACTION. Move needs a place xdg-ninja names and the
+# variables its advice exports; the how: line is the step to take by hand.
+refusal() {
+    local i="${row_ids[$1]}"
+    if [[ "$2" == move && "${i}" != relink && -n "${f_how[i]}" ]]; then
+        printf 'move is not offered: do what the how: line says, then run df-doctor again'
+    else
+        printf '%s is not offered for this item' "$2"
+    fi
+}
+
 # An action padded to its column, colored on a terminal.
 action_cell() {
     local color=""
@@ -1438,7 +1449,7 @@ pick_by_line() {
                     case " $(row_choices "${row_ids[r]}") " in
                         *" ${action} "*) picked[r]="${action}" ;;
                         *)
-                            log_warn "Row $((r + 1)) cannot ${action}; nothing changed"
+                            log_warn "Row $((r + 1)): $(refusal "${r}" "${action}"); nothing changed"
                             return 1
                             ;;
                     esac

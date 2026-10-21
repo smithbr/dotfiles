@@ -441,6 +441,10 @@ JSON
     assert_line --regexp "^decide"$'\t'"${HOME}/\.advit"$'\t'"keep"$'\t\t'
     # Advice that exports a variable waits until a new shell sets it.
     assert_line --regexp "^decide"$'\t'"${HOME}/\.advgated"$'\t'"keep"$'\t\t'
+    # Choosing move there says what to do first, and changes nothing.
+    doctor_picking "move ~/.advgated"
+    assert_output --partial "move is not offered: do what the how: line says, then run df-doctor again; nothing changed"
+    assert test -f "${HOME}/.advgated"
 
     # A new shell's XDG base is the one used, and the gated advice now applies.
     write_zshenv XDG_CONFIG_HOME=cfg ADVGATED_FILE=.local/state/advgated
