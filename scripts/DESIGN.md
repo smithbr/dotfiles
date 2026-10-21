@@ -2,7 +2,7 @@
 
 How a script in this repo looks and behaves to the person running it: help, arguments, output, prompts, and the end of a run. It applies to every new script under `scripts/` and `stow/*/.local/bin/`, and to any script whose interface you reshape. Shell standards (quoting, `[[ ]]`, `printf`, functions) come from `~/.config/agents/rules/08-shell.mdc`; where a layer goes is in [`stow/README.md`](../stow/README.md). Bootstrap scripts that run before the repo is linked follow [`bootstrap/README.md`](bootstrap/README.md) first.
 
-Copy from `stow/tools/.local/bin/os-doctor` for the shape of a run and its help, `stow/personal/.local/bin/firetv` for subcommands, arguments, and errors, and `scripts/doctor.sh` only for its one-list review (section 7). `sshkey` predates the shared helpers and redefines them; do not copy its header.
+Copy from `stow/tools/.local/bin/os-doctor` for the shape of a run and its help, `stow/personal/.local/bin/ts-test` for subcommands, arguments, and errors, and `scripts/doctor.sh` only for its one-list review (section 7). `sshkey` predates the shared helpers and redefines them; do not copy its header.
 
 ## 1. Use the shared helpers, never your own copies
 
@@ -45,7 +45,7 @@ Top to bottom: shebang and `set -euo pipefail`, a one-line comment saying what t
 
 - Settings are uppercase variables with an environment override: `FOO_BIN="${FOO_BIN:-foo}"` for every external command, so tests can stub it, and state under `${XDG_STATE_HOME:-${HOME}/.local/state}/<script>`.
 - Name a script for what it does, with the family prefix where one exists: `df-` wraps a repo script, `ph-` works on the Pi-hole, `<area>-doctor` checks something and offers fixes.
-- A script with more than one action takes a subcommand (`firetv disable ads`), never a flag per action.
+- A script with more than one action takes a subcommand (`ts-test dns`), never a flag per action.
 
 ## 3. Help
 

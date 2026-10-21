@@ -8,7 +8,7 @@ Everything linked into `~`. Linking itself is in [`scripts/README.md`](../script
 
 - `common`: shell, git, and CLI config every persona gets.
 - `tools`: personal CLI tools: `sshkey`, `os-doctor`, `ai-doctor`, and the `df-*` wrappers.
-- `personal`: what `home`, `server`, and `vps` use but a work Mac does not: `cf-cert`, `df-deploy`, `firetv` (debloats the TCL Fire TV over ADB), `ph` (administers the Pi-hole over its API from the tailnet), `ts-test`, the personal git identity, and the gh login seed.
+- `personal`: what `home`, `server`, and `vps` use but a work Mac does not: `cf-cert`, `df-deploy`, `ph` (administers the Pi-hole over its API from the tailnet), `ts-test`, the personal git identity, and the gh login seed.
 - `desktop`: GUI app config, iTerm2, and `st`. Only the Mac personas link it, so it needs no `desktop.darwin` part.
 - `server`: `server.linux` holds the server git config.
 - `pihole`: `pihole.linux` holds the `ph-*` tools; linked by the `pihole` role, not a persona.
