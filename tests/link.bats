@@ -111,6 +111,12 @@ stat_mode() {
     stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"
 }
 
+# Every path under the destination except the agents checkout's .git: what
+# git keeps there (locks, maintenance files) is git's doing, not link.sh's.
+dest_paths() {
+    (cd "${DEST}" && find . -name .git -prune -o -print | LC_ALL=C sort)
+}
+
 # ---------------------------------------------------------------------------
 # Linking packages
 # ---------------------------------------------------------------------------
@@ -256,13 +262,16 @@ stat_mode() {
     run_link
     assert_success
     local before="${TEST_TMPDIR}/before"
-    (cd "${DEST}" && find . -print | LC_ALL=C sort) > "${before}"
+    dest_paths > "${before}"
 
     run_link
     assert_success
     refute_output --partial "Backed up"
     refute_output --partial "Created"
-    run diff "${before}" <(cd "${DEST}" && find . -print | LC_ALL=C sort)
+    refute_output --partial "Removed"
+    refute_output --partial "Linked "
+    # diff, so a failure prints the paths that changed.
+    run diff "${before}" <(dest_paths)
     assert_success
 }
 
