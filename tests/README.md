@@ -46,12 +46,14 @@ Tests run against scratch homes, overridden `PATH`, and stub executables: proces
 - `lint_docs.bats`: `lint-docs.sh` against scratch repos with one fault each.
 - `harden_test.bats`: `harden-test.sh` against a scratch root (`HARDEN_ROOT`) with mocked system tools.
 - `install.bats`: `install.sh`'s arguments, prompts, SSH key step, and an isolated integration run with mocked commands.
-- `link.bats`: the real `link.sh` and GNU Stow against a scratch home: linking, stale links, backups, personas, agent links, seed files, `status`, `managed`, the installs, git identity, `add`, `rm`, and `mv`.
+- `link.bats`: the real `link.sh` and GNU Stow against a scratch home: linking, stale links, backups, agent links, seed files, `status`, `managed`, and `add`.
+- `link_ops.bats`: the same against the same fixtures: `rm`, `mv`, personas, layers, git identity, and the installs.
 - `ph.bats`: `ph` against a mocked `curl` answering from fixtures.
 - `repo_config.bats`: the shipped personas and roles, every tracked JSON, TOML, YAML, and `.itermcolors` file, the shell startup files, and the vimrc.
 - `runner.bats`: the runner itself: a failing `[[ ]]` before a test's last line fails the test, and a script under test still runs on `/bin/bash`.
 - `zsh.bats`: the zsh and bash startup files.
 - `test_helper.bash`: shared setup: `PROJECT_ROOT`, a temporary directory per test, fixture personas.
+- `link_helper.bash`: the agents fixture, fixture repos, and `link.sh` runners both link suites load.
 
 ## Writing tests
 

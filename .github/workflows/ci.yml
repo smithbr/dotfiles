@@ -27,14 +27,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - shard: link
-            files: tests/link.bats
-          - shard: doctor-install
-            files: tests/doctor.bats tests/install.bats
-          - shard: bin
-            files: tests/bin_scripts.bats tests/bin_pihole.bats tests/bin_firetv.bats
-          - shard: helpers
-            files: tests/bootstrap.bats tests/common.bats tests/bin_ph_backup.bats tests/brew.bats tests/ai_doctor.bats tests/ph.bats
+          - shard: link-install
+            files: tests/link.bats tests/install.bats tests/brew.bats
+          - shard: link-doctor
+            files: tests/link_ops.bats tests/doctor.bats tests/brew_add.bats
+          - shard: bin-bootstrap
+            files: tests/bin_scripts.bats tests/bootstrap.bats tests/bin_ph_backup.bats
+          - shard: bin-common
+            files: tests/bin_pihole.bats tests/bin_firetv.bats tests/common.bats tests/ai_doctor.bats tests/ph.bats
           - shard: lint-others
             files: ''
             lint: true
@@ -43,9 +43,10 @@ jobs:
     env:
       TERM: xterm
       NAMED: >-
-        tests/link.bats tests/doctor.bats tests/install.bats tests/bootstrap.bats
-        tests/bin_scripts.bats tests/bin_pihole.bats tests/bin_firetv.bats
-        tests/common.bats tests/bin_ph_backup.bats tests/brew.bats
+        tests/link.bats tests/install.bats tests/brew.bats
+        tests/link_ops.bats tests/doctor.bats tests/brew_add.bats
+        tests/bin_scripts.bats tests/bootstrap.bats tests/bin_ph_backup.bats
+        tests/bin_pihole.bats tests/bin_firetv.bats tests/common.bats
         tests/ai_doctor.bats tests/ph.bats
       FILES: ${{ matrix.files }}
     steps:
