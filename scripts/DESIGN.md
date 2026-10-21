@@ -87,7 +87,8 @@ A single action ends with one line saying what changed (`Disabled 4 packages`), 
 - A yes/no question defaults to no: `gum confirm` on a terminal, else `Question? [y/N]`. `--yes` answers yes; `--dry-run` asks nothing.
 - No terminal or closed stdin never hangs or opts in: the script takes the saved choice or safe default, or fails naming the choices and the flag that sets one. Guard `read` for `set -e` (`IFS= read -r reply || reply=""`).
 - A script with subcommands and no arguments may offer `gum choose` over them on a terminal; otherwise it prints usage and exits 2.
-- More than a handful of items to decide on get one list with each row set to its suggestion and Enter applying all of them, as `df-doctor` does, not a question per item.
+- Every picker is gum, drawn inline under the command. Never draw a screen by hand, switch to the alternate screen, or read raw keys; Python shells out to `gum choose`.
+- More than a handful of items to decide on get one gum list, as `df-doctor` and `ai-doctor` do, not a question per item: Apply first, then a row per item set to its suggestion. Enter on a row offers its changes under its details; Enter on Apply applies every row.
 
 ## 8. Making changes
 

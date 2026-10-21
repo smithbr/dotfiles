@@ -17,8 +17,8 @@
 
 Each app has separate app-default and custom-configuration sections. Every
 custom row explains its source, purpose, upfront context estimate, cost when
-used, and usage evidence. On a terminal, ? opens the app overview and [ ]
-scroll the selected row's details. Cost labels: low <500, medium 500-1999,
+used, and usage evidence. On a terminal, Enter on a row shows its details
+and actions, and a row near the top opens the app overview. Cost labels: low <500, medium 500-1999,
 high >=2000 upfront tokens. These are context sizes, not speed or RAM tests.
 Unknown MCP costs are not zero; tool definitions, startup and results vary.
 
@@ -51,15 +51,12 @@ import io
 import json
 import os
 import re
-import select
 import shutil
 import stat
 import subprocess
 import sys
-import termios
 import textwrap
 import time
-import tty
 from pathlib import Path
 
 try:
@@ -1353,132 +1350,61 @@ def tally(rows, picked):
     return ", ".join(f"{verb} {n}" for verb, n in counts.items()) or "nothing changes"
 
 
-def pick_on_terminal(paint, rows, picked, headings, overview=""):
-    """Every row on the alternate screen, df-doctor's way: the arrows choose a row,
-    space or left and right step through what it can do, a letter picks it (k
-    keep, o off, m menu, r reset), Enter applies every row, q or Esc cancels."""
-    fd = sys.stdin.fileno()
-    saved = termios.tcgetattr(fd)
-    out = sys.stderr
+def prompt_mode():
+    """gum when it is installed and stdin and stderr are a terminal, else read;
+    DOTFILES_PROMPT forces one, as common.sh's prompt_mode does."""
+    forced = os.environ.get("DOTFILES_PROMPT")
+    if forced:
+        return forced
+    return "gum" if shutil.which("gum") and sys.stdin.isatty() and sys.stderr.isatty() else "read"
+
+
+def gum_choose(header, items, selected=None):
+    """The value of one of ITEMS, (label, value) pairs, by gum choose; None on Esc."""
+    args = ["gum", "choose", "--header", header, "--label-delimiter=\t", f"--height={min(len(items), 15)}"]
+    # gum splits --selected at commas, so a label with one gets no cursor.
+    if selected and "," not in selected:
+        args.append(f"--selected={selected}")
+    args += [f"{label}\t{value}" for label, value in items]
+    done = subprocess.run(args, stdout=subprocess.PIPE, text=True,
+                          env={**os.environ, "GUM_CHOOSE_SHOW_HELP": "false"})
+    return done.stdout.strip() if done.returncode == 0 else None
+
+
+def pick_with_gum(rows, picked, headings, overview=""):
+    """The rows inline by gum, df-doctor's way: Apply, then one row per source set
+    to its action. Enter on a row offers its actions under its details, Enter on
+    Apply applies every row, Esc cancels. Returns None when cancelled."""
+    plain = Paint(False)
     picked = list(picked)
-    cursor = top = 0
-    previous_cursor = 0
-    detail_top = overview_top = 0
-    viewing_overview = False
-    note = ""
-    head = "space or ←→ next action  letter picks it: k keep, o off, m menu only, r reset"
-    keys = "↑↓ choose row  PgUp/PgDn page  [ ] details  ? app defaults/configs  enter apply  q cancel"
-
-    def key():
-        return os.read(fd, 1)
-
-    def waiting():
-        return bool(select.select([fd], [], [], 0.1)[0])
-
-    def step(by):
-        picked[cursor] = (picked[cursor] + by) % len(rows[cursor].choices)
-
-    lines = layout(rows, range(len(rows)), headings)
-    line_of = {value: n for n, (kind, value) in enumerate(lines) if kind == "row"}
-
-    try:
-        tty.setcbreak(fd, termios.TCSANOW)
-        out.write("\033[?1049h\033[?25l")
-        while True:
-            cols, screen_lines = shutil.get_terminal_size()
-            cols = cols if cols >= 20 else 80
-            if viewing_overview:
-                info = [part for line in overview.splitlines() for part in (textwrap.wrap(line, cols) or [""])]
-                page = max(screen_lines - 3, 1)
-                overview_top = min(overview_top, max(len(info) - page, 0))
-                out.write("\033[H\033[2JApp defaults and your configuration | ↑↓ scroll, PgUp/PgDn page, ? or q back\n"
-                          + "\n".join(info[overview_top:overview_top + page]))
-                out.flush()
-                pressed = key()
-                if pressed in (b"?", b"q", b"\n", b"\r", b""):
-                    viewing_overview = False
-                elif pressed == b"\033" and waiting():
-                    rest = os.read(fd, 2)
-                    if rest in (b"[5", b"[6") and waiting():
-                        key()
-                    overview_top = max(0, overview_top + {b"[A": -1, b"[B": 1, b"[5": -page, b"[6": page}.get(rest, 0))
-                continue
-            row = rows[cursor]
-            if cursor != previous_cursor:
-                detail_top = 0
-                previous_cursor = cursor
-            details = [part for line in row.details() for part in textwrap.wrap(line, cols)]
-            detail_height = max(1, min(max(screen_lines // 2, 4), 14, screen_lines - 9))
-            detail_top = min(detail_top, max(len(details) - detail_height, 0))
-            height = max(screen_lines - detail_height - 8, 1)
-            here = line_of[cursor]
-            # Keep the cursor's heading in view when it sits just above.
-            top = min(top, here - 1 if here and lines[here - 1][0] == "head" else here)
-            top = max(top, here - height + 1, 0)
-            last = min(top + height, len(lines))
-            screen = ["\033[H\033[2J" + paint("1", "Keep or turn off each source") + f" ({len(rows)})",
-                      head[:cols], paint("2", keys[:cols]), header_line(paint)[:cols]]
-            for kind, value in lines[top:last]:
-                if kind == "head":
-                    screen.append(paint("1", f"  {value}"[:cols]))
-                    continue
-                text = row_line(Paint(False), value + 1, rows[value], rows[value].verbs[picked[value]])[:cols - 2]
-                screen.append(paint("1", f">{text}") if value == cursor else f" {text}")
-            screen += [""] * (height - (last - top))
-            shown = [v for k, v in lines[top:last] if k == "row"]
-            foot = paint("2", f"{shown[0] + 1}-{shown[-1] + 1} of {len(rows)}") + "  " \
-                if len(lines) > height and shown else ""
-            foot += paint("33", note) if note else f"Enter: {tally(rows, picked)}"
-            offers = "   ".join(f"{verb[0]} {verb}: {todo}" for verb, todo, _ in row.choices[1:])
-            screen += [foot, paint("1", row.title[:cols]), paint("36", offers[:cols])]
-            screen += details[detail_top:detail_top + detail_height]
-            screen.append(paint("2", f"Details {detail_top + 1}-{min(detail_top + detail_height, len(details))}/{len(details)}; [ ] scroll; ? defaults"))
-            out.write("\n".join(screen))
-            out.flush()
-            note = ""
-            pressed = key()
-            if pressed == b"\033":
-                rest = os.read(fd, 2) if waiting() else b""
-                if rest == b"[A":
-                    cursor = max(cursor - 1, 0)
-                elif rest == b"[B":
-                    cursor = min(cursor + 1, len(rows) - 1)
-                elif rest in (b"[C", b"[D"):
-                    step(1 if rest == b"[C" else -1)
-                elif rest in (b"[H", b"OH"):
-                    cursor = 0
-                elif rest in (b"[F", b"OF"):
-                    cursor = len(rows) - 1
-                elif rest in (b"[5", b"[6"):
-                    if waiting():
-                        key()
-                    jump = -max(height - 2, 1) if rest == b"[5" else max(height - 2, 1)
-                    cursor = min(max(cursor + jump, 0), len(rows) - 1)
-                else:
-                    return None
-            elif pressed == b" ":
-                step(1)
-            elif pressed == b"?":
-                viewing_overview = True
-            elif pressed in (b"[", b"]"):
-                detail_top = max(0, detail_top + (-detail_height if pressed == b"[" else detail_height))
-            elif pressed in (b"\n", b"\r"):
-                return picked
-            elif pressed in (b"q", b""):
-                return None
-            else:
-                letters = [verb[0] for verb in row.verbs]
-                letter = pressed.decode(errors="replace")
-                if letter in letters:
-                    picked[cursor] = letters.index(letter)
-                else:
-                    note = f"this row offers {' / '.join(row.verbs)}"
-    except KeyboardInterrupt:
-        raise SystemExit(130)
-    finally:
-        out.write("\033[?25h\033[?1049l")
-        out.flush()
-        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+    pick = "apply"
+    while True:
+        items = [(f"Apply: {tally(rows, picked)}", "apply")]
+        if overview:
+            items.append(("App defaults and your configuration", "overview"))
+        for r, row in enumerate(rows):
+            label = f"{row_line(plain, r + 1, row, row.verbs[picked[r]])}  [{headings.get(row.group, row.group)}]"
+            items.append((label, str(r)))
+        selected = dict((value, label) for label, value in items).get(pick)
+        pick = gum_choose(f"Keep or turn off each source ({len(rows)})\n"
+                          "enter changes a row or applies the list, esc cancels\n"
+                          + header_line(plain), items, selected)
+        if pick is None:
+            return None
+        if pick == "apply":
+            return picked
+        if pick == "overview":
+            subprocess.run(["gum", "pager"], input=overview, text=True)
+            continue
+        row = rows[int(pick)]
+        width = max(shutil.get_terminal_size().columns - 2, 20)
+        details = [part for line in row.details() for part in textwrap.wrap(line, width)]
+        choices = [(f"{verb:<6} {todo}", str(n)) for n, (verb, todo, _) in enumerate(row.choices)]
+        current = choices[picked[int(pick)]][0]
+        # Esc here leaves the row as it was.
+        choice = gum_choose("\n".join([row.title, *details]), choices, current)
+        if choice is not None:
+            picked[int(pick)] = int(choice)
 
 
 def pick_by_line(paint, rows, picked, headings):
@@ -1672,8 +1598,8 @@ def main(argv=None):
             print("\n  Nothing changed: ai-doctor asks before changing anything, and stdin is closed.")
         else:
             print(file=sys.stderr)
-            if os.environ.get("DOTFILES_PROMPT") != "read" and sys.stdin.isatty() and sys.stderr.isatty():
-                picked = pick_on_terminal(paint, rows, picked, inv.headings, overview)
+            if prompt_mode() == "gum":
+                picked = pick_with_gum(rows, picked, inv.headings, overview)
             else:
                 picked = pick_by_line(paint, rows, picked, inv.headings)
             if picked is None or not any(picked):

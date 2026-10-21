@@ -63,11 +63,11 @@ Check this machine against the dotfiles repo and sort what it finds:
 
 On a terminal the report is followed by one list of everything df-doctor can
 change, one row per item, each set to its suggestion (skip, unless it is under
-Fix). Choose a row with the arrows and press s (skip: leave it alone this
-time, and report it again next run), a (archive), d (delete), i (ignore from
-now on), r (add to the repo), or m (move where xdg-ninja says); space cycles
-through them. Enter applies every row at once; q or Esc changes
-nothing. Missing or stale repo links get one row that runs df-link.
+Fix). Enter on a row offers its changes: skip (leave it alone this time, and
+report it again next run), archive, delete, ignore (from now on), add (to the
+repo), or move (where xdg-ninja says). Enter on Apply, the first row, applies
+every row at once; Esc changes nothing. Missing or stale repo links get one
+row that runs df-link.
 Archived files go to ~/.local/state/dotfiles/cleanup/, and moves are logged
 with their undo in ~/.local/state/dotfiles/moves.tsv. Delete keeps no copy and
 asks once more.
@@ -744,8 +744,19 @@ classify_home() {
                 fi
             fi
         done
+        # The variable says where a new shell sends the tool; the disk says
+        # where it went. A copy still changing is in use by something that
+        # never reads .zshenv, such as an app started from the Dock.
         if [[ -n "${redirected}" ]]; then
-            add_finding fix "${path}" archive "" "${program} now uses $(display_path "${redirected#*=}") (\$${redirected%%=*}); this is the old copy"
+            age="$(age_days "${path}")"
+            value="$(display_path "${redirected#*=}") (\$${redirected%%=*})"
+            if [[ "${age}" -lt "${DAYS}" ]]; then
+                add_finding decide "${path}" keep "" "${program} still writes here, not to ${value}; $(age_text "${age}")"
+            elif [[ -e "${redirected#*=}" ]]; then
+                add_finding fix "${path}" archive "" "${program} now uses ${value}; this is the old copy"
+            else
+                add_finding fix "${path}" archive "" "untouched for ${age} days; ${program} goes to ${value} from now on"
+            fi
         else
             add_finding decide "${path}" keep "" "${program} supports XDG" "${hint:-see df-doctor --explain}"
         fi
@@ -1290,15 +1301,6 @@ row_choices() {
     fi
 }
 
-# Sets row R of the caller's list to ACTION when the row offers it.
-set_row_action() {
-    local r="$1" action="$2"
-    case " $(row_choices "${row_ids[r]}") " in
-        *" ${action} "*) row_actions[r]="${action}" ;;
-        *) return 1 ;;
-    esac
-}
-
 # An action padded to its column, colored on a terminal.
 action_cell() {
     local color=""
@@ -1351,106 +1353,50 @@ row_tally() {
     printf '%s\n' "${out:-nothing}"
 }
 
-# The list on a terminal, drawn on the alternate screen: one row per item,
-# its change set by a key, with the highlighted row's details and what Enter
-# would change at the foot. Returns 1 when cancelled.
-pick_on_terminal() {
-    local cursor=0 top=0 key rest size lines cols height r last note="" status=0 detail line1 line2
-    local count="${#row_ids[@]}"
-    local -a cycle=()
-    local actions="s skip (leave it)  a archive  d delete  i ignore  r add to repo  m move"
-    local keys="↑↓ PgUp PgDn Home End choose a row  space next change  enter apply all  q cancel"
+# What a change does, as the row's own list shows it.
+action_label() {
+    case "$1" in
+        skip) printf 'skip     leave it alone this time' ;;
+        archive) printf 'archive  copy it to the cleanup folder, then remove it' ;;
+        delete) printf 'delete   remove it, keeping no copy' ;;
+        ignore) printf 'ignore   stop reporting it on this machine' ;;
+        add) printf 'add      add it to the repo' ;;
+        move) printf 'move     move it where xdg-ninja says' ;;
+        relink) printf 'relink   run df-link' ;;
+    esac
+}
 
-    # Ctrl-C leaves the alternate screen too.
-    trap 'printf "\033[?25h\033[?1049l" >&2; exit 130' INT
-    printf '\033[?1049h\033[?25l' >&2
+# The list on a terminal, inline by gum: Apply, then one row per item showing
+# its change. Enter on a row offers that row's changes under its details;
+# Enter on Apply applies every row. Returns 1 when cancelled with Esc.
+pick_with_gum() {
+    local r pick="apply" action label selected height count="${#row_ids[@]}"
+    local -a items=() choices=()
+
+    height=$((count + 1))
+    [[ "${height}" -le 15 ]] || height=15
     while :; do
-        size="$(stty size 2>/dev/null || printf '24 80')"
-        lines="${size% *}" cols="${size#* }"
-        # A terminal that reports no size (0 0) gets the usual 24 by 80.
-        [[ "${lines}" =~ ^[1-9][0-9]*$ ]] || lines=24
-        [[ "${cols}" =~ ^[1-9][0-9]*$ && "${cols}" -ge 20 ]] || cols=80
-        # Three lines above the rows and three below.
-        height=$((lines - 7))
-        [[ "${height}" -ge 3 ]] || height=3
-        [[ "${cursor}" -ge "${top}" ]] || top="${cursor}"
-        [[ "${cursor}" -lt $((top + height)) ]] || top=$((cursor - height + 1))
-        last=$((top + height))
-        [[ "${last}" -le "${count}" ]] || last="${count}"
-        {
-            printf '\033[H\033[2J%sChoose a change for each item%s (%d)\n' "${BOLD}" "${RESET}" "${count}"
-            printf '%s\n%s%s%s\n' "${actions:0:${cols}}" "${DIM}" "${keys:0:${cols}}" "${RESET}"
-            for ((r = top; r < last; r++)); do
-                if [[ "${r}" -eq "${cursor}" ]]; then
-                    printf '%s> %s %s%s\n' "${BOLD}" "$(action_cell "${row_actions[r]}")" "${row_texts[r]:0:$((cols - 12))}" "${RESET}"
-                else
-                    printf '  %s %s\n' "$(action_cell "${row_actions[r]}")" "${row_texts[r]:0:$((cols - 12))}"
-                fi
-            done
-            for ((r = last - top; r < height; r++)); do
-                printf '\n'
-            done
-            [[ "${count}" -le "${height}" ]] || printf '%s%d-%d of %d%s  ' "${DIM}" "$((top + 1))" "${last}" "${count}" "${RESET}"
-            if [[ -n "${note}" ]]; then
-                printf '%s%s%s\n' "${YELLOW}" "${note}" "${RESET}"
-            else
-                printf 'Enter: %s\n' "$(row_tally)"
-            fi
-            detail="$(row_detail "${cursor}")"
-            line1="${detail%%$'\n'*}" line2="${detail#*$'\n'}"
-            printf '%s%s%s\n' "${BOLD}" "${line1:0:${cols}}" "${RESET}"
-            printf '%s%s%s' "${DIM}" "${line2:0:${cols}}" "${RESET}"
-        } >&2
-        note=""
-        IFS= read -rsn1 key || key=q
-        case "${key}" in
-            $'\033')
-                IFS= read -rsn2 -t 1 rest || rest=""
-                case "${rest}" in
-                    '[A') [[ "${cursor}" -eq 0 ]] || cursor=$((cursor - 1)) ;;
-                    '[B') [[ "${cursor}" -ge $((count - 1)) ]] || cursor=$((cursor + 1)) ;;
-                    '[H' | 'OH') cursor=0 ;;
-                    '[F' | 'OF') cursor=$((count - 1)) ;;
-                    '[5' | '[6')
-                        IFS= read -rsn1 -t 1 key || key=""
-                        if [[ "${rest}" == '[5' ]]; then
-                            cursor=$((cursor - height))
-                            [[ "${cursor}" -ge 0 ]] || cursor=0
-                        else
-                            cursor=$((cursor + height))
-                            [[ "${cursor}" -lt "${count}" ]] || cursor=$((count - 1))
-                        fi
-                        ;;
-                    *) status=1; break ;;
-                esac
-                ;;
-            ' ')
-                read -r -a cycle <<< "$(row_choices "${row_ids[cursor]}")"
-                for ((r = 0; r < ${#cycle[@]}; r++)); do
-                    [[ "${cycle[r]}" == "${row_actions[cursor]}" ]] || continue
-                    row_actions[cursor]="${cycle[$(((r + 1) % ${#cycle[@]}))]}"
-                    break
-                done
-                ;;
-            s | a | d | i | r | + | m)
-                case "${key}" in
-                    a) key=archive ;;
-                    d) key=delete ;;
-                    i) key=ignore ;;
-                    r | +) key=add ;;
-                    m) key=move ;;
-                    s) key=skip ;;
-                esac
-                [[ "${row_ids[cursor]}" != relink || "${key}" == skip ]] || key=relink
-                set_row_action "${cursor}" "${key}" || note="${key} is not offered for this item"
-                ;;
-            '') break ;;
-            q) status=1; break ;;
-        esac
+        items=("Apply: $(row_tally)"$'\t'apply)
+        selected="${items[0]%%$'\t'*}"
+        for r in "${!row_ids[@]}"; do
+            label="$(printf '%-7s %s' "${row_actions[r]}" "${row_texts[r]}")"
+            items+=("${label}"$'\t'"${r}")
+            [[ "${pick}" != "${r}" ]] || selected="${label}"
+        done
+        # gum splits --selected at commas, so a label with one gets no cursor.
+        [[ "${selected}" != *,* ]] || selected=""
+        pick="$(gum choose --header "Choose a change for each item (${count})"$'\n'"enter changes a row or applies the list, esc cancels" \
+            --height="${height}" --label-delimiter=$'\t' ${selected:+--selected="${selected}"} "${items[@]}")" || return 1
+        [[ "${pick}" != apply ]] || return 0
+        choices=()
+        for action in $(row_choices "${row_ids[pick]}"); do
+            choices+=("$(action_label "${action}")"$'\t'"${action}")
+        done
+        # Esc here leaves the row as it was.
+        action="$(gum choose --header "$(row_detail "${pick}")" --label-delimiter=$'\t' \
+            --selected="$(action_label "${row_actions[pick]}")" "${choices[@]}")" || continue
+        row_actions[pick]="${action}"
     done
-    printf '\033[?25h\033[?1049l' >&2
-    trap - INT
-    return "${status}"
 }
 
 # The list without a terminal (or with DOTFILES_PROMPT=read): numbered rows,
@@ -1553,8 +1499,8 @@ fix_flow() {
     fi
 
     printf '\n' >&2
-    if [[ "${DOTFILES_PROMPT:-}" != read && -t 0 && -t 2 ]]; then
-        pick_on_terminal || { printf 'Nothing changed.\n'; return 0; }
+    if [[ "$(prompt_mode)" == gum ]]; then
+        pick_with_gum || { printf 'Nothing changed.\n'; return 0; }
     else
         pick_by_line || { printf 'Nothing changed.\n'; return 0; }
     fi

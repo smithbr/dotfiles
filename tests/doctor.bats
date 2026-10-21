@@ -396,8 +396,17 @@ JSON
     assert_line "decide"$'\t'"${HOME}/.twovar"$'\t'"keep"$'\t\t'"twovar supports XDG"
 
     write_zshenv TWOVAR_INIT=.config/twovar/init.js TWOVAR_CACHE=.cache/twovar HINTTOOL_HOME=.hinttool
+    # Still changing, it is in use by something that never reads .zshenv.
     doctor --tsv
     assert_success
+    assert_line "decide"$'\t'"${HOME}/.twovar"$'\t'"keep"$'\t\t'"twovar still writes here, not to ~/.cache/twovar (\$TWOVAR_CACHE); changed today"
+    # Untouched, with nothing at the new place yet.
+    make_stale "${HOME}/.twovar"
+    doctor --tsv
+    assert_line --regexp "^fix"$'\t'"${HOME}/\.twovar"$'\t'"archive"$'\t\t'"untouched for [0-9]{4,} days; twovar goes to ~/\.cache/twovar \(\\\$TWOVAR_CACHE\) from now on$"
+    # Untouched, and the tool already uses the new place.
+    mkdir -p "${HOME}/.cache/twovar"
+    doctor --tsv
     assert_line "fix"$'\t'"${HOME}/.twovar"$'\t'"archive"$'\t\t'"twovar now uses ~/.cache/twovar (\$TWOVAR_CACHE); this is the old copy"
     # A variable that still points at the entry itself is not a redirect.
     assert_line "decide"$'\t'"${HOME}/.hinttool"$'\t'"keep"$'\t\t'"movetool supports XDG"
@@ -662,6 +671,33 @@ JSON
     assert_output --partial "Nothing to fix."
 }
 
+@test "on a terminal the list is gum: Enter on a row picks its change, Apply applies them" {
+    printf 'copy\n' > "${HOME}/.notes.bak"
+    printf 'a\n' > "${HOME}/.old-a"
+    printf 'b\n' > "${HOME}/.old-b"
+
+    # Esc on a row's changes keeps the row; Esc on the list changes nothing.
+    stub_gum "row ~/.old-a" esc esc
+    run bash -c 'printf "" | DOTFILES_PROMPT=gum bash "$1" --source "$2" --fix-only' _ "${DOCTOR}" "${TEST_SOURCE_DIR}"
+    assert_success
+    assert_output --partial "Nothing changed."
+    assert test -f "${HOME}/.notes.bak"
+
+    # Skip the suggested archive, ignore one, delete one after the confirm.
+    stub_gum "row ~/.notes.bak" skip "row ~/.old-a" ignore "row ~/.old-b" delete apply yes
+    run bash -c 'printf "" | DOTFILES_PROMPT=gum bash "$1" --source "$2" --fix-only' _ "${DOCTOR}" "${TEST_SOURCE_DIR}"
+    assert_success
+    assert_output --partial "deleted ~/.old-b"
+    assert_output --partial "ignoring ~/.old-a"
+    assert test -f "${HOME}/.notes.bak"
+    assert test -f "${HOME}/.old-a"
+    refute test -e "${HOME}/.old-b"
+    # Inline, never the alternate screen, and Apply showed the changes.
+    refute_output --partial $'\033[?1049h'
+    run grep -F 'Apply: delete 1 · ignore 1' "${GUM_CALLS}"
+    assert_success
+}
+
 @test "the list never touches managed parents, credentials, private agents, overrides, or the repo" {
     mkdir -p "${HOME}/.ssh" "${HOME}/.owned" "${HOME}/.dotfiles" "${HOME}/.sources/dotfiles/stow"
     printf 'private\n' > "${HOME}/.ssh/secret"
@@ -760,24 +796,6 @@ JSON
     assert test -f "${HOME}/.movetool/state"
     refute test -e "${HOME}/.local/share/movetool"
     refute test -e "${HOME}/.local/state/dotfiles/moves.tsv"
-}
-
-@test "on a terminal the list takes one key per change and Enter applies them" {
-    [[ "${OSTYPE}" == darwin* ]] || skip "drives a terminal through BSD script"
-    printf 'copy\n' > "${HOME}/.notes.bak"
-    printf 'a\n' > "${HOME}/.old-a"
-    printf 'b\n' > "${HOME}/.old-b"
-    # Rows: .notes.bak (archive), .old-a, .old-b, ph-extra. Set the first to
-    # archive, then back to skip; ignore the second; delete the third after a yes.
-    run bash -c '{ printf "as"; sleep 1; printf "\033[Bi"; sleep 1; printf "\033[Bd"; sleep 1; printf "\r"; sleep 1; printf "y\r"; sleep 1; } |
-        script -q /dev/null bash "$1" --source "$2"' _ "${DOCTOR}" "${TEST_SOURCE_DIR}"
-    assert_success
-    assert_output --partial "Choose a change for each item"
-    assert_output --partial "deleted ~/.old-b"
-    assert_output --partial "ignoring ~/.old-a"
-    assert test -f "${HOME}/.notes.bak"
-    assert test -f "${HOME}/.old-a"
-    refute test -e "${HOME}/.old-b"
 }
 
 # --- The installer -------------------------------------------------------------

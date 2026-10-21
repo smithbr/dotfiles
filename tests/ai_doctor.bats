@@ -136,12 +136,9 @@ SH
 MD
 }
 
-on_terminal() {
-    if [[ "$(uname -s)" == Darwin ]]; then
-        run bash -c 'cd "$1" && shift && printf "$0" | script -q /dev/null "$@"' "$1" "${PROJECT}" python3 "${AI_DOCTOR}" --no-color
-    else
-        run bash -c 'cd "$1" && shift && printf "$0" | script -qec "$*" /dev/null' "$1" "${PROJECT}" python3 "${AI_DOCTOR}" --no-color
-    fi
+# ai-doctor --fix as on a terminal, its list answered by stub_gum.
+on_gum() {
+    run bash -c 'cd "$1" && printf "" | DOTFILES_PROMPT=gum python3 "$2" --no-color --fix' _ "${PROJECT}" "${AI_DOCTOR}"
 }
 
 settings_value() {
@@ -388,23 +385,28 @@ JSON
     refute test -e "${STATE}/actions.jsonl"
 }
 
-@test "ai-doctor: on a terminal q changes nothing and Enter applies the preselected rows" {
-    command -v script >/dev/null || skip "script is required for a terminal"
+@test "ai-doctor: on a terminal the list is gum; Esc changes nothing and Apply applies the rows" {
     synced_plugin idle a
-    on_terminal q
-    assert_output --partial "Keep or turn off each source"
+    stub_gum esc
+    on_gum
     assert_output --partial "Nothing changed."
     refute test -e "${HOME}/.claude/settings.json"
+    run grep -F "Keep or turn off each source" "${GUM_CALLS}"
+    assert_success
 
-    on_terminal '?qq'
-    assert_output --partial "App defaults and your configuration"
+    stub_gum overview esc
+    on_gum
     assert_output --partial "Claude Code: app defaults"
     assert_output --partial "Nothing changed."
 
-    on_terminal 'k\n'
+    # Keeping the one row leaves nothing to apply.
+    stub_gum "row idle" 0 apply
+    on_gum
     assert_output --partial "Nothing changed."
     refute test -e "${HOME}/.claude/settings.json"
-    on_terminal '\n'
+
+    stub_gum apply
+    on_gum
     assert_output --partial "claude plugin disable idle@synced: done"
     run settings_value enabledPlugins
     assert_output "{'idle@synced': False}"
