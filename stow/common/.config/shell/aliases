@@ -1,5 +1,4 @@
 # navigation
-alias cdd="cd ~/.dotfiles"
 alias h="history"
 alias hg="history 1 | rg "
 alias ls="eza --group-directories-first"
@@ -12,12 +11,9 @@ alias pi="ssh pihole"
 # shell
 alias c="claude"
 alias ddf="cd ~/.dotfiles"
-alias dfd="df-doctor"
 alias ff="fastfetch -c all"
-alias fish="asciiquarium"
 alias rl="exec ${SHELL} -l"
 alias skill-drop="~/.config/agents/scripts/skills-add -D"
-alias skills-add="~/.config/agents/scripts/skills-add"
 
 # system
 if command -v mactop >/dev/null 2>&1; then
