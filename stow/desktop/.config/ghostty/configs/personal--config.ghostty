@@ -19,9 +19,9 @@ minimum-contrast = 3
 scrollback-limit = 25000000
 theme = dark:Catppuccin Frappe,light:Catppuccin Latte
 unfocused-split-opacity = 0.55
-window-height = 40
+window-height = 38
 window-theme = system
-window-width = 110
+window-width = 140
 
 # Misc settings
 clipboard-paste-bracketed-safe = true
